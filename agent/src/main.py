@@ -1,8 +1,9 @@
 import logging
 import os
+from collections.abc import Callable
 
 from .config import SESSION_DIR
-from .llm import run_conversation
+from .llm import run_conversation, TokenCallback
 from .session import list_sessions, load_session, save_session
 
 logger = logging.getLogger(__name__)
@@ -36,6 +37,23 @@ def _print_recent(messages: list[dict], count: int = 4) -> None:
             content = content[:200] + "..."
         print(f"{role}: {content}")
     print("─" * 40)
+
+
+def _make_display() -> tuple[TokenCallback, Callable[[], bool]]:
+    """创建流式输出回调。返回 (on_token, has_output)。"""
+    started = False
+
+    def on_token(token: str) -> None:
+        nonlocal started
+        if not started:
+            print("Agent: ", end="", flush=True)
+            started = True
+        print(token, end="", flush=True)
+
+    def has_output() -> bool:
+        return started
+
+    return on_token, has_output
 
 
 def main() -> None:
@@ -78,8 +96,9 @@ def main() -> None:
                 break
 
             try:
-                reply = run_conversation(messages, user_input)
-                if reply:
+                on_token, has_output = _make_display()
+                reply = run_conversation(messages, user_input, on_token)
+                if has_output():
                     print()
             except Exception as e:
                 logger.error("对话出错: %s", e)

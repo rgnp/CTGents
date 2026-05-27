@@ -3,11 +3,9 @@ import json
 import trafilatura
 from openai.types.chat import ChatCompletionMessageToolCall
 
-from .config import get_tavily_client
+from .config import get_tavily_client, MAX_PAGE_CHARS
 
 tavily = get_tavily_client()
-
-MAX_PAGE_CHARS = 8000
 
 TOOLS = [
     {
