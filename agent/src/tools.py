@@ -4,7 +4,7 @@ from pathlib import Path
 import trafilatura
 from openai.types.chat import ChatCompletionMessageToolCall
 
-from .config import get_tavily_client, MAX_PAGE_CHARS, MAX_FILE_CHARS
+from .config import get_tavily_client, MAX_CONTEXT_TOKENS, TOOL_RESULT_BUDGET, TOKEN_PER_CHAR
 
 tavily = get_tavily_client()
 
@@ -87,6 +87,43 @@ TOOLS = [
 ]
 
 
+def estimate_tokens(text: str) -> int:
+    """估算文本 token 数。采用保守系数，宁可多估不漏估。"""
+    return int(len(text) * TOKEN_PER_CHAR)
+
+
+def count_messages_tokens(messages: list[dict]) -> int:
+    """估算消息列表的总 token 数。"""
+    total = 0
+    for m in messages:
+        content = m.get("content")
+        if isinstance(content, str):
+            total += estimate_tokens(content)
+    return total
+
+
+def truncate_to_budget(raw_text: str, messages: list[dict]) -> str:
+    """根据当前消息列表的剩余 token 预算动态截断文本。
+    不设固定上限——剩余空间多就多留，少就少留。"""
+    used = count_messages_tokens(messages)
+    remaining = MAX_CONTEXT_TOKENS - used
+
+    if remaining <= 0:
+        return "上下文已满，无法添加更多内容。请精简之前的对话。"
+
+    budget = int(remaining * TOOL_RESULT_BUDGET)
+
+    if estimate_tokens(raw_text) <= budget:
+        return raw_text
+
+    # 从预算反推最大字符数
+    max_chars = int(budget / TOKEN_PER_CHAR)
+    return raw_text[:max_chars] + (
+        f"\n\n...（token 预算截断：已用 {used} / {MAX_CONTEXT_TOKENS}，"
+        f"本次工具结果限 {budget} tokens）"
+    )
+
+
 def _format_search_results(response: dict, query: str) -> str:
     """将 Tavily 原始响应格式化为 LLM 可读的文本，仅保留 title/url/content。"""
     results = response.get("results", [])
@@ -104,32 +141,27 @@ def _format_search_results(response: dict, query: str) -> str:
 
 
 def _read_page(url: str) -> str:
-    """抓取并提取网页正文。"""
+    """抓取并提取网页正文，返回原始结果（截断由调用方处理）。"""
     downloaded = trafilatura.fetch_url(url)
     if downloaded is None:
         return f"无法访问 {url}，可能是网站限制或网络问题。"
     text = trafilatura.extract(downloaded, include_links=False, include_images=False)
     if not text:
         return f"{url} 未能提取到有效正文内容。"
-    if len(text) > MAX_PAGE_CHARS:
-        text = text[:MAX_PAGE_CHARS] + f"\n\n...（内容过长，已截断至 {MAX_PAGE_CHARS} 字符）"
     return text
 
 
 def _read_file(path: str) -> str:
-    """读取本地文件内容。"""
+    """读取本地文件内容，返回原始结果（截断由调用方处理）。"""
     filepath = Path(path).expanduser().resolve()
     if not filepath.exists():
         return f"文件不存在: {path}"
     if not filepath.is_file():
         return f"路径不是文件: {path}"
     try:
-        text = filepath.read_text(encoding="utf-8")
+        return filepath.read_text(encoding="utf-8")
     except UnicodeDecodeError:
         return f"无法以 UTF-8 编码读取: {path}（可能是二进制文件）"
-    if len(text) > MAX_FILE_CHARS:
-        text = text[:MAX_FILE_CHARS] + f"\n\n...（内容过长，已截断至 {MAX_FILE_CHARS} 字符）"
-    return text
 
 
 def _write_file(path: str, content: str) -> str:
@@ -144,7 +176,7 @@ def _write_file(path: str, content: str) -> str:
 
 
 def execute_tool(tool_call: ChatCompletionMessageToolCall) -> str:
-    """执行单个工具调用，返回格式化后的结果文本。"""
+    """执行单个工具调用，返回原始结果（截断由调用方处理）。"""
     name = tool_call.function.name
     args = json.loads(tool_call.function.arguments)
 

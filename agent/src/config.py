@@ -34,13 +34,14 @@ RETRY_BASE_DELAY: float = 1.0
 # ── 路径 ──
 SESSION_DIR: str = str(Path(__file__).parent.parent / "sessions")
 
-# ── 内容长度上限 ──
-# 这些值没有固定标准，取决于模型上下文窗口和任务需求。
-# 设太大会稀释 LLM 注意力（前面的内容被忽略），设太小会丢信息。
-# 当前基于 DeepSeek V4 1M token（约 70 万中文字符）设定，
-# 保留大量余量给对话本身，可随时按实际效果调整。
-MAX_PAGE_CHARS: int = 8000
-MAX_FILE_CHARS: int = 10000
+# ── Token 预算（核心设计）──
+# 放弃了写死字符数的做法，改为动态 token 预算管理。
+# 每次工具调用前计算当前 messages 已占 token，按剩余空间的一定比例分配给工具结果。
+# 比例可调：设太大会挤占对话历史空间，设太小会丢失工具结果信息。
+MAX_CONTEXT_TOKENS: int = 960_000   # 总上下文上限（DeepSeek V4 1M，留 4 万给输出）
+TOOL_RESULT_BUDGET: float = 0.3    # 工具结果最多占用当前剩余 token 的 30%
+# 保守估算系数：中英文混合文本约 0.4 token/字符，取 0.5 宁可多估不漏估
+TOKEN_PER_CHAR: float = 0.5
 
 # 客户端（模块级单例，惰性初始化）
 _llm_client: OpenAI | None = None

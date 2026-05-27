@@ -6,7 +6,7 @@ from types import SimpleNamespace
 from openai import APITimeoutError, RateLimitError, APIConnectionError, InternalServerError
 
 from .config import get_llm_client, DEEPSEEK_MODEL, MAX_TOOL_ROUNDS, MAX_RETRIES, RETRY_BASE_DELAY
-from .tools import TOOLS, execute_tool
+from .tools import TOOLS, execute_tool, truncate_to_budget
 
 logger = logging.getLogger(__name__)
 client = get_llm_client()
@@ -136,6 +136,7 @@ def run_conversation(
                     )
                 )
                 result = execute_tool(tc)
+                result = truncate_to_budget(result, copy)
                 copy.append({
                     "role": "tool",
                     "tool_call_id": tc_data["id"],
