@@ -14,4 +14,5 @@
 - [x] 网页阅读：搜索到链接后可打开网页提取全文（trafilatura），截断至 8000 字符
 - [x] 文件读写：agent 可读取项目文件、创建/覆写本地文件（read_file / write_file）
 - [x] 目录浏览：agent 可列出目录结构和文件（list_files）
+- [x] 代码执行：agent 可执行 Python 代码并获取输出，子进程隔离 + 超时保护（run_python）
 - [x] Token 预算管理：废弃硬编码字符上限，动态计算剩余 token 空间按比例分配工具结果「未找到」
