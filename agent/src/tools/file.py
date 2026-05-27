@@ -56,6 +56,23 @@ TOOLS_FILE = [
             },
         },
     },
+    {
+        "type": "function",
+        "function": {
+            "name": "delete_file",
+            "description": "删除指定文件。用于清理临时文件、测试脚本等。删除前会告知用户。不可恢复，谨慎使用。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "path": {
+                        "type": "string",
+                        "description": "要删除的文件路径",
+                    }
+                },
+                "required": ["path"],
+            },
+        },
+    },
 ]
 
 
@@ -113,3 +130,17 @@ def list_files(path: str | None) -> str:
         lines.append(f"  {entry.name}{kind}{size_str}")
 
     return "\n".join(lines)
+
+
+def delete_file(path: str) -> str:
+    """删除文件。"""
+    filepath = Path(path).expanduser().resolve()
+    if not filepath.exists():
+        return f"文件不存在: {path}"
+    if not filepath.is_file():
+        return f"路径不是文件: {path}"
+    try:
+        filepath.unlink()
+        return f"已删除: {filepath}"
+    except OSError as e:
+        return f"删除失败: {e}"

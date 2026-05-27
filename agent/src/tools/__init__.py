@@ -4,10 +4,11 @@ from openai.types.chat import ChatCompletionMessageToolCall
 
 from .tokens import truncate_to_budget, estimate_tokens, count_messages_tokens
 from .web import TOOLS_WEB, search_web, read_page
-from .file import TOOLS_FILE, read_file, write_file, list_files
+from .file import TOOLS_FILE, read_file, write_file, list_files, delete_file
 from .exec import TOOLS_EXEC, run_python
+from .code import TOOLS_CODE, grep_code
 
-TOOLS = TOOLS_WEB + TOOLS_FILE + TOOLS_EXEC
+TOOLS = TOOLS_WEB + TOOLS_FILE + TOOLS_EXEC + TOOLS_CODE
 
 
 def execute_tool(tool_call: ChatCompletionMessageToolCall) -> str:
@@ -32,5 +33,11 @@ def execute_tool(tool_call: ChatCompletionMessageToolCall) -> str:
 
     if name == "run_python":
         return run_python(args["code"])
+
+    if name == "delete_file":
+        return delete_file(args["path"])
+
+    if name == "grep_code":
+        return grep_code(args["pattern"], args.get("path"))
 
     return json.dumps({"error": f"未知工具: {name}"}, ensure_ascii=False)
