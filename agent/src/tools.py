@@ -84,6 +84,23 @@ TOOLS = [
             },
         },
     },
+    {
+        "type": "function",
+        "function": {
+            "name": "list_files",
+            "description": "列出目录中的文件和子目录。用于浏览项目结构、查找文件、了解目录布局。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "path": {
+                        "type": "string",
+                        "description": "目录路径，支持相对路径或绝对路径。不传则列出当前目录。",
+                    }
+                },
+                "required": [],
+            },
+        },
+    },
 ]
 
 
@@ -175,6 +192,38 @@ def _write_file(path: str, content: str) -> str:
         return f"写入失败: {e}"
 
 
+def _list_files(path: str | None) -> str:
+    """列出目录内容。"""
+    dirpath = Path(path).expanduser().resolve() if path else Path.cwd()
+    if not dirpath.exists():
+        return f"目录不存在: {path or '.'}"
+    if not dirpath.is_dir():
+        return f"路径不是目录: {path or '.'}"
+    try:
+        entries = sorted(dirpath.iterdir(), key=lambda e: (not e.is_dir(), e.name.lower()))
+    except PermissionError:
+        return f"没有权限访问: {dirpath}"
+
+    lines = [f"{dirpath}（{len(entries)} 项）\n"]
+    for entry in entries:
+        kind = "/" if entry.is_dir() else ""
+        try:
+            size = entry.stat().st_size
+        except OSError:
+            size = 0
+
+        if size >= 1024 * 1024:
+            size_str = f"  [{size // (1024 * 1024)}M]"
+        elif size >= 1024:
+            size_str = f"  [{size // 1024}K]"
+        else:
+            size_str = ""
+
+        lines.append(f"  {entry.name}{kind}{size_str}")
+
+    return "\n".join(lines)
+
+
 def execute_tool(tool_call: ChatCompletionMessageToolCall) -> str:
     """执行单个工具调用，返回原始结果（截断由调用方处理）。"""
     name = tool_call.function.name
@@ -192,5 +241,8 @@ def execute_tool(tool_call: ChatCompletionMessageToolCall) -> str:
 
     if name == "write_file":
         return _write_file(args["path"], args["content"])
+
+    if name == "list_files":
+        return _list_files(args.get("path"))
 
     return json.dumps({"error": f"未知工具: {name}"}, ensure_ascii=False)
