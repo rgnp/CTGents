@@ -1,9 +1,9 @@
 import json
 
 import trafilatura
-
-from config import get_tavily_client
 from openai.types.chat import ChatCompletionMessageToolCall
+
+from .config import get_tavily_client
 
 tavily = get_tavily_client()
 

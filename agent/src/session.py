@@ -2,7 +2,7 @@ import json
 import os
 from datetime import datetime
 
-from config import SESSION_DIR, get_llm_client, DEEPSEEK_MODEL
+from .config import SESSION_DIR, get_llm_client, DEEPSEEK_MODEL
 
 
 def list_sessions() -> list[str]:

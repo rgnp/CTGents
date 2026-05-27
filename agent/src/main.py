@@ -1,0 +1,95 @@
+import logging
+import os
+
+from .config import SESSION_DIR
+from .llm import run_conversation
+from .session import list_sessions, load_session, save_session
+
+logger = logging.getLogger(__name__)
+
+
+def _print_sessions(sessions: list[str]) -> None:
+    print("历史会话：")
+    for i, sid in enumerate(sessions, 1):
+        summary_path = os.path.join(SESSION_DIR, sid, "summary.txt")
+        preview = ""
+        try:
+            if os.path.exists(summary_path):
+                with open(summary_path, "r", encoding="utf-8") as f:
+                    preview = f.read()[:80].replace("\n", " ")
+        except Exception:
+            pass
+        print(f"  [{i}] {sid}  {preview}")
+
+
+def _print_recent(messages: list[dict], count: int = 4) -> None:
+    """回显最近 N 轮对话历史。"""
+    exchanges: list[dict] = [m for m in messages if m["role"] != "system"]
+    if not exchanges:
+        return
+    recent = exchanges[-min(count * 2, len(exchanges)):]
+    print("─" * 40)
+    for m in recent:
+        role = "You" if m["role"] == "user" else "Agent"
+        content = m["content"]
+        if len(content) > 200:
+            content = content[:200] + "..."
+        print(f"{role}: {content}")
+    print("─" * 40)
+
+
+def main() -> None:
+    sessions = list_sessions()
+    session_id: str | None = None
+    messages: list[dict] = []
+
+    if sessions:
+        _print_sessions(sessions)
+        print()
+        choice = input("输入编号加载会话，或直接回车新建: ").strip()
+        try:
+            idx = int(choice) - 1
+            if 0 <= idx < len(sessions):
+                session_id = sessions[idx]
+                messages, summary = load_session(session_id)
+                if summary:
+                    messages.insert(0, {"role": "system", "content": f"之前对话的摘要：{summary}"})
+                print(f"已加载会话 [{session_id}]，共 {len(messages)} 条消息")
+                _print_recent(messages)
+                print()
+        except ValueError:
+            pass
+
+    if not session_id:
+        print("Agent 已启动（可上网搜索），输入 /exit 退出\n")
+    else:
+        print("Agent 已启动（可上网搜索），输入 /exit 退出（退出时自动保存）\n")
+
+    try:
+        while True:
+            try:
+                user_input = input("You: ").strip()
+            except (EOFError, KeyboardInterrupt):
+                break
+
+            if not user_input:
+                continue
+            if user_input == "/exit":
+                break
+
+            try:
+                reply = run_conversation(messages, user_input)
+                if reply:
+                    print()
+            except Exception as e:
+                logger.error("对话出错: %s", e)
+                print(f"\n  请求失败: {e}\n")
+    finally:
+        if messages:
+            session_id = save_session(messages, session_id)
+            print(f"会话已保存: [{session_id}]")
+        print("退出")
+
+
+if __name__ == "__main__":
+    main()

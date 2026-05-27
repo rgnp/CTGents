@@ -1,9 +1,11 @@
 import os
+from pathlib import Path
+
 from openai import OpenAI
 from dotenv import load_dotenv
 from tavily import TavilyClient
 
-load_dotenv()
+load_dotenv(Path(__file__).parent.parent / ".env")
 
 
 def _require_env(key: str) -> str:
@@ -24,8 +26,8 @@ TAVILY_API_KEY: str = _require_env("TAVILY_API_KEY")
 # 常量
 MAX_TOOL_ROUNDS: int = 5
 MAX_RETRIES: int = 3
-RETRY_BASE_DELAY: float = 1.0  # 秒，指数退避：1s → 2s → 4s
-SESSION_DIR: str = os.path.join(os.path.dirname(__file__), "sessions")
+RETRY_BASE_DELAY: float = 1.0
+SESSION_DIR: str = str(Path(__file__).parent.parent / "sessions")
 
 # 客户端（模块级单例，惰性初始化）
 _llm_client: OpenAI | None = None
