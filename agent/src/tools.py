@@ -1,9 +1,10 @@
 import json
+from pathlib import Path
 
 import trafilatura
 from openai.types.chat import ChatCompletionMessageToolCall
 
-from .config import get_tavily_client, MAX_PAGE_CHARS
+from .config import get_tavily_client, MAX_PAGE_CHARS, MAX_FILE_CHARS
 
 tavily = get_tavily_client()
 
@@ -45,6 +46,44 @@ TOOLS = [
             },
         },
     },
+    {
+        "type": "function",
+        "function": {
+            "name": "read_file",
+            "description": "读取本地文件内容。可以读取项目中的代码、文档、配置等文件。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "path": {
+                        "type": "string",
+                        "description": "文件路径，支持相对路径或绝对路径",
+                    }
+                },
+                "required": ["path"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "write_file",
+            "description": "创建或覆写本地文件。用于保存报告、代码、笔记等。写入前会告知用户即将写入的路径。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "path": {
+                        "type": "string",
+                        "description": "文件路径，支持相对路径或绝对路径",
+                    },
+                    "content": {
+                        "type": "string",
+                        "description": "要写入的完整内容",
+                    },
+                },
+                "required": ["path", "content"],
+            },
+        },
+    },
 ]
 
 
@@ -77,6 +116,33 @@ def _read_page(url: str) -> str:
     return text
 
 
+def _read_file(path: str) -> str:
+    """读取本地文件内容。"""
+    filepath = Path(path).expanduser().resolve()
+    if not filepath.exists():
+        return f"文件不存在: {path}"
+    if not filepath.is_file():
+        return f"路径不是文件: {path}"
+    try:
+        text = filepath.read_text(encoding="utf-8")
+    except UnicodeDecodeError:
+        return f"无法以 UTF-8 编码读取: {path}（可能是二进制文件）"
+    if len(text) > MAX_FILE_CHARS:
+        text = text[:MAX_FILE_CHARS] + f"\n\n...（内容过长，已截断至 {MAX_FILE_CHARS} 字符）"
+    return text
+
+
+def _write_file(path: str, content: str) -> str:
+    """写入文件。"""
+    filepath = Path(path).expanduser().resolve()
+    try:
+        filepath.parent.mkdir(parents=True, exist_ok=True)
+        filepath.write_text(content, encoding="utf-8")
+        return f"已写入: {filepath}（{len(content)} 字符）"
+    except OSError as e:
+        return f"写入失败: {e}"
+
+
 def execute_tool(tool_call: ChatCompletionMessageToolCall) -> str:
     """执行单个工具调用，返回格式化后的结果文本。"""
     name = tool_call.function.name
@@ -88,5 +154,11 @@ def execute_tool(tool_call: ChatCompletionMessageToolCall) -> str:
 
     if name == "read_page":
         return _read_page(args["url"])
+
+    if name == "read_file":
+        return _read_file(args["path"])
+
+    if name == "write_file":
+        return _write_file(args["path"], args["content"])
 
     return json.dumps({"error": f"未知工具: {name}"}, ensure_ascii=False)

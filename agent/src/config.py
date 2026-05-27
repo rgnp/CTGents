@@ -29,6 +29,7 @@ MAX_RETRIES: int = 3
 RETRY_BASE_DELAY: float = 1.0
 SESSION_DIR: str = str(Path(__file__).parent.parent / "sessions")
 MAX_PAGE_CHARS: int = 8000
+MAX_FILE_CHARS: int = 10000
 
 # 客户端（模块级单例，惰性初始化）
 _llm_client: OpenAI | None = None
