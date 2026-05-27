@@ -5,8 +5,9 @@ from openai.types.chat import ChatCompletionMessageToolCall
 from .tokens import truncate_to_budget, estimate_tokens, count_messages_tokens
 from .web import TOOLS_WEB, search_web, read_page
 from .file import TOOLS_FILE, read_file, write_file, list_files
+from .exec import TOOLS_EXEC, run_python
 
-TOOLS = TOOLS_WEB + TOOLS_FILE
+TOOLS = TOOLS_WEB + TOOLS_FILE + TOOLS_EXEC
 
 
 def execute_tool(tool_call: ChatCompletionMessageToolCall) -> str:
@@ -28,5 +29,8 @@ def execute_tool(tool_call: ChatCompletionMessageToolCall) -> str:
 
     if name == "list_files":
         return list_files(args.get("path"))
+
+    if name == "run_python":
+        return run_python(args["code"])
 
     return json.dumps({"error": f"未知工具: {name}"}, ensure_ascii=False)

@@ -30,6 +30,8 @@ MAX_TOOL_ROUNDS: int = 5
 MAX_RETRIES: int = 3
 # 重试退避基础间隔（秒）：1s → 2s → 4s
 RETRY_BASE_DELAY: float = 1.0
+# 代码执行超时（秒），防止死循环或恶意代码占用资源
+MAX_EXEC_TIMEOUT: int = 5
 
 # ── 路径 ──
 SESSION_DIR: str = str(Path(__file__).parent.parent / "sessions")
