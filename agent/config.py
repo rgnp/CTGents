@@ -25,7 +25,7 @@ TAVILY_API_KEY: str = _require_env("TAVILY_API_KEY")
 MAX_TOOL_ROUNDS: int = 5
 MAX_RETRIES: int = 3
 RETRY_BASE_DELAY: float = 1.0  # 秒，指数退避：1s → 2s → 4s
-SESSION_DIR: str = "sessions"
+SESSION_DIR: str = os.path.join(os.path.dirname(__file__), "sessions")
 
 # 客户端（模块级单例，惰性初始化）
 _llm_client: OpenAI | None = None
