@@ -140,7 +140,10 @@ def main() -> None:
 
             try:
                 on_token, has_output = _make_display()
-                reply = run_conversation(messages, user_input, on_token, _on_tool)
+                reply = run_conversation(
+                    messages, user_input, on_token, _on_tool,
+                    on_progress=lambda: save_session(messages, session_id),
+                )
                 if has_output():
                     print()
             except Exception as e:

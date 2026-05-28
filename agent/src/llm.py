@@ -116,17 +116,21 @@ def _do_non_stream(
 
 
 def run_conversation(
-    messages: list[dict], user_input: str, on_token: TokenCallback, on_tool: ToolCallback
+    messages: list[dict],
+    user_input: str,
+    on_token: TokenCallback,
+    on_tool: ToolCallback,
+    on_progress: Callable[[], None] | None = None,
 ) -> str:
-    """处理一轮对话：副本上操作，跑通后一次性提交到 messages。"""
+    """处理一轮对话：每轮工具调用后增量提交到 messages 并回调 on_progress。"""
     copy: list[dict] = list(messages)
     copy.append({"role": "user", "content": user_input})
+    messages[:] = copy  # 用户消息立即提交
 
     while True:
         used = count_messages_tokens(copy)
         limit = int(MAX_CONTEXT_TOKENS * TOOL_LOOP_THRESHOLD)
         if used >= limit:
-            messages[:] = copy
             return (
                 f"上下文用量已达上限（{used}/{MAX_CONTEXT_TOKENS} tokens）。"
                 "请开启新会话或精简问题。"
@@ -156,7 +160,12 @@ def run_conversation(
                     "tool_call_id": tc_data["id"],
                     "content": result,
                 })
+            messages[:] = copy  # 每轮工具调用后增量提交
+            if on_progress:
+                on_progress()
         else:
             copy.append({"role": "assistant", "content": content})
             messages[:] = copy
+            if on_progress:
+                on_progress()
             return content or ""
