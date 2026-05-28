@@ -8,10 +8,10 @@ from .file import TOOLS_FILE, read_file, write_file, list_files, delete_file
 from .exec import TOOLS_EXEC, run_python
 from .code import TOOLS_CODE, grep_code
 from .think import TOOLS_THINK, think
-from .skill import TOOLS_SKILL, skill_discover
+from .discover import discover_capabilities
 from .plugin_mgr import discover_plugins, install_plugin, list_plugins, execute_plugin
 
-TOOLS_BUILTIN = TOOLS_WEB + TOOLS_FILE + TOOLS_EXEC + TOOLS_CODE + TOOLS_THINK + TOOLS_SKILL + [
+TOOLS_BUILTIN = TOOLS_WEB + TOOLS_FILE + TOOLS_EXEC + TOOLS_CODE + TOOLS_THINK + [
     {
         "type": "function",
         "function": {
@@ -49,6 +49,18 @@ TOOLS_BUILTIN = TOOLS_WEB + TOOLS_FILE + TOOLS_EXEC + TOOLS_CODE + TOOLS_THINK +
                 "TOOLS = [{type: function, function: {name, description, parameters}}]\n"
                 "def execute(name, args): ...  # 根据 name 分发并返回结果字符串\n"
                 "可 import 任意标准库和已安装的第三方库。"
+            ),
+            "parameters": {"type": "object", "properties": {}, "required": []},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "discover",
+            "description": (
+                "扫描所有可用能力（内置工具、已安装插件、可用 Skill），返回全景摘要。"
+                "启动时或接到新任务时先调用此工具，了解自己有哪些能力可用。"
+                "匹配到相关 Skill 后，用 read_file 读取其 SKILL.md 获取完整指令。"
             ),
             "parameters": {"type": "object", "properties": {}, "required": []},
         },
@@ -107,8 +119,8 @@ def execute_tool(tool_call: ChatCompletionMessageToolCall) -> str:
     if name == "think":
         return think(args["thought"])
 
-    if name == "skill_discover":
-        return skill_discover()
+    if name == "discover":
+        return discover_capabilities()
 
     return json.dumps({"error": f"未知工具: {name}"}, ensure_ascii=False)
 
