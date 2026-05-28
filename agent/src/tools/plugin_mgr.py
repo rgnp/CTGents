@@ -78,11 +78,18 @@ def list_plugins() -> str:
 def execute_plugin(name: str, args: dict) -> str | None:
     """执行插件工具。遍历已加载插件，找到匹配的 execute。"""
     for mod in _plugins.values():
-        if hasattr(mod, "execute"):
+        if not hasattr(mod, "execute"):
+            continue
+        # 检查该插件是否声明了此工具
+        declared = hasattr(mod, "TOOLS") and any(
+            t.get("function", {}).get("name") == name for t in mod.TOOLS
+        )
+        if declared:
             try:
                 result = mod.execute(name, args)
                 if result is not None:
                     return str(result)
+                return f"插件工具 {name} 的 execute() 返回了 None（可能未实现该工具的分支）"
             except Exception as e:
-                return f"插件执行出错: {e}"
+                return f"插件 {name} 执行出错: {e}"
     return None
