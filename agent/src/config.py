@@ -24,8 +24,9 @@ DEEPSEEK_MODEL: str = os.getenv("DEEPSEEK_MODEL", "deepseek-chat")
 TAVILY_API_KEY: str = _require_env("TAVILY_API_KEY")
 
 # ── 行为参数 ──
-# 工具调用最大的轮数，防止agent陷入无尽的搜索-阅读循环
-MAX_TOOL_ROUNDS: int = 5
+# 工具调用最大轮数。瘦身搜索后每轮约需 2 次调用（搜→读），
+# 科研调研至少3-4个维度，设 10 给足余量。
+MAX_TOOL_ROUNDS: int = 10
 # LLM API 最大重试次数
 MAX_RETRIES: int = 3
 # 重试退避基础间隔（秒）：1s → 2s → 4s
