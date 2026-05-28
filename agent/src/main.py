@@ -1,5 +1,6 @@
 import logging
 import os
+import sys
 from collections.abc import Callable
 
 from .commands import CmdResult, dispatch as dispatch_cmd
@@ -106,10 +107,31 @@ def main() -> None:
 
     print("Agent 已启动，输入 /help 查看指令列表\n")
 
+    _use_rich_input = sys.stdin.isatty()
+    if _use_rich_input:
+        from prompt_toolkit import prompt
+        from prompt_toolkit.key_binding import KeyBindings
+
+        kb = KeyBindings()
+
+        @kb.add("escape")
+        def _(event):
+            """Esc 撤回最后一条对话。"""
+            while messages and messages[-1]["role"] != "user":
+                messages.pop()
+            if messages and messages[-1]["role"] == "user":
+                messages.pop()
+                save_session(messages, session_id)
+                print("\r已撤回 ── 输入新问题或回车重新发送", end="")
+            event.app.exit(result="")
+
     try:
         while True:
             try:
-                user_input = input("You: ").strip()
+                if _use_rich_input:
+                    user_input = prompt("You: ", key_bindings=kb).strip()
+                else:
+                    user_input = input("You: ").strip()
             except (EOFError, KeyboardInterrupt):
                 break
 
