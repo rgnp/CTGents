@@ -19,13 +19,20 @@ def discover_plugins() -> list[dict]:
         dirpath.mkdir(parents=True)
 
     all_tools: list[dict] = []
+    seen: set[str] = set()
     for f in sorted(dirpath.glob("*.py")):
         if f.stem.startswith("_"):
             continue
         try:
             mod = _load_module(f.stem, f)
             if hasattr(mod, "TOOLS"):
-                all_tools.extend(mod.TOOLS)
+                for t in mod.TOOLS:
+                    name = t.get("function", {}).get("name", "")
+                    if name in seen:
+                        logger.warning("插件 %s 的工具 %s 与已有工具重名，已跳过", f.stem, name)
+                        continue
+                    seen.add(name)
+                    all_tools.append(t)
         except Exception:
             logger.warning("加载插件失败: %s", f.stem, exc_info=True)
 
