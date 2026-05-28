@@ -2,6 +2,7 @@
 
 import json
 import os
+import re
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
@@ -10,6 +11,7 @@ from types import SimpleNamespace
 from .config import SESSION_DIR
 from .session import list_sessions, get_session_name, rename_session
 from .tools import execute_tool
+from .tools.plugin_mgr import discover_plugins
 
 
 @dataclass
@@ -19,7 +21,7 @@ class CmdResult:
     save: bool = False
     clear: bool = False
     load: str = ""
-    retry: bool = False          # 自动重新发送最后一条 user 消息
+    retry: bool = False
 
 
 CmdHandler = Callable[["CmdResult", list[dict], list[str], str | None], None]
@@ -34,6 +36,24 @@ def register(*names: str):
         return fn
     return deco
 
+
+def _install_plugin_commands() -> None:
+    """扫描已加载插件，将其 COMMANDS 注册到指令系统。"""
+    try:
+        plugins = discover_plugins()
+    except Exception:
+        return
+    from .tools.plugin_mgr import _plugins
+    for mod in _plugins.values():
+        if hasattr(mod, "COMMANDS") and isinstance(mod.COMMANDS, dict):
+            for cmd_name, handler in mod.COMMANDS.items():
+                if cmd_name not in COMMANDS:
+                    COMMANDS[cmd_name] = handler
+
+
+# ═══════════════════════════════════════════════════════════════
+# 内置指令
+# ═══════════════════════════════════════════════════════════════
 
 @register("/exit", "/quit", "/q")
 def _cmd_exit(r: CmdResult, _msgs: list[dict], _args: list[str], _sid: str | None) -> None:
@@ -55,7 +75,7 @@ def _cmd_help(r: CmdResult, _msgs: list[dict], _args: list[str], _sid: str | Non
 def _cmd_clear(r: CmdResult, msgs: list[dict], _args: list[str], _sid: str | None) -> None:
     """清除对话上下文"""
     msgs.clear()
-    r.save = True   # 立即持久化，防止重启后旧数据残留
+    r.save = True
     r.message = "上下文已清除"
 
 
@@ -77,7 +97,6 @@ def _cmd_rename(r: CmdResult, msgs: list[dict], args: list[str], sid: str | None
         r.message = f"会话已重命名为: {name}"
     else:
         r.save = True
-        r.message = ""  # 静默保存，再输一次 /rename 即可
 
 
 @register("/sessions", "/ls")
@@ -120,38 +139,12 @@ def _cmd_load(r: CmdResult, _msgs: list[dict], args: list[str], _sid: str | None
             target = sessions[idx]
             name = get_session_name(target)
             r.load = target
-            r.save = True        # 先保存当前
+            r.save = True
             r.message = f"切换到: {name}"
         else:
             r.message = f"无效编号，共 {len(sessions)} 个会话"
     except ValueError:
         r.message = f"无效编号: {args[0]}"
-
-
-@register("/run")
-def _cmd_run(r: CmdResult, _msgs: list[dict], args: list[str], _sid: str | None) -> None:
-    """直接调用工具  /run <工具名> <参数=值...>"""
-    if not args:
-        r.message = "用法: /run <工具名> <参数=值...>"
-        return
-    name = args[0]
-
-    # 把参数粘回去，支持含空格的 value
-    raw = " ".join(args[1:])
-    tool_args: dict[str, str] = {}
-    if raw:
-        # 按 key=value key=value... 解析，value 可含空格
-        import re
-        for m in re.finditer(r'(\w+)=(.+?)(?=\s+\w+=|$)', raw):
-            tool_args[m.group(1)] = m.group(2).strip()
-
-    tc = SimpleNamespace(
-        function=SimpleNamespace(
-            name=name,
-            arguments=json.dumps(tool_args),
-        )
-    )
-    r.message = execute_tool(tc)
 
 
 @register("/new")
@@ -192,7 +185,6 @@ def _cmd_export(r: CmdResult, msgs: list[dict], args: list[str], sid: str | None
     name = " ".join(name_parts) if name_parts else (get_session_name(sid) if sid else "export")
     filename = f"{name}.md" if not name.endswith(".md") else name
 
-    # 筛选最近 N 轮
     messages = list(msgs)
     if count is not None:
         rounds = []
@@ -210,7 +202,6 @@ def _cmd_export(r: CmdResult, msgs: list[dict], args: list[str], sid: str | None
         role = m.get("role", "")
         content = m.get("content", "") or ""
         tc = m.get("tool_calls")
-
         if role == "system":
             continue
         elif role == "user":
@@ -238,17 +229,74 @@ def _cmd_edit(r: CmdResult, msgs: list[dict], args: list[str], _sid: str | None)
         r.message = "用法: /edit <新内容>"
         return
     new_text = " ".join(args)
-    # 撤回最后一条 user + 回复
     while msgs and msgs[-1]["role"] != "user":
         msgs.pop()
     if msgs and msgs[-1]["role"] == "user":
         msgs.pop()
-    # 注入新内容作为 user 消息
     msgs.append({"role": "user", "content": new_text})
     r.save = True
     r.retry = True
     r.message = f"已修改: {new_text}"
 
+
+@register("/run")
+def _cmd_run(r: CmdResult, _msgs: list[dict], args: list[str], _sid: str | None) -> None:
+    """直接调用工具  /run <工具名> <参数=值...>"""
+    if not args:
+        r.message = "用法: /run <工具名> <参数=值...>"
+        return
+    name = args[0]
+    raw = " ".join(args[1:])
+    tool_args: dict[str, str] = {}
+    if raw:
+        for m in re.finditer(r'(\w+)=(.+?)(?=\s+\w+=|$)', raw):
+            tool_args[m.group(1)] = m.group(2).strip()
+    tc = SimpleNamespace(function=SimpleNamespace(name=name, arguments=json.dumps(tool_args)))
+    r.message = execute_tool(tc)
+
+
+# ═══════════════════════════════════════════════════════════════
+# 插件指令（agent 可通过 install_plugin 扩展）
+# ═══════════════════════════════════════════════════════════════
+
+@register("/plugin")
+def _cmd_plugin(r: CmdResult, _msgs: list[dict], args: list[str], _sid: str | None) -> None:
+    """插件快捷入口  /plugin <插件名> [参数=值...]  或 /plugin 列出所有"""
+    if not args:
+        # 列出所有插件及其工具
+        from .tools.plugin_mgr import _plugins
+        if not _plugins:
+            r.message = "未安装任何插件。"
+            return
+        lines = ["已安装插件："]
+        for pname, mod in _plugins.items():
+            tools = [t["function"]["name"] for t in getattr(mod, "TOOLS", [])]
+            lines.append(f"  {pname} → {', '.join(tools)}")
+        r.message = "\n".join(lines)
+        return
+
+    name = args[0]
+    # 找匹配的插件工具
+    from .tools.plugin_mgr import _plugins
+    for mod in _plugins.values():
+        if hasattr(mod, "TOOLS") and any(
+            t["function"]["name"] == name for t in mod.TOOLS
+        ):
+            raw = " ".join(args[1:])
+            tool_args: dict[str, str] = {}
+            if raw:
+                for m in re.finditer(r'(\w+)=(.+?)(?=\s+\w+=|$)', raw):
+                    tool_args[m.group(1)] = m.group(2).strip()
+            tc = SimpleNamespace(function=SimpleNamespace(name=name, arguments=json.dumps(tool_args)))
+            r.message = execute_tool(tc)
+            return
+
+    r.message = f"未找到插件工具: {name}\n（用 /plugin 查看所有可用插件工具）"
+
+
+# ═══════════════════════════════════════════════════════════════
+# 分发
+# ═══════════════════════════════════════════════════════════════
 
 def dispatch(user_input: str, messages: list[dict], session_id: str | None) -> CmdResult:
     r = CmdResult()
@@ -260,3 +308,7 @@ def dispatch(user_input: str, messages: list[dict], session_id: str | None) -> C
     if handler:
         handler(r, messages, args, session_id)
     return r
+
+
+# 启动时加载插件指令
+_install_plugin_commands()

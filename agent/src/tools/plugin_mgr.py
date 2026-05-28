@@ -61,9 +61,21 @@ def install_plugin(name: str, code: str) -> str:
 
     try:
         _load_module(name, filepath)
+        _register_plugin_commands(name)
         return f"插件已安装并激活: {name}"
     except Exception as e:
         return f"插件安装失败（代码有误）: {e}"
+
+
+def _register_plugin_commands(name: str) -> None:
+    """如果插件定义了 COMMANDS，注册到全局指令系统。"""
+    mod = _plugins.get(name)
+    if mod is None or not hasattr(mod, "COMMANDS"):
+        return
+    # 延迟导入避免循环依赖
+    from ..commands import COMMANDS
+    for cmd_name, handler in mod.COMMANDS.items():
+        COMMANDS[cmd_name] = handler
 
 
 def list_plugins() -> str:
