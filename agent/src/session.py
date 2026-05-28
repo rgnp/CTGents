@@ -28,6 +28,36 @@ def _summary_path(session_id: str) -> str:
     return os.path.join(_session_path(session_id), "summary.txt")
 
 
+def _meta_path(session_id: str) -> str:
+    return os.path.join(_session_path(session_id), "meta.json")
+
+
+def get_session_name(session_id: str) -> str:
+    """获取会话名称，未设置则返回会话 ID。"""
+    try:
+        with open(_meta_path(session_id), "r", encoding="utf-8") as f:
+            meta = json.load(f)
+            return meta.get("name", session_id)
+    except Exception:
+        return session_id
+
+
+def rename_session(session_id: str, name: str) -> None:
+    """重命名会话。"""
+    meta = {}
+    meta_path = _meta_path(session_id)
+    if os.path.exists(meta_path):
+        try:
+            with open(meta_path, "r", encoding="utf-8") as f:
+                meta = json.load(f)
+        except Exception:
+            pass
+    meta["name"] = name
+    os.makedirs(os.path.dirname(meta_path), exist_ok=True)
+    with open(meta_path, "w", encoding="utf-8") as f:
+        json.dump(meta, f, ensure_ascii=False)
+
+
 def save_session(messages: list[dict], session_id: str | None = None) -> str:
     """保存会话。不传 session_id 则自动生成。返回 session_id。"""
     if session_id is None:

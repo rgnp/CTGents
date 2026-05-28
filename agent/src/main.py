@@ -117,14 +117,22 @@ def main() -> None:
                 continue
 
             if user_input.startswith("/"):
-                r = dispatch_cmd(user_input, messages)
+                r = dispatch_cmd(user_input, messages, session_id)
                 if r.message:
                     print(r.message)
+                if r.save:
+                    session_id = save_session(messages, session_id)
+                    print(f"会话已保存: [{session_id}]")
+                if r.load:
+                    messages, summary = load_session(r.load)
+                    if summary:
+                        messages.insert(0, {"role": "system", "content": f"之前对话的摘要：{summary}"})
+                    session_id = r.load
+                    print(f"已加载会话 [{r.load}]，共 {len(messages)} 条消息")
+                    _print_recent(messages)
                 if r.clear:
                     messages.clear()
-                if r.save:
-                    sid = save_session(messages, session_id)
-                    print(f"会话已保存: [{sid}]")
+                    session_id = None
                 if r.exit:
                     break
                 continue
