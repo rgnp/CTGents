@@ -36,7 +36,7 @@ def _print_recent(messages: list[dict], count: int = 4) -> None:
     print("─" * 40)
     for m in recent:
         role = "You" if m["role"] == "user" else "Agent"
-        content = m["content"]
+        content = m["content"] or ""
         if len(content) > 200:
             content = content[:200] + "..."
         print(f"{role}: {content}")
