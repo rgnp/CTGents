@@ -46,17 +46,27 @@ TOOLS_WEB = [
 
 
 def format_search_results(response: dict, query: str) -> str:
-    """将 Tavily 原始响应格式化为 LLM 可读的文本，仅保留 title/url/content。"""
+    """格式化搜索结果：仅标题 + 简短片段 + 域名 + 链接，供 agent 筛选后深入阅读。"""
     results = response.get("results", [])
 
     if not results:
-        return f'搜索「{query}」未找到相关结果。'
+        return f"搜索「{query}」未找到相关结果。"
 
-    lines = [f'搜索「{query}」返回 {len(results)} 条结果：\n']
+    lines = [f"搜索「{query}」返回 {len(results)} 条结果。深入阅读请用 read_page：\n"]
     for i, r in enumerate(results, 1):
-        lines.append(f"{i}. {r.get('title', '')}")
-        lines.append(f"   {r.get('content', '')}")
-        lines.append(f"   {r.get('url', '')}")
+        title = r.get("title", "")
+        url = r.get("url", "")
+        snippet = r.get("content", "")[:100]
+        try:
+            from urllib.parse import urlparse
+            domain = urlparse(url).netloc
+        except Exception:
+            domain = ""
+
+        lines.append(f"{i}. {title}")
+        if snippet:
+            lines.append(f"   {snippet}")
+        lines.append(f"   [{domain}] {url}")
         lines.append("")
     return "\n".join(lines)
 
