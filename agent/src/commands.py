@@ -1,12 +1,15 @@
 """指令系统。添加新指令：@register("/xxx") + 函数。"""
 
+import json
 import os
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
+from types import SimpleNamespace
 
 from .config import SESSION_DIR
 from .session import list_sessions, get_session_name, rename_session
+from .tools import execute_tool
 
 
 @dataclass
@@ -123,6 +126,32 @@ def _cmd_load(r: CmdResult, _msgs: list[dict], args: list[str], _sid: str | None
             r.message = f"无效编号，共 {len(sessions)} 个会话"
     except ValueError:
         r.message = f"无效编号: {args[0]}"
+
+
+@register("/run")
+def _cmd_run(r: CmdResult, _msgs: list[dict], args: list[str], _sid: str | None) -> None:
+    """直接调用工具  /run <工具名> <参数=值...>"""
+    if not args:
+        r.message = "用法: /run <工具名> <参数=值...>"
+        return
+    name = args[0]
+
+    # 把参数粘回去，支持含空格的 value
+    raw = " ".join(args[1:])
+    tool_args: dict[str, str] = {}
+    if raw:
+        # 按 key=value key=value... 解析，value 可含空格
+        import re
+        for m in re.finditer(r'(\w+)=(.+?)(?=\s+\w+=|$)', raw):
+            tool_args[m.group(1)] = m.group(2).strip()
+
+    tc = SimpleNamespace(
+        function=SimpleNamespace(
+            name=name,
+            arguments=json.dumps(tool_args),
+        )
+    )
+    r.message = execute_tool(tc)
 
 
 @register("/new")
