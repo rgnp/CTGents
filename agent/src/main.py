@@ -136,6 +136,18 @@ def main() -> None:
                         session_id = None
                 if r.exit:
                     break
+                if r.retry:
+                    last_user = next(
+                        (m["content"] for m in reversed(messages) if m["role"] == "user"), ""
+                    )
+                    if last_user:
+                        on_token, has_output = _make_display()
+                        reply = run_conversation(
+                            messages, last_user, on_token, _on_tool,
+                            on_progress=lambda: save_session(messages, session_id),
+                        )
+                        if has_output():
+                            print()
                 continue
 
             try:

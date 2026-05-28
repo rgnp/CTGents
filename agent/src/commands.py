@@ -14,7 +14,8 @@ class CmdResult:
     exit: bool = False
     save: bool = False
     clear: bool = False
-    load: str = ""              # 要切换到的会话 ID，空串表示不切换
+    load: str = ""
+    retry: bool = False          # 自动重新发送最后一条 user 消息
 
 
 CmdHandler = Callable[["CmdResult", list[dict], list[str], str | None], None]
@@ -128,6 +129,40 @@ def _cmd_new(r: CmdResult, _msgs: list[dict], _args: list[str], _sid: str | None
     """新建会话（自动保存当前）"""
     r.save = True
     r.clear = True
+
+
+@register("/pop")
+def _cmd_pop(r: CmdResult, msgs: list[dict], args: list[str], _sid: str | None) -> None:
+    """撤回最后一条对话  /pop [数量]"""
+    n = int(args[0]) if args else 1
+    removed = 0
+    for _ in range(n):
+        while msgs and msgs[-1]["role"] != "user":
+            msgs.pop()
+        if msgs and msgs[-1]["role"] == "user":
+            msgs.pop()
+            removed += 1
+    r.save = True
+    r.message = f"已撤回 {removed} 条对话"
+
+
+@register("/edit")
+def _cmd_edit(r: CmdResult, msgs: list[dict], args: list[str], _sid: str | None) -> None:
+    """修改并重发最后一条对话  /edit <新内容>"""
+    if not args:
+        r.message = "用法: /edit <新内容>"
+        return
+    new_text = " ".join(args)
+    # 撤回最后一条 user + 回复
+    while msgs and msgs[-1]["role"] != "user":
+        msgs.pop()
+    if msgs and msgs[-1]["role"] == "user":
+        msgs.pop()
+    # 注入新内容作为 user 消息
+    msgs.append({"role": "user", "content": new_text})
+    r.save = True
+    r.retry = True
+    r.message = f"已修改: {new_text}"
 
 
 def dispatch(user_input: str, messages: list[dict], session_id: str | None) -> CmdResult:
