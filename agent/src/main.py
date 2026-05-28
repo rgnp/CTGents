@@ -65,6 +65,7 @@ TOOL_LABELS: dict[str, str] = {
     "delete_file":  "删除文件",
     "run_python":   "执行代码",
     "grep_code":    "搜索代码",
+    "think":        "思考",
 }
 
 
