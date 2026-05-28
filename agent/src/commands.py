@@ -149,17 +149,42 @@ def _cmd_pop(r: CmdResult, msgs: list[dict], args: list[str], _sid: str | None) 
 
 @register("/export")
 def _cmd_export(r: CmdResult, msgs: list[dict], args: list[str], sid: str | None) -> None:
-    """导出对话为 Markdown  /export [文件名]"""
-    name = " ".join(args) if args else (get_session_name(sid) if sid else "export")
+    """导出对话为 Markdown  /export [轮数] [文件名]"""
+    count: int | None = None
+    name_parts: list[str] = []
+
+    if args:
+        try:
+            count = int(args[0])
+            name_parts = args[1:]
+        except ValueError:
+            name_parts = args
+
+    name = " ".join(name_parts) if name_parts else (get_session_name(sid) if sid else "export")
     filename = f"{name}.md" if not name.endswith(".md") else name
 
+    # 筛选最近 N 轮
+    messages = list(msgs)
+    if count is not None:
+        rounds = []
+        user_count = 0
+        for m in reversed(messages):
+            rounds.insert(0, m)
+            if m.get("role") == "user":
+                user_count += 1
+                if user_count >= count:
+                    break
+        messages = rounds
+
     lines = [f"# {name}\n"]
-    for m in msgs:
+    for m in messages:
         role = m.get("role", "")
         content = m.get("content", "") or ""
         tc = m.get("tool_calls")
 
-        if role == "user":
+        if role == "system":
+            continue
+        elif role == "user":
             lines.append(f"## You\n\n{content}\n")
         elif role == "assistant":
             if tc:
