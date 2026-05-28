@@ -26,4 +26,4 @@ TOOLS_THINK = [
 
 
 def think(thought: str) -> str:
-    return "已记录思考"
+    return ""
