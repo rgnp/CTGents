@@ -72,6 +72,7 @@ TOOL_LABELS: dict[str, str] = {
     "think":        "思考",
     "install_plugin": "安装插件",
     "list_plugins":  "列出插件",
+    "skill_discover": "发现技能",
 }
 
 

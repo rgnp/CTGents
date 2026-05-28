@@ -8,9 +8,10 @@ from .file import TOOLS_FILE, read_file, write_file, list_files, delete_file
 from .exec import TOOLS_EXEC, run_python
 from .code import TOOLS_CODE, grep_code
 from .think import TOOLS_THINK, think
+from .skill import TOOLS_SKILL, skill_discover
 from .plugin_mgr import discover_plugins, install_plugin, list_plugins, execute_plugin
 
-TOOLS_BUILTIN = TOOLS_WEB + TOOLS_FILE + TOOLS_EXEC + TOOLS_CODE + TOOLS_THINK + [
+TOOLS_BUILTIN = TOOLS_WEB + TOOLS_FILE + TOOLS_EXEC + TOOLS_CODE + TOOLS_THINK + TOOLS_SKILL + [
     {
         "type": "function",
         "function": {
@@ -105,6 +106,9 @@ def execute_tool(tool_call: ChatCompletionMessageToolCall) -> str:
         return grep_code(args["pattern"], args.get("path"))
     if name == "think":
         return think(args["thought"])
+
+    if name == "skill_discover":
+        return skill_discover()
 
     return json.dumps({"error": f"未知工具: {name}"}, ensure_ascii=False)
 
