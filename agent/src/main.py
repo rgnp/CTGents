@@ -3,7 +3,7 @@ import os
 from collections.abc import Callable
 
 from .config import SESSION_DIR
-from .llm import run_conversation, TokenCallback
+from .llm import run_conversation, TokenCallback, ToolCallback
 from .session import list_sessions, load_session, save_session
 
 logger = logging.getLogger(__name__)
@@ -56,6 +56,26 @@ def _make_display() -> tuple[TokenCallback, Callable[[], bool]]:
     return on_token, has_output
 
 
+TOOL_LABELS: dict[str, str] = {
+    "search_web":   "搜索",
+    "read_page":    "阅读网页",
+    "read_file":    "读取文件",
+    "write_file":   "写入文件",
+    "list_files":   "浏览目录",
+    "delete_file":  "删除文件",
+    "run_python":   "执行代码",
+    "grep_code":    "搜索代码",
+}
+
+
+def _on_tool(name: str, args: dict) -> None:
+    label = TOOL_LABELS.get(name, name)
+    detail = " ".join(f"{k}={v}" for k, v in args.items())
+    if len(detail) > 80:
+        detail = detail[:77] + "..."
+    print(f"  [{label}] {detail}")
+
+
 def main() -> None:
     sessions = list_sessions()
     session_id: str | None = None
@@ -97,7 +117,7 @@ def main() -> None:
 
             try:
                 on_token, has_output = _make_display()
-                reply = run_conversation(messages, user_input, on_token)
+                reply = run_conversation(messages, user_input, on_token, _on_tool)
                 if has_output():
                     print()
             except Exception as e:

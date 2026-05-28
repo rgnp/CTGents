@@ -1,3 +1,4 @@
+import json
 import logging
 import time
 from collections.abc import Callable
@@ -13,6 +14,7 @@ client = get_llm_client()
 
 RETRYABLE = (APITimeoutError, RateLimitError, APIConnectionError, InternalServerError)
 TokenCallback = Callable[[str], None]
+ToolCallback = Callable[[str, dict], None]
 
 
 def _stream_llm(
@@ -113,7 +115,7 @@ def _do_non_stream(
 
 
 def run_conversation(
-    messages: list[dict], user_input: str, on_token: TokenCallback
+    messages: list[dict], user_input: str, on_token: TokenCallback, on_tool: ToolCallback
 ) -> str:
     """处理一轮对话：副本上操作，跑通后一次性提交到 messages。"""
     copy: list[dict] = list(messages)
@@ -135,6 +137,8 @@ def run_conversation(
                         arguments=tc_data["function"]["arguments"],
                     )
                 )
+                args = json.loads(tc_data["function"]["arguments"])
+                on_tool(tc_data["function"]["name"], args)
                 result = execute_tool(tc)
                 result = truncate_to_budget(result, copy)
                 copy.append({
