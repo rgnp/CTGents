@@ -50,6 +50,7 @@ def _cmd_help(r: CmdResult, _msgs: list[dict], _args: list[str], _sid: str | Non
 def _cmd_clear(r: CmdResult, msgs: list[dict], _args: list[str], _sid: str | None) -> None:
     """清除对话上下文"""
     msgs.clear()
+    r.save = True   # 立即持久化，防止重启后旧数据残留
     r.message = "上下文已清除"
 
 
