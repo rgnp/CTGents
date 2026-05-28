@@ -3,6 +3,7 @@
 import importlib.util
 import logging
 import sys
+import textwrap
 from pathlib import Path
 
 from ..config import PLUGINS_DIR
@@ -10,6 +11,81 @@ from ..config import PLUGINS_DIR
 logger = logging.getLogger(__name__)
 
 _plugins: dict[str, object] = {}  # name -> module
+
+
+# ═══════════════════════════════════════════════════════════════
+# 接口规范
+# ═══════════════════════════════════════════════════════════════
+
+PLUGIN_SPEC = textwrap.dedent("""\
+# Plugin 接口规范 v1.0
+#
+# 每个插件是一个 Python 文件，系统通过以下接口与插件交互。
+
+## 必需接口
+
+### 1. TOOLS — 工具定义列表
+```python
+TOOLS = [
+    {
+        "type": "function",
+        "function": {
+            "name": "my_tool",           # 工具名，全局唯一
+            "description": "工具描述",     # 告诉 LLM 何时调用
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "arg_name": {
+                        "type": "string",
+                        "description": "参数说明"
+                    }
+                },
+                "required": ["arg_name"]   # 必需参数列表
+            }
+        }
+    },
+]
+```
+
+### 2. execute(name, args) — 工具调度
+```python
+def execute(name: str, args: dict) -> str | None:
+    \"\"\"根据 name 分发到对应处理函数。
+    返回 str：工具执行结果
+    返回 None：表示不处理此工具（系统继续查找）
+    \"\"\"
+    if name == "my_tool":
+        return f"结果: {args}"
+    return None
+```
+
+## 可选接口
+
+### 3. COMMANDS — 指令扩展
+```python
+COMMANDS = {
+    "/mycmd": lambda r, msgs, args, sid: setattr(r, "message", "..."),
+}
+# 签名: (CmdResult, list[dict], list[str], str | None) -> None
+```
+
+### 4. on_load() — 加载回调
+```python
+def on_load():
+    \"\"\"插件被加载或重载时调用。\"\"\"
+    pass
+```
+
+## 注意事项
+- 工具名必须在所有内置工具和已安装插件中唯一
+- execute() 对于不处理的工具名必须返回 None（不是错误消息）
+- 可 import 任意标准库和已安装的第三方库
+- 重名工具会被系统静默跳过，启动日志有 warning
+""")
+
+
+def get_plugin_spec() -> str:
+    return PLUGIN_SPEC
 
 
 def discover_plugins() -> list[dict]:

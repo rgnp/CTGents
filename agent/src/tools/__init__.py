@@ -9,7 +9,7 @@ from .exec import TOOLS_EXEC, run_python
 from .code import TOOLS_CODE, grep_code
 from .think import TOOLS_THINK, think
 from .discover import discover_capabilities
-from .plugin_mgr import discover_plugins, install_plugin, list_plugins, execute_plugin
+from .plugin_mgr import discover_plugins, install_plugin, list_plugins, execute_plugin, get_plugin_spec
 
 TOOLS_BUILTIN = TOOLS_WEB + TOOLS_FILE + TOOLS_EXEC + TOOLS_CODE + TOOLS_THINK + [
     {
@@ -61,6 +61,16 @@ TOOLS_BUILTIN = TOOLS_WEB + TOOLS_FILE + TOOLS_EXEC + TOOLS_CODE + TOOLS_THINK +
                 "扫描所有可用能力（内置工具、已安装插件、可用 Skill），返回全景摘要。"
                 "启动时或接到新任务时先调用此工具，了解自己有哪些能力可用。"
                 "匹配到相关 Skill 后，用 read_file 读取其 SKILL.md 获取完整指令。"
+            ),
+            "parameters": {"type": "object", "properties": {}, "required": []},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "plugin_spec",
+            "description": (
+                "获取 Plugin 接口规范。写插件前先调用，了解必需接口（TOOLS+execute）和可选接口。"
             ),
             "parameters": {"type": "object", "properties": {}, "required": []},
         },
@@ -121,6 +131,9 @@ def execute_tool(tool_call: ChatCompletionMessageToolCall) -> str:
 
     if name == "discover":
         return discover_capabilities()
+
+    if name == "plugin_spec":
+        return get_plugin_spec()
 
     return json.dumps({"error": f"未知工具: {name}"}, ensure_ascii=False)
 
