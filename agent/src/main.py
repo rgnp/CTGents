@@ -70,6 +70,8 @@ TOOL_LABELS: dict[str, str] = {
     "run_python":   "执行代码",
     "grep_code":    "搜索代码",
     "think":        "思考",
+    "install_plugin": "安装插件",
+    "list_plugins":  "列出插件",
 }
 
 

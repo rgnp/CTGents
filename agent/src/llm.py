@@ -7,7 +7,7 @@ from types import SimpleNamespace
 from openai import APITimeoutError, RateLimitError, APIConnectionError, InternalServerError
 
 from .config import get_llm_client, DEEPSEEK_MODEL, MAX_CONTEXT_TOKENS, TOOL_LOOP_THRESHOLD, MAX_RETRIES, RETRY_BASE_DELAY
-from .tools import TOOLS, execute_tool, truncate_to_budget
+from .tools import execute_tool, truncate_to_budget, get_tools
 from .tools.tokens import count_messages_tokens
 
 logger = logging.getLogger(__name__)
@@ -55,7 +55,7 @@ def _do_stream(
     stream = client.chat.completions.create(
         model=DEEPSEEK_MODEL,
         messages=messages,
-        tools=TOOLS,
+        tools=get_tools(),
         stream=True,
     )
 
@@ -94,7 +94,7 @@ def _do_non_stream(
     response = client.chat.completions.create(
         model=DEEPSEEK_MODEL,
         messages=messages,
-        tools=TOOLS,
+        tools=get_tools(),
     )
     msg = response.choices[0].message
 
