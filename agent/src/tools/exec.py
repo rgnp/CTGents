@@ -1,3 +1,4 @@
+import os
 import subprocess
 from pathlib import Path
 
@@ -11,7 +12,9 @@ TOOLS_EXEC = [
             "description": (
                 "执行 Python 代码并返回输出。"
                 "用于数据处理、计算验证、自动化操作等。"
-                "代码在子进程中运行，有超时限制，无法访问网络。"
+                "代码在子进程中运行，有超时限制。"
+                "不要生成需要用户交互的代码（如 input()、GUI 窗口），"
+                "可视化请保存为图片文件或输出文本/数值结果。"
             ),
             "parameters": {
                 "type": "object",
@@ -30,6 +33,8 @@ TOOLS_EXEC = [
 
 def run_python(code: str) -> str:
     """在子进程中执行 Python 代码，捕获 stdout/stderr。"""
+    env = {**os.environ, "MPLBACKEND": "Agg"}
+
     try:
         result = subprocess.run(
             ["python", "-c", code],
@@ -37,11 +42,12 @@ def run_python(code: str) -> str:
             text=True,
             timeout=MAX_EXEC_TIMEOUT,
             cwd=Path.cwd(),
+            env=env,
         )
     except subprocess.TimeoutExpired:
-        return f"代码执行超时（{MAX_EXEC_TIMEOUT} 秒限制）"
+        return f"代码执行超时（{MAX_EXEC_TIMEOUT} 秒）"
     except FileNotFoundError:
-        return "找不到 Python 解释器，请确认已安装 Python"
+        return "找不到 Python 解释器"
 
     parts: list[str] = []
     if result.stdout.strip():
