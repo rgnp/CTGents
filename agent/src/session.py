@@ -7,8 +7,7 @@ from .config import SESSION_DIR, get_llm_client, DEEPSEEK_MODEL
 
 def list_sessions() -> list[str]:
     """列出所有历史会话 ID，按时间倒序。"""
-    if not os.path.isdir(SESSION_DIR):
-        return []
+    os.makedirs(SESSION_DIR, exist_ok=True)
     dirs = sorted(
         (d for d in os.listdir(SESSION_DIR) if os.path.isdir(os.path.join(SESSION_DIR, d))),
         reverse=True,
