@@ -180,6 +180,20 @@ def main() -> None:
                 )
                 if has_output():
                     print()
+            except KeyboardInterrupt:
+                print("\n[中断]")
+                try:
+                    guide = input("指导: ").strip()
+                except (EOFError, KeyboardInterrupt):
+                    guide = ""
+                if guide:
+                    on_token, has_output = _make_display()
+                    reply = run_conversation(
+                        messages, guide, on_token, _on_tool,
+                        on_progress=lambda: save_session(messages, session_id),
+                    )
+                    if has_output():
+                        print()
             except Exception as e:
                 logger.error("对话出错: %s", e)
                 print(f"\n  请求失败: {e}\n")
