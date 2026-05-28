@@ -132,7 +132,8 @@ def main() -> None:
                     _print_recent(messages)
                 if r.clear:
                     messages.clear()
-                    session_id = None
+                    if r.save:   # /new: 同时重置 session
+                        session_id = None
                 if r.exit:
                     break
                 continue
