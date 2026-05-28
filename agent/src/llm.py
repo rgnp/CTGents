@@ -6,8 +6,9 @@ from types import SimpleNamespace
 
 from openai import APITimeoutError, RateLimitError, APIConnectionError, InternalServerError
 
-from .config import get_llm_client, DEEPSEEK_MODEL, MAX_TOOL_ROUNDS, MAX_RETRIES, RETRY_BASE_DELAY
+from .config import get_llm_client, DEEPSEEK_MODEL, MAX_CONTEXT_TOKENS, TOOL_LOOP_THRESHOLD, MAX_RETRIES, RETRY_BASE_DELAY
 from .tools import TOOLS, execute_tool, truncate_to_budget
+from .tools.tokens import count_messages_tokens
 
 logger = logging.getLogger(__name__)
 client = get_llm_client()
@@ -121,7 +122,16 @@ def run_conversation(
     copy: list[dict] = list(messages)
     copy.append({"role": "user", "content": user_input})
 
-    for _ in range(MAX_TOOL_ROUNDS):
+    while True:
+        used = count_messages_tokens(copy)
+        limit = int(MAX_CONTEXT_TOKENS * TOOL_LOOP_THRESHOLD)
+        if used >= limit:
+            messages[:] = copy
+            return (
+                f"上下文用量已达上限（{used}/{MAX_CONTEXT_TOKENS} tokens）。"
+                "请开启新会话或精简问题。"
+            )
+
         content, tool_calls = _stream_llm(copy, on_token)
 
         if tool_calls:
@@ -150,6 +160,3 @@ def run_conversation(
             copy.append({"role": "assistant", "content": content})
             messages[:] = copy
             return content or ""
-
-    messages[:] = copy
-    return "已达到最大搜索轮数，请简化问题重试。"
