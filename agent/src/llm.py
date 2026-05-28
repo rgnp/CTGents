@@ -13,7 +13,10 @@ from .tools.tokens import count_messages_tokens
 logger = logging.getLogger(__name__)
 client = get_llm_client()
 
-RETRYABLE = (APITimeoutError, RateLimitError, APIConnectionError, InternalServerError)
+RETRYABLE = (
+    APITimeoutError, RateLimitError, APIConnectionError, InternalServerError,
+    OSError,  # ConnectionResetError, ConnectionAbortedError 等 TCP 层错误
+)
 TokenCallback = Callable[[str], None]
 ToolCallback = Callable[[str, dict], None]
 
