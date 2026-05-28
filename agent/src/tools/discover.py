@@ -27,15 +27,16 @@ def discover_capabilities() -> str:
     lines.append("")
 
     # ── 插件 ──
-    plugins_dir = Path("plugins")
-    if plugins_dir.exists():
-        py_files = sorted(plugins_dir.glob("*.py"))
-        if py_files:
-            lines.append(f"已安装插件 ({len(py_files)} 个)：")
-            for f in py_files:
-                size = f.stat().st_size
-                lines.append(f"  {f.stem} ({size}B)")
-            lines.append("")
+    from .plugin_mgr import _plugins
+    if _plugins:
+        lines.append(f"已安装插件 ({len(_plugins)} 个)：")
+        for pname, mod in _plugins.items():
+            desc = getattr(mod, "DESCRIPTION", "（无描述）")
+            tools = [t["function"]["name"] for t in getattr(mod, "TOOLS", [])]
+            lines.append(f"  {pname} — {desc}")
+            if tools:
+                lines.append(f"    工具: {', '.join(tools)}")
+        lines.append("")
 
     # ── Skill ──
     skills_dir = Path("skills")
