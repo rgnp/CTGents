@@ -2,7 +2,8 @@
 
 import os
 from collections.abc import Callable
-from dataclasses import dataclass, field
+from dataclasses import dataclass
+from pathlib import Path
 
 from .config import SESSION_DIR
 from .session import list_sessions, get_session_name, rename_session
@@ -144,6 +145,36 @@ def _cmd_pop(r: CmdResult, msgs: list[dict], args: list[str], _sid: str | None) 
             removed += 1
     r.save = True
     r.message = f"已撤回 {removed} 条对话"
+
+
+@register("/export")
+def _cmd_export(r: CmdResult, msgs: list[dict], args: list[str], sid: str | None) -> None:
+    """导出对话为 Markdown  /export [文件名]"""
+    name = " ".join(args) if args else (get_session_name(sid) if sid else "export")
+    filename = f"{name}.md" if not name.endswith(".md") else name
+
+    lines = [f"# {name}\n"]
+    for m in msgs:
+        role = m.get("role", "")
+        content = m.get("content", "") or ""
+        tc = m.get("tool_calls")
+
+        if role == "user":
+            lines.append(f"## You\n\n{content}\n")
+        elif role == "assistant":
+            if tc:
+                tools = ", ".join(t["function"]["name"] for t in tc)
+                lines.append(f"## Agent\n\n*[调用工具: {tools}]*\n")
+            if content:
+                lines.append(f"{content}\n")
+        elif role == "tool":
+            preview = content[:120].replace("\n", " ") + ("..." if len(content) > 120 else "")
+            lines.append(f"*[工具结果: {preview}]*\n")
+
+    text = "\n".join(lines)
+    filepath = Path(filename)
+    filepath.write_text(text, encoding="utf-8")
+    r.message = f"已导出到: {filepath.resolve()}（{len(text)} 字符）"
 
 
 @register("/edit")
