@@ -1,8 +1,8 @@
 import json
 import os
-from datetime import datetime
+from openai import OpenAI
 
-from .config import SESSION_DIR, get_llm_client, DEEPSEEK_MODEL
+from .config import SESSION_DIR, DEEPSEEK_API_KEY, DEEPSEEK_BASE_URL
 
 
 def list_sessions() -> list[str]:
@@ -106,11 +106,11 @@ def _generate_summary(messages: list[dict]) -> str:
 
     summary_messages: list[dict] = list(messages)
     summary_messages.append({"role": "user", "content": prompt})
-
     try:
-        client = get_llm_client()
+        client = OpenAI(api_key=DEEPSEEK_API_KEY, base_url=DEEPSEEK_BASE_URL)
+        from .config import MODEL_FLASH
         response = client.chat.completions.create(
-            model=DEEPSEEK_MODEL,
+            model=MODEL_FLASH,
             messages=summary_messages,
         )
         return response.choices[0].message.content or ""

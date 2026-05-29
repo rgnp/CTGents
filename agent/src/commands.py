@@ -308,6 +308,23 @@ def _cmd_reload(r: CmdResult, _msgs, _args, _sid) -> None:
 
 
 # ═══════════════════════════════════════════════════════════════
+# 模型指令
+# ═══════════════════════════════════════════════════════════════
+
+@builtin("/model", description="查看/切换 LLM 模型", usage="/model [flash|pro]")
+def _cmd_model(r: CmdResult, _msgs, args, _sid) -> None:
+    from .llm import get_current_model_name, switch_model, list_models
+    if not args:
+        current = get_current_model_name()
+        r.message = f"当前模型: {current}\n" + list_models()
+        return
+    ok, msg = switch_model(args[0])
+    r.message = msg
+    if ok:
+        r.save = True
+
+
+# ═══════════════════════════════════════════════════════════════
 # 状态指令
 # ═══════════════════════════════════════════════════════════════
 
@@ -315,9 +332,13 @@ def _cmd_reload(r: CmdResult, _msgs, _args, _sid) -> None:
 def _cmd_status(r: CmdResult, msgs, _args, sid) -> None:
     from .config import (
         MAX_CONTEXT_TOKENS, TOOL_RESULT_BUDGET, TOKEN_PER_CHAR,
-        TOOL_LOOP_THRESHOLD, MAX_RETRIES, DEEPSEEK_MODEL,
+        TOOL_LOOP_THRESHOLD, MAX_RETRIES,
         SESSION_DIR, PLUGINS_DIR,
     )
+    from .llm import get_current_model_name, get_current_model_id, list_models
+    from .tools.plugin_mgr import _plugins
+    from .tools.tokens import count_messages_tokens
+    from .session import list_sessions
     from .tools.plugin_mgr import _plugins
     from .tools.tokens import count_messages_tokens
     from .session import list_sessions
@@ -350,11 +371,11 @@ def _cmd_status(r: CmdResult, msgs, _args, sid) -> None:
         f"  💬 会话    {session_count} 个{'（当前第 ' + str(current_idx) + '）' if current_idx else ''}",
         "",
         "── 当前会话 ──",
-        f"  消息数:    {msg_count} 条",
-        f"  Token 占:  {used_tokens:,} / {MAX_CONTEXT_TOKENS:,}（{usage_pct:.1f}%）",
-        "",
-        "── 配置 ──",
-        f"  模型:           {DEEPSEEK_MODEL}",
+        f"  当前模型:     {get_current_model_name()}（{get_current_model_id()}）",
+        f"  工具循环阈值:   {TOOL_LOOP_THRESHOLD:.0%}",
+        f"  工具结果预算:   {TOOL_RESULT_BUDGET:.0%}",
+        f"  Token/字符:     {TOKEN_PER_CHAR}",
+        f"  最大重试:       {MAX_RETRIES} 次",
         f"  工具循环阈值:   {TOOL_LOOP_THRESHOLD:.0%}",
         f"  工具结果预算:   {TOOL_RESULT_BUDGET:.0%}",
         f"  Token/字符:     {TOKEN_PER_CHAR}",

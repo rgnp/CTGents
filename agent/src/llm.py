@@ -1,42 +1,344 @@
+"""LLM 后端抽象：多模型支持、自动路由、流式调用。"""
+
 import json
 import logging
 import time
+from abc import ABC, abstractmethod
 from collections.abc import Callable
+from dataclasses import dataclass, field
 from types import SimpleNamespace
 
-from openai import APITimeoutError, RateLimitError, APIConnectionError, InternalServerError
+from openai import APITimeoutError, RateLimitError, APIConnectionError, InternalServerError, OpenAI
 
-from .config import get_llm_client, DEEPSEEK_MODEL, MAX_CONTEXT_TOKENS, TOOL_LOOP_THRESHOLD, MAX_RETRIES, RETRY_BASE_DELAY
+from .config import (
+    DEEPSEEK_API_KEY, DEEPSEEK_BASE_URL,
+    MAX_CONTEXT_TOKENS, TOOL_LOOP_THRESHOLD,
+    MAX_RETRIES, RETRY_BASE_DELAY,
+    MODEL_FLASH, MODEL_PRO,
+    FLASH_MAX_TOKENS, PRO_MAX_TOKENS,
+)
 from .tools import execute_tool, truncate_to_budget, get_tools
 from .tools.tokens import count_messages_tokens
 
 logger = logging.getLogger(__name__)
-client = get_llm_client()
 
-RETRYABLE = (
-    APITimeoutError, RateLimitError, APIConnectionError, InternalServerError,
-    OSError,  # ConnectionResetError, ConnectionAbortedError 等 TCP 层错误
-)
 TokenCallback = Callable[[str], None]
 ToolCallback = Callable[[str, dict], None]
 
+RETRYABLE = (
+    APITimeoutError, RateLimitError, APIConnectionError, InternalServerError,
+    OSError,
+)
 
-def _stream_llm(
-    messages: list[dict], on_token: TokenCallback
+
+# ═══════════════════════════════════════════════════════════════
+# 后端抽象
+# ═══════════════════════════════════════════════════════════════
+
+
+@dataclass
+class ModelInfo:
+    """模型元信息。"""
+    id: str                    # 模型 ID，如 deepseek-v4-flash
+    name: str                  # 显示名称，如 "Flash"
+    provider: str = "deepseek" # 提供商
+    supports_tools: bool = True   # 是否支持 function calling
+    supports_stream: bool = True  # 是否支持流式
+    supports_thinking: bool = False # 是否有思考过程
+    max_tokens: int = 8192     # 最大输出 token
+
+
+class LLMBackend(ABC):
+    """LLM 后端抽象基类。所有模型后端都实现这个接口。"""
+
+    def __init__(self, model_info: ModelInfo):
+        self.info = model_info
+
+    @abstractmethod
+    def chat_stream(
+        self,
+        messages: list[dict],
+        on_token: TokenCallback,
+        tools: list[dict] | None = None,
+    ) -> tuple[str | None, list[dict] | None]:
+        """流式调用。返回 (content, tool_calls)。"""
+        ...
+
+    @abstractmethod
+    def chat_non_stream(
+        self,
+        messages: list[dict],
+        on_token: TokenCallback,
+        tools: list[dict] | None = None,
+    ) -> tuple[str | None, list[dict] | None]:
+        """非流式调用。返回 (content, tool_calls)。"""
+        ...
+
+    def get_model_info(self) -> ModelInfo:
+        return self.info
+
+
+# ═══════════════════════════════════════════════════════════════
+# DeepSeek 后端（兼容 OpenAI 协议）
+# ═══════════════════════════════════════════════════════════════
+
+
+class DeepSeekBackend(LLMBackend):
+    """DeepSeek 模型后端。API 兼容 OpenAI 协议。"""
+
+    def __init__(self, model_info: ModelInfo):
+        super().__init__(model_info)
+        self._client: OpenAI | None = None
+
+    @property
+    def client(self) -> OpenAI:
+        if self._client is None:
+            self._client = OpenAI(
+                api_key=DEEPSEEK_API_KEY,
+                base_url=DEEPSEEK_BASE_URL,
+            )
+        return self._client
+
+    def chat_stream(
+        self,
+        messages: list[dict],
+        on_token: TokenCallback,
+        tools: list[dict] | None = None,
+    ) -> tuple[str | None, list[dict] | None]:
+        content_parts: list[str] = []
+        tool_calls: list[dict] = []
+
+        kwargs = {
+            "model": self.info.id,
+            "messages": messages,
+            "stream": True,
+        }
+        if tools and self.info.supports_tools:
+            kwargs["tools"] = tools
+
+        stream = self.client.chat.completions.create(**kwargs)
+
+        for chunk in stream:
+            delta = chunk.choices[0].delta
+
+            if delta.content:
+                on_token(delta.content)
+                content_parts.append(delta.content)
+
+            if delta.tool_calls:
+                for tc_delta in delta.tool_calls:
+                    idx = tc_delta.index
+                    while len(tool_calls) <= idx:
+                        tool_calls.append({
+                            "id": "",
+                            "type": "function",
+                            "function": {"name": "", "arguments": ""},
+                        })
+                    tc = tool_calls[idx]
+                    if tc_delta.id:
+                        tc["id"] = tc_delta.id
+                    if tc_delta.function:
+                        if tc_delta.function.name:
+                            tc["function"]["name"] += tc_delta.function.name
+                        if tc_delta.function.arguments:
+                            tc["function"]["arguments"] += tc_delta.function.arguments
+
+        content = "".join(content_parts) if content_parts else None
+        return content, (tool_calls if tool_calls else None)
+
+    def chat_non_stream(
+        self,
+        messages: list[dict],
+        on_token: TokenCallback,
+        tools: list[dict] | None = None,
+    ) -> tuple[str | None, list[dict] | None]:
+        kwargs = {
+            "model": self.info.id,
+            "messages": messages,
+        }
+        if tools and self.info.supports_tools:
+            kwargs["tools"] = tools
+
+        response = self.client.chat.completions.create(**kwargs)
+        msg = response.choices[0].message
+
+        tool_calls: list[dict] | None = None
+        if msg.tool_calls:
+            tool_calls = [
+                {
+                    "id": tc.id,
+                    "type": tc.type,
+                    "function": {
+                        "name": tc.function.name,
+                        "arguments": tc.function.arguments,
+                    },
+                }
+                for tc in msg.tool_calls
+            ]
+
+        if msg.content:
+            on_token(msg.content)
+
+        return msg.content, tool_calls
+
+
+# ═══════════════════════════════════════════════════════════════
+# 模型注册表
+# ═══════════════════════════════════════════════════════════════
+
+# 所有可用模型
+AVAILABLE_MODELS: dict[str, LLMBackend] = {
+    "flash": DeepSeekBackend(ModelInfo(
+        id=MODEL_FLASH,
+        name="Flash",
+        provider="deepseek",
+        supports_tools=True,
+        supports_stream=True,
+        supports_thinking=False,
+        max_tokens=FLASH_MAX_TOKENS,
+    )),
+    "pro": DeepSeekBackend(ModelInfo(
+        id=MODEL_PRO,
+        name="Pro",
+        provider="deepseek",
+        supports_tools=True,   # deepseek-v4-pro 也支持 function calling
+        supports_stream=True,
+        supports_thinking=False,
+        max_tokens=PRO_MAX_TOKENS,
+    )),
+}
+
+# 当前选中的模型（默认 Flash）
+_current_backend: LLMBackend = AVAILABLE_MODELS["flash"]
+
+
+def get_current_backend() -> LLMBackend:
+    return _current_backend
+
+
+def get_current_model_name() -> str:
+    """返回当前模型的显示名称。"""
+    return _current_backend.info.name
+
+
+def get_current_model_id() -> str:
+    """返回当前模型的 API ID。"""
+    return _current_backend.info.id
+
+
+def switch_model(name: str) -> tuple[bool, str]:
+    """切换当前模型。name 可以是 'flash'、'pro' 或完整模型 ID。"""
+    # 先按短名称查找
+    if name in AVAILABLE_MODELS:
+        global _current_backend
+        _current_backend = AVAILABLE_MODELS[name]
+        info = _current_backend.info
+        return True, f"已切换到 {info.name}（{info.id}）"
+
+    # 按完整模型 ID 查找
+    for key, backend in AVAILABLE_MODELS.items():
+        if backend.info.id == name:
+            global _current_backend2
+            _current_backend = backend
+            info = backend.info
+            return True, f"已切换到 {info.name}（{info.id}）"
+
+    available = ", ".join(f"{k}={v.info.id}" for k, v in AVAILABLE_MODELS.items())
+    return False, f"未知模型: {name}。可用: {available}"
+
+
+def list_models() -> str:
+    """列出所有可用模型。"""
+    lines = ["可用模型：\n"]
+    for key, backend in AVAILABLE_MODELS.items():
+        info = backend.info
+        current = "← 当前" if backend is _current_backend else ""
+        lines.append(
+            f"  {key:<8} {info.id:<24} {current}"
+        )
+        lines.append(f"          工具调用: {'✅' if info.supports_tools else '❌'}  "
+                      f"流式: {'✅' if info.supports_stream else '❌'}  "
+                      f"最大输出: {info.max_tokens}")
+        lines.append("")
+    return "\n".join(lines)
+
+
+# ═══════════════════════════════════════════════════════════════
+# 任务路由
+# ═══════════════════════════════════════════════════════════════
+
+# 简单任务关键词（用 Flash 处理）
+_SIMPLE_TASK_KEYWORDS = [
+    "查看", "读取", "搜索", "查找", "列出", "显示", "统计",
+    "状态", "日志", "分支", "date", "time", "谁", "什么",
+    "read", "show", "list", "status", "log", "find", "search",
+    "git_status", "git_log", "git_branch", "list_files", "read_file",
+    "scan_project", "git_diff",
+]
+
+# 复杂任务关键词（用 Pro 处理）
+_COMPLEX_TASK_KEYWORDS = [
+    "写", "创建", "修改", "重构", "优化", "调试", "设计",
+    "实现", "修复", "重构", "部署", "架构", "分析",
+    "write", "create", "implement", "refactor", "optimize",
+    "debug", "fix", "design", "deploy", "重构", "架构",
+    "git_commit", "git_push",
+]
+
+
+def _estimate_task_complexity(user_input: str) -> str:
+    """根据用户输入预估任务复杂度，返回 'flash' 或 'pro'。"""
+    text = user_input.lower()
+
+    # 如果涉及写代码/修改/重构，用 Pro
+    for kw in _COMPLEX_TASK_KEYWORDS:
+        if kw.lower() in text:
+            return "pro"
+
+    # 如果只是查看/读取，用 Flash
+    for kw in _SIMPLE_TASK_KEYWORDS:
+        if kw.lower() in text:
+            return "flash"
+
+    # 如果包含代码块或较长文本，用 Pro
+    if "```" in text or len(user_input) > 200:
+        return "pro"
+
+    # 默认用 Flash（省钱）
+    return "flash"
+
+
+def auto_select_model(user_input: str) -> LLMBackend:
+    """根据用户输入自动选择最合适的模型。"""
+    model_key = _estimate_task_complexity(user_input)
+    selected = AVAILABLE_MODELS.get(model_key, _current_backend)
+    return selected
+
+
+# ═══════════════════════════════════════════════════════════════
+# 对话循环（核心）
+# ═══════════════════════════════════════════════════════════════
+
+
+def _invoke_llm(
+    backend: LLMBackend,
+    messages: list[dict],
+    on_token: TokenCallback,
 ) -> tuple[str | None, list[dict] | None]:
-    """流式调用 LLM，通过 on_token 回调输出 token。
-    返回 (content, tool_calls_dict_list)。"""
+    """调用 LLM，带重试机制。首次流式，失败后降级为非流式重试。"""
+    tools = get_tools() if backend.info.supports_tools else None
 
     for attempt in range(1, MAX_RETRIES + 1):
         try:
             if attempt == 1:
-                return _do_stream(messages, on_token)
+                return backend.chat_stream(messages, on_token, tools)
             else:
-                return _do_non_stream(messages, on_token)
+                logger.warning("流式失败，降级为非流式重试 (%d/%d)...", attempt, MAX_RETRIES)
+                return backend.chat_non_stream(messages, on_token, tools)
         except RETRYABLE as e:
             if attempt < MAX_RETRIES:
                 delay = RETRY_BASE_DELAY * (2 ** (attempt - 1))
-                logger.warning("网络波动，正在重试 (%d/%d)...", attempt, MAX_RETRIES)
+                logger.warning("网络波动 (%s)，重试中 (%d/%d)...", e, attempt, MAX_RETRIES)
                 time.sleep(delay)
             else:
                 raise
@@ -46,78 +348,6 @@ def _stream_llm(
     raise RuntimeError("unreachable")
 
 
-def _do_stream(
-    messages: list[dict], on_token: TokenCallback
-) -> tuple[str | None, list[dict] | None]:
-    content_parts: list[str] = []
-    tool_calls: list[dict] = []
-
-    stream = client.chat.completions.create(
-        model=DEEPSEEK_MODEL,
-        messages=messages,
-        tools=get_tools(),
-        stream=True,
-    )
-
-    for chunk in stream:
-        delta = chunk.choices[0].delta
-
-        if delta.content:
-            on_token(delta.content)
-            content_parts.append(delta.content)
-
-        if delta.tool_calls:
-            for tc_delta in delta.tool_calls:
-                idx = tc_delta.index
-                while len(tool_calls) <= idx:
-                    tool_calls.append({
-                        "id": "",
-                        "type": "function",
-                        "function": {"name": "", "arguments": ""},
-                    })
-                tc = tool_calls[idx]
-                if tc_delta.id:
-                    tc["id"] = tc_delta.id
-                if tc_delta.function:
-                    if tc_delta.function.name:
-                        tc["function"]["name"] += tc_delta.function.name
-                    if tc_delta.function.arguments:
-                        tc["function"]["arguments"] += tc_delta.function.arguments
-
-    content = "".join(content_parts) if content_parts else None
-    return content, (tool_calls if tool_calls else None)
-
-
-def _do_non_stream(
-    messages: list[dict], on_token: TokenCallback
-) -> tuple[str | None, list[dict] | None]:
-    response = client.chat.completions.create(
-        model=DEEPSEEK_MODEL,
-        messages=messages,
-        tools=get_tools(),
-    )
-    msg = response.choices[0].message
-
-    tool_calls: list[dict] | None = None
-    if msg.tool_calls:
-        tool_calls = [
-            {
-                "id": tc.id,
-                "type": tc.type,
-                "function": {
-                    "name": tc.function.name,
-                    "arguments": tc.function.arguments,
-                },
-            }
-            for tc in msg.tool_calls
-        ]
-
-    if msg.content:
-        on_token(msg.content)
-
-    return msg.content, tool_calls
-
-
 def run_conversation(
     messages: list[dict],
     user_input: str,
@@ -125,10 +355,19 @@ def run_conversation(
     on_tool: ToolCallback,
     on_progress: Callable[[], None] | None = None,
 ) -> str:
-    """处理一轮对话：每轮工具调用后增量提交到 messages 并回调 on_progress。"""
+    """处理一轮对话：自动路由 + 工具调用循环。"""
     copy: list[dict] = list(messages)
     copy.append({"role": "user", "content": user_input})
-    messages[:] = copy  # 用户消息立即提交
+    messages[:] = copy
+
+    # 自动选择模型
+    backend = auto_select_model(user_input)
+    model_name = backend.info.name
+    logger.info("路由: '%s...' → %s", user_input[:30], model_name)
+
+    # 如果选的不是当前模型，通知用户
+    if backend is not _current_backend:
+        on_token(f"\n[🤖 使用 {model_name} 处理此任务]\n\n")
 
     while True:
         used = count_messages_tokens(copy)
@@ -139,7 +378,7 @@ def run_conversation(
                 "请开启新会话或精简问题。"
             )
 
-        content, tool_calls = _stream_llm(copy, on_token)
+        content, tool_calls = _invoke_llm(backend, copy, on_token)
 
         if tool_calls:
             copy.append({
@@ -163,7 +402,7 @@ def run_conversation(
                     "tool_call_id": tc_data["id"],
                     "content": result,
                 })
-            messages[:] = copy  # 每轮工具调用后增量提交
+            messages[:] = copy
             if on_progress:
                 on_progress()
         else:
