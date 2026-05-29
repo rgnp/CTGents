@@ -118,21 +118,6 @@ def _do_non_stream(
     return msg.content, tool_calls
 
 
-def _handle_skill_tool(messages: list[dict], tool_name: str, args: dict) -> None:
-    """skill_auto_load / skill_auto_unload 自动注入/移除 system message。"""
-    if tool_name == "skill_auto_load":
-        from .skill_ctx import get_skill_content, get_skill_name, activate_skill
-        name = args.get("skill_name", "")
-        content = get_skill_content(name)
-        if content:
-            activate_skill(messages, get_skill_name(name) or name, content)
-    elif tool_name in ("skill_auto_unload", "skill_unload"):
-        from .skill_ctx import deactivate_skill
-        name = args.get("skill_name", "")
-        if name:
-            deactivate_skill(messages, name)
-
-
 def run_conversation(
     messages: list[dict],
     user_input: str,
@@ -178,9 +163,6 @@ def run_conversation(
                     "tool_call_id": tc_data["id"],
                     "content": result,
                 })
-
-                # Skill 加载/卸载 → 同步注入/移除 system message
-                _handle_skill_tool(copy, tc_data["function"]["name"], args)
             messages[:] = copy  # 每轮工具调用后增量提交
             if on_progress:
                 on_progress()

@@ -80,12 +80,6 @@ def _make_project_context() -> dict | None:
         return None
 
 
-def _make_skill_context() -> dict | None:
-    """生成 Skill 发现层上下文（仅 name + description）。"""
-    from .skill_ctx import make_discovery_context
-    return make_discovery_context()
-
-
 
 
 
@@ -240,14 +234,10 @@ def main() -> None:
     mem_ctx = _make_memory_context()
     # 注入项目结构感知
     proj_ctx = _make_project_context()
-    # 注入 Skill 发现层
-    skill_ctx = _make_skill_context()
     if proj_ctx:
         messages.insert(2, proj_ctx)
     if mem_ctx:
         messages.insert(1, mem_ctx)
-    if skill_ctx:
-        messages.insert(3, skill_ctx)
 
     print("Agent 已启动，输入 /help 查看指令列表\n")
 
@@ -311,7 +301,7 @@ def main() -> None:
                     messages.clear()
                     if r.save:   # /new: 同时重置 session
                         session_id = None
-                    # 重新注入环境上下文、记忆索引、项目感知、Skill 发现
+                    # 重新注入环境上下文、记忆索引、项目感知
                     messages.insert(0, _make_env_message())
                     mem_ctx = _make_memory_context()
                     if mem_ctx:
@@ -319,9 +309,6 @@ def main() -> None:
                     proj_ctx = _make_project_context()
                     if proj_ctx:
                         messages.insert(2, proj_ctx)
-                    skill_ctx = _make_skill_context()
-                    if skill_ctx:
-                        messages.insert(3, skill_ctx)
                 if r.exit:
                     break
                 if r.retry:

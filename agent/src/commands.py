@@ -322,75 +322,51 @@ def _call_skill_tool(name: str, args: dict | None = None) -> str:
     return execute_tool(tc)
 
 
-@builtin_multi(["/skill", "/skills"], description="Skill 管理：列出/加载/卸载/查看", usage="/skill <子命令> [参数]")
-def _cmd_skill(r: CmdResult, msgs, args, _sid) -> None:
-    from .skill_ctx import (
-        scan_skills, make_discovery_context, get_skill_content,
-        get_skill_name, activate_skill, deactivate_skill, list_active_skills,
-    )
-
+@builtin_multi(["/skill", "/skills"], description="Skill 管理：列出/查看/加载等", usage="/skill <子命令> [参数]")
+def _cmd_skill(r: CmdResult, _msgs, args, _sid) -> None:
     if not args:
-        ctx = make_discovery_context()
-        r.message = ctx["content"] if ctx else "没有可用的 Skill。"
+        result = _call_skill_tool("skill_auto_discover")
+        r.message = result
         return
 
     sub = args[0]
     rest = args[1:]
 
     if sub in ("list", "ls"):
-        ctx = make_discovery_context()
-        r.message = ctx["content"] if ctx else "没有可用的 Skill。"
+        result = _call_skill_tool("skill_auto_discover")
+        r.message = result
 
     elif sub in ("show", "view", "info"):
         if not rest:
             r.message = "用法: /skill show <名称>"
             return
-        content = get_skill_content(" ".join(rest))
-        if content:
-            r.message = content
-        else:
-            r.message = f"未找到 Skill: {' '.join(rest)}"
+        result = _call_skill_tool("skill_show", {"skill_path": " ".join(rest)})
+        r.message = result
 
     elif sub in ("load", "use", "activate"):
         if not rest:
             r.message = "用法: /skill load <名称>"
             return
-        name = " ".join(rest)
-        content = get_skill_content(name)
-        if not content:
-            r.message = f"未找到 Skill: {name}"
-            return
-        r.message = activate_skill(msgs, get_skill_name(name) or name, content)
-        r.save = True
-
-    elif sub in ("unload", "off", "deactivate"):
-        if not rest:
-            r.message = "用法: /skill unload <名称>"
-            return
-        r.message = deactivate_skill(msgs, " ".join(rest))
-        r.save = True
+        result = _call_skill_tool("skill_auto_load", {"skill_name": " ".join(rest)})
+        r.message = result
 
     elif sub in ("context", "active", "current"):
-        active = list_active_skills(msgs)
-        r.message = f"当前激活: {', '.join(active)}" if active else "当前没有激活的 Skill。"
+        result = _call_skill_tool("skill_auto_context")
+        r.message = result
 
     elif sub in ("reload", "refresh", "rescan"):
-        import sys
-        sys.modules.pop("src.skill_ctx", None)
-        from .skill_ctx import scan_skills as rescan
-        skills = rescan()
-        r.message = f"已重新扫描，共 {len(skills)} 个 Skill。"
+        result = _call_skill_tool("skill_auto_reload")
+        r.message = result
 
     elif sub in ("create", "new"):
-        if len(rest) < 1:
+        if len(rest) < 2:
             r.message = "用法: /skill create <名称> <描述>"
             return
         name = rest[0]
-        desc = " ".join(rest[1:]) if len(rest) > 1 else ""
+        desc = " ".join(rest[1:])
         r.message = (
-            f"创建 Skill 请使用 skill_create 工具。
-"
-            f"示例: skill_create name=\"{name}\" description=\"{desc}\" instructions=\"...\""
+            f"创建 Skill 请使用工具接口更完善。\n"
+            f"试试: skill_create name=\"{name}\" description=\"{desc}\" instructions=\"...\""
         )
 
     elif sub in ("validate", "check"):
@@ -402,9 +378,8 @@ def _cmd_skill(r: CmdResult, msgs, args, _sid) -> None:
 
     else:
         r.message = (
-            f"未知子命令: {sub}
-"
-            f"可用子命令：list、show、load、unload、context、reload、create、validate"
+            f"未知子命令: {sub}\n"
+            f"可用子命令：list、show、load、context、reload、create、validate"
         )
 
 
