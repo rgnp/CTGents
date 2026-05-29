@@ -424,7 +424,9 @@ def main() -> None:
                 logger.error("对话出错: %s", e)
                 print(f"\n  请求失败: {e}\n")
     finally:
-        if messages:
+        # 只有存在至少一条 assistant 回复时才保存（避免网络错误等空会话落盘）
+        has_response = any(m["role"] == "assistant" for m in messages)
+        if has_response:
             session_id = save_session(messages, session_id)
             print(f"会话已保存: [{session_id}]")
         print("退出")
