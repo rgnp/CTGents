@@ -138,10 +138,6 @@ TOOL_LABELS: dict[str, str] = {
     "install_plugin": "安装插件",
     "list_plugins":  "列出插件",
     "discover":      "能力扫描",
-    "skill_list":    "Skill列表",
-    "skill_show":    "Skill查看",
-    "skill_load":    "Skill加载",
-    "skill_create":  "Skill创建",
 }
 
 

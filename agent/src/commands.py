@@ -308,86 +308,10 @@ def _cmd_reload(r: CmdResult, _msgs, _args, _sid) -> None:
 
 
 # ═══════════════════════════════════════════════════════════════
-# Skill 指令
-# ═══════════════════════════════════════════════════════════════
-
-def _call_skill_tool(name: str, args: dict | None = None) -> str:
-    """通过 execute_tool 调用 skill 插件工具。"""
-    tc = SimpleNamespace(
-        function=SimpleNamespace(
-            name=name,
-            arguments=json.dumps(args or {}, ensure_ascii=False)
-        )
-    )
-    return execute_tool(tc)
-
-
-@builtin_multi(["/skill", "/skills"], description="Skill 管理：列出/查看/加载等", usage="/skill <子命令> [参数]")
-def _cmd_skill(r: CmdResult, _msgs, args, _sid) -> None:
-    if not args:
-        result = _call_skill_tool("skill_auto_discover")
-        r.message = result
-        return
-
-    sub = args[0]
-    rest = args[1:]
-
-    if sub in ("list", "ls"):
-        result = _call_skill_tool("skill_auto_discover")
-        r.message = result
-
-    elif sub in ("show", "view", "info"):
-        if not rest:
-            r.message = "用法: /skill show <名称>"
-            return
-        result = _call_skill_tool("skill_show", {"skill_path": " ".join(rest)})
-        r.message = result
-
-    elif sub in ("load", "use", "activate"):
-        if not rest:
-            r.message = "用法: /skill load <名称>"
-            return
-        result = _call_skill_tool("skill_auto_load", {"skill_name": " ".join(rest)})
-        r.message = result
-
-    elif sub in ("context", "active", "current"):
-        result = _call_skill_tool("skill_auto_context")
-        r.message = result
-
-    elif sub in ("reload", "refresh", "rescan"):
-        result = _call_skill_tool("skill_auto_reload")
-        r.message = result
-
-    elif sub in ("create", "new"):
-        if len(rest) < 2:
-            r.message = "用法: /skill create <名称> <描述>"
-            return
-        name = rest[0]
-        desc = " ".join(rest[1:])
-        r.message = (
-            f"创建 Skill 请使用工具接口更完善。\n"
-            f"试试: skill_create name=\"{name}\" description=\"{desc}\" instructions=\"...\""
-        )
-
-    elif sub in ("validate", "check"):
-        if not rest:
-            r.message = "用法: /skill validate <路径>"
-            return
-        result = _call_skill_tool("skill_validate", {"filepath": " ".join(rest)})
-        r.message = result
-
-    else:
-        r.message = (
-            f"未知子命令: {sub}\n"
-            f"可用子命令：list、show、load、context、reload、create、validate"
-        )
-
-
-# ═══════════════════════════════════════════════════════════════
 # 状态指令
 # ═══════════════════════════════════════════════════════════════
 
-@builtin("/status", description="系统状态概览：插件、Skill、会话、配置一览")
+@builtin("/status", description="系统状态概览：插件、会话、配置一览")
 def _cmd_status(r: CmdResult, msgs, _args, sid) -> None:
     from .config import (
         MAX_CONTEXT_TOKENS, TOOL_RESULT_BUDGET, TOKEN_PER_CHAR,
@@ -401,11 +325,6 @@ def _cmd_status(r: CmdResult, msgs, _args, sid) -> None:
     # ── 插件 ──
     plugin_count = len(_plugins)
     tool_count = sum(len(getattr(mod, "TOOLS", [])) for mod in _plugins.values())
-
-    # ── Skill ──
-    skills_dir = Path("skills")
-    skill_dirs = [d for d in skills_dir.iterdir() if d.is_dir() and (d / "SKILL.md").is_file()] if skills_dir.is_dir() else []
-    skill_count = len(skill_dirs)
 
     # ── 会话 ──
     sessions = list_sessions()
@@ -428,7 +347,6 @@ def _cmd_status(r: CmdResult, msgs, _args, sid) -> None:
         "╚══════════════════════════════╝",
         "",
         f"  📦 插件    {plugin_count} 个 · {tool_count} 个工具",
-        f"  🧠 Skill   {skill_count} 个",
         f"  💬 会话    {session_count} 个{'（当前第 ' + str(current_idx) + '）' if current_idx else ''}",
         "",
         "── 当前会话 ──",

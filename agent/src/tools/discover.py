@@ -38,43 +38,6 @@ def discover_capabilities() -> str:
                 lines.append(f"    工具: {', '.join(tools)}")
         lines.append("")
 
-    # ── Skill ──
-    skills_dir = Path("skills")
-    if skills_dir.exists():
-        found = []
-        for item in sorted(skills_dir.iterdir()):
-            if not item.is_dir():
-                continue
-            skill_md = item / "SKILL.md"
-            if not skill_md.exists():
-                continue
-            try:
-                text = skill_md.read_text(encoding="utf-8")
-            except Exception:
-                continue
-            match = re.match(r"^---\s*\n(.*?)\n---", text, re.DOTALL)
-            name = item.name
-            desc = ""
-            if match:
-                for line in match.group(1).split("\n"):
-                    if line.startswith("name:"):
-                        name = line.split(":", 1)[1].strip()
-                    elif line.startswith("description:"):
-                        val = line.split(":", 1)[1].strip()
-                        if val not in (">", "|", ""):
-                            desc = val
-                if not desc:
-                    body_start = match.end() + 1
-                    body = text[body_start:].strip()
-                    desc = body[:100].replace("\n", " ") + ("..." if len(body) > 100 else "")
-            found.append((name, desc or "（无描述）"))
-
-        if found:
-            lines.append(f"可用 Skill ({len(found)} 个)，用 read_file 读全文：")
-            for name, desc in found:
-                lines.append(f"  {name} — {desc}")
-            lines.append("")
-
     return "\n".join(lines).strip() if lines else "未找到任何能力"
 
 

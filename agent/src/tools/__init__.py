@@ -27,7 +27,7 @@ _PLUGIN_MGR_TOOLS = [
         "function": {
             "name": "discover",
             "description": (
-                "扫描所有可用能力（内置工具、已安装插件、可用 Skill），返回全景摘要。"
+                "扫描所有可用能力（内置工具、已安装插件），返回全景摘要。"
                 "启动时或接到新任务时先调用此工具，了解自己有哪些能力可用。"
             ),
             "parameters": {"type": "object", "properties": {}, "required": []},
