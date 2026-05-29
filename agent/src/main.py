@@ -2,13 +2,49 @@ import logging
 import os
 import platform
 import sys
+import threading
+import time
 from collections.abc import Callable
 from datetime import datetime
 
 from .commands import CmdResult, dispatch as dispatch_cmd
 from .config import SESSION_DIR
-from .llm import run_conversation, TokenCallback, ToolCallback
-from .session import list_sessions, load_session, save_session
+from .llm import run_conversation, TokenCallback, ToolCallback, request_interrupt, clear_interrupt
+
+
+# ═══════════════════════════════════════════════════════════════
+# Esc 打断监听（Windows msvcrt 后台线程）
+# ═══════════════════════════════════════════════════════════════
+
+_esc_listener_active = False
+
+
+def _start_esc_listener() -> None:
+    """启动后台线程监听 Esc 键，用于中断流式回复。"""
+    global _esc_listener_active
+
+    import msvcrt  # Windows 专用
+
+    _esc_listener_active = True
+    clear_interrupt()
+
+    def _listen():
+        while _esc_listener_active:
+            if msvcrt.kbhit():
+                key = msvcrt.getch()
+                if key == b'\x1b':  # Esc 键
+                    request_interrupt()
+                    return
+            time.sleep(0.05)  # 50ms 轮询，不忙等
+
+    t = threading.Thread(target=_listen, daemon=True)
+    t.start()
+
+
+def _stop_esc_listener() -> None:
+    """停止 Esc 监听线程。"""
+    global _esc_listener_active
+    _esc_listener_active = False
 
 
 
@@ -253,14 +289,13 @@ def main() -> None:
 
         @kb.add("escape")
         def _(event):
-            """Esc 撤回最后一条对话。"""
-            while messages and messages[-1]["role"] != "user":
-                messages.pop()
-            if messages and messages[-1]["role"] == "user":
-                messages.pop()
-                save_session(messages, session_id)
-                print("\r已撤回 ── 输入新问题或回车重新发送", end="")
-            event.app.exit(result="")
+            """Esc 清空当前输入行，可重新输入。"""
+            buf = event.app.current_buffer
+            if buf.text:
+                buf.text = ""
+            else:
+                # 输入行为空时按 Esc 不做任何事（让 prompt 继续等待输入）
+                pass
 
     try:
         while True:
@@ -322,10 +357,14 @@ def main() -> None:
                     if last_user:
                         on_token, has_output = _make_display()
                         sid = [session_id]
-                        reply = run_conversation(
-                            messages, last_user, on_token, _on_tool,
-                            on_progress=lambda: sid.__setitem__(0, save_session(messages, sid[0])),
-                        )
+                        _start_esc_listener()
+                        try:
+                            reply = run_conversation(
+                                messages, last_user, on_token, _on_tool,
+                                on_progress=lambda: sid.__setitem__(0, save_session(messages, sid[0])),
+                            )
+                        finally:
+                            _stop_esc_listener()
                         session_id = sid[0]
                         if has_output():
                             print()
@@ -334,14 +373,19 @@ def main() -> None:
             try:
                 on_token, has_output = _make_display()
                 sid = [session_id]
-                reply = run_conversation(
-                    messages, user_input, on_token, _on_tool,
-                    on_progress=lambda: sid.__setitem__(0, save_session(messages, sid[0])),
-                )
+                _start_esc_listener()
+                try:
+                    reply = run_conversation(
+                        messages, user_input, on_token, _on_tool,
+                        on_progress=lambda: sid.__setitem__(0, save_session(messages, sid[0])),
+                    )
+                finally:
+                    _stop_esc_listener()
                 session_id = sid[0]
                 if has_output():
                     print()
             except KeyboardInterrupt:
+                _stop_esc_listener()
                 print("\n[中断]")
                 try:
                     guide = input("指导: ").strip()
@@ -350,10 +394,14 @@ def main() -> None:
                 if guide:
                     on_token, has_output = _make_display()
                     sid = [session_id]
-                    reply = run_conversation(
-                        messages, guide, on_token, _on_tool,
-                        on_progress=lambda: sid.__setitem__(0, save_session(messages, sid[0])),
-                    )
+                    _start_esc_listener()
+                    try:
+                        reply = run_conversation(
+                            messages, guide, on_token, _on_tool,
+                            on_progress=lambda: sid.__setitem__(0, save_session(messages, sid[0])),
+                        )
+                    finally:
+                        _stop_esc_listener()
                     session_id = sid[0]
                     if has_output():
                         print()

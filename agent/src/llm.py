@@ -2,10 +2,11 @@
 
 import json
 import logging
+import threading
 import time
 from abc import ABC, abstractmethod
 from collections.abc import Callable
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from types import SimpleNamespace
 
 from openai import APITimeoutError, RateLimitError, APIConnectionError, InternalServerError, OpenAI
@@ -29,6 +30,34 @@ RETRYABLE = (
     APITimeoutError, RateLimitError, APIConnectionError, InternalServerError,
     OSError,
 )
+
+
+# ═══════════════════════════════════════════════════════════════
+# 用户中断机制：监听 Esc → 设置标志 → 流式检查 → 中断
+# ═══════════════════════════════════════════════════════════════
+
+
+class UserInterrupt(Exception):
+    """用户主动中断（按 Esc 触发）。"""
+    pass
+
+
+_interrupt_event = threading.Event()
+
+
+def request_interrupt() -> None:
+    """请求中断当前流式回复。"""
+    _interrupt_event.set()
+
+
+def clear_interrupt() -> None:
+    """清除中断标志（每次对话前调用）。"""
+    _interrupt_event.clear()
+
+
+def is_interrupt_requested() -> bool:
+    """检查是否收到中断请求。"""
+    return _interrupt_event.is_set()
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -119,33 +148,43 @@ class DeepSeekBackend(LLMBackend):
 
         stream = self.client.chat.completions.create(**kwargs)
 
-        for chunk in stream:
-            delta = chunk.choices[0].delta
+        try:
+            for chunk in stream:
+                # 每次收到 chunk 都检查是否被 Esc 中断
+                if is_interrupt_requested():
+                    stream.close()
+                    clear_interrupt()
+                    raise UserInterrupt("用户按 Esc 中断")
 
-            if delta.content:
-                on_token(delta.content)
-                content_parts.append(delta.content)
+                delta = chunk.choices[0].delta
 
-            if delta.tool_calls:
-                for tc_delta in delta.tool_calls:
-                    idx = tc_delta.index
-                    while len(tool_calls) <= idx:
-                        tool_calls.append({
-                            "id": "",
-                            "type": "function",
-                            "function": {"name": "", "arguments": ""},
-                        })
-                    tc = tool_calls[idx]
-                    if tc_delta.id:
-                        tc["id"] = tc_delta.id
-                    if tc_delta.function:
-                        if tc_delta.function.name:
-                            tc["function"]["name"] += tc_delta.function.name
-                        if tc_delta.function.arguments:
-                            tc["function"]["arguments"] += tc_delta.function.arguments
+                if delta.content:
+                    on_token(delta.content)
+                    content_parts.append(delta.content)
 
-        content = "".join(content_parts) if content_parts else None
-        return content, (tool_calls if tool_calls else None)
+                if delta.tool_calls:
+                    for tc_delta in delta.tool_calls:
+                        idx = tc_delta.index
+                        while len(tool_calls) <= idx:
+                            tool_calls.append({
+                                "id": "",
+                                "type": "function",
+                                "function": {"name": "", "arguments": ""},
+                            })
+                        tc = tool_calls[idx]
+                        if tc_delta.id:
+                            tc["id"] = tc_delta.id
+                        if tc_delta.function:
+                            if tc_delta.function.name:
+                                tc["function"]["name"] += tc_delta.function.name
+                            if tc_delta.function.arguments:
+                                tc["function"]["arguments"] += tc_delta.function.arguments
+        except UserInterrupt:
+            # 中断时返回已经收到的内容（不重复 clear_interrupt，已在前面清过）
+            content = "".join(content_parts) if content_parts else None
+            if content:
+                on_token("\n\n[⚠️ 已中断 — 以上是已收到的部分回复]\n")
+            return content, None  # 中断时丢弃 tool_calls，返回 None 避免错误执行
 
     def chat_non_stream(
         self,
@@ -380,7 +419,11 @@ def run_conversation(
                 "请开启新会话或精简问题。"
             )
 
-        content, tool_calls = _invoke_llm(backend, copy, on_token)
+        try:
+            content, tool_calls = _invoke_llm(backend, copy, on_token)
+        except UserInterrupt:
+            clear_interrupt()
+            return "\n\n[⏹️ 已中断]"
 
         if tool_calls:
             copy.append({
