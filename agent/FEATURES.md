@@ -1,5 +1,12 @@
 # 功能列表
 
+
+## 2026-05-29（v0.3）
+- [x] Git 操作工具集：git_status / git_diff / git_commit / git_push / git_pr / git_log / git_branch
+- [x] 自动生成 commit message（分析变更类型和文件，智能推断 prefix 和 scope）
+- [x] 项目结构感知：scan_project 工具（技术栈检测 + 文件树 + 依赖概览）
+- [x] 启动时自动注入项目结构上下文到 system prompt
+- [x] 识别 20+ 种编程语言和框架（Python/JS/Rust/Go/Java/C++ 等）
 ## 2026-05-29
 - [x] 环境认知：系统消息注入工作目录、当前日期时间、操作系统，保存时自动过滤
 - [x] /skill 命令：list/show/load/context/reload/create/validate 子命令

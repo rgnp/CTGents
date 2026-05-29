@@ -10,6 +10,19 @@ from .config import SESSION_DIR
 from .llm import run_conversation, TokenCallback, ToolCallback
 from .session import list_sessions, load_session, save_session
 
+
+
+def _make_project_context() -> dict | None:
+    """生成项目结构感知上下文，标记 _volatile 以在保存时自动过滤。"""
+    from .tools.project import get_project_context
+    context = get_project_context()
+    if not context:
+        return None
+    return {
+        "role": "system",
+        "content": context,
+        "_volatile": True,
+    }
 logger = logging.getLogger(__name__)
 
 
@@ -119,25 +132,37 @@ def _make_display() -> tuple[TokenCallback, Callable[[], bool]]:
 
 
 TOOL_LABELS: dict[str, str] = {
-    "search_web":   "搜索",
-    "read_page":    "阅读网页",
-    "read_file":    "读取文件",
+    "search_web":    "搜索",
+    "read_page":     "阅读网页",
+    "read_file":     "读取文件",
     "read_file_lines": "读取文件（带行号）",
-    "write_file":   "写入文件",
+    "write_file":    "写入文件",
     "edit_file_lines": "行级编辑",
-    "undo_edit":    "撤销编辑",
-    "list_files":   "浏览目录",
-    "delete_file":  "删除文件",
-    "run_python":   "执行代码",
-    "run_command":  "执行命令",
-    "grep_code":    "搜索代码",
-    "think":        "思考",
-    "remember":     "记住",
-    "recall":       "回忆",
-    "forget":       "忘记",
+    "undo_edit":     "撤销编辑",
+    "list_files":    "浏览目录",
+    "delete_file":   "删除文件",
+    "count_lines":   "统计行数",
+    "run_python":    "执行代码",
+    "run_command":   "执行命令",
+    "grep_code":     "搜索代码",
+    "think":         "思考",
+    "remember":      "记住",
+    "recall":        "回忆",
+    "forget":        "忘记",
     "install_plugin": "安装插件",
-    "list_plugins":  "列出插件",
-    "discover":      "能力扫描",
+    "list_plugins":   "列出插件",
+    "discover":       "能力扫描",
+    "plugin_spec":    "插件规范",
+    # Git 工具
+    "git_status":    "Git 状态",
+    "git_diff":      "Git 差异",
+    "git_log":       "Git 日志",
+    "git_commit":    "Git 提交",
+    "git_push":      "Git 推送",
+    "git_pr":        "Git PR",
+    "git_branch":    "Git 分支",
+    # 项目感知
+    "scan_project":  "扫描项目",
 }
 
 
@@ -205,10 +230,17 @@ def main() -> None:
     # 注入环境上下文（每次启动刷新，不持久化到磁盘）
     messages.insert(0, _make_env_message())
 
+    # 注入项目结构感知上下文
+    proj_ctx = _make_project_context()
+    if proj_ctx:
+        messages.insert(1, proj_ctx)
+
     # 注入已有记忆索引
     mem_ctx = _make_memory_context()
     if mem_ctx:
-        messages.insert(1, mem_ctx)
+        # 排在环境上下文和项目上下文之后
+        insert_pos = 2 if proj_ctx else 1
+        messages.insert(insert_pos, mem_ctx)
 
     print("Agent 已启动，输入 /help 查看指令列表\n")
 
@@ -272,11 +304,15 @@ def main() -> None:
                     messages.clear()
                     if r.save:   # /new: 同时重置 session
                         session_id = None
-                    # 重新注入环境上下文和记忆索引
+                    # 重新注入环境上下文、项目感知和记忆索引
                     messages.insert(0, _make_env_message())
+                    proj_ctx = _make_project_context()
+                    if proj_ctx:
+                        messages.insert(1, proj_ctx)
                     mem_ctx = _make_memory_context()
                     if mem_ctx:
-                        messages.insert(1, mem_ctx)
+                        insert_pos = 2 if proj_ctx else 1
+                        messages.insert(insert_pos, mem_ctx)
                 if r.exit:
                     break
                 if r.retry:

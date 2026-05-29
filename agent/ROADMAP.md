@@ -26,12 +26,12 @@
 | ✅ 会话 | 保存/恢复/重命名/导出/列表 |
 | ✅ 指令系统 | 结构化注册、热加载、/help 自动聚合 |
 
-当前 Agent **缺乏**的关键能力：
+当前 Agent **缺乏**的关键能力（已补齐 ✅）：
 
-| 维度 | 缺失 |
+| 维度 | 能力 |
 |------|------|
-| ❌ Git 集成 | 无 git 工具 |
-| ❌ 项目感知 | 不自动分析项目结构、语言、依赖 |
+| ✅ ~~Git 集成~~ | ~~无 git 工具~~ → git_status/diff/log/commit/push/pr/branch |
+| ✅ ~~项目感知~~ | ~~不自动分析项目结构~~ → scan_project + 启动自动注入 |
 | ❌ 多模型 | 硬编码 DeepSeek，不支持按任务路由不同模型 |
 | ❌ Auto Mode | 所有工具调用都需要 LLM 判断，无安全等级机制 |
 | ❌ 长任务 | 无后台会话、无目标驱动持续执行 |
@@ -61,23 +61,26 @@
 
 **涉及文件：** `src/tools/file.py`
 
-### 1.3 Git 操作工具
+### ~~1.3 Git 操作工具~~ ✅
 
-- [ ] `git_status` — 查看工作区状态
-- [ ] `git_diff` — 查看未暂存/已暂存变更
-- [ ] `git_commit` — 自动生成 commit message 并提交
-- [ ] `git_push` — 推送
-- [ ] `git_pr` — 创建 Pull Request
-- [ ] `git_log` — 查看提交历史
+- [x] `git_status` — 查看工作区状态（分支/已暂存/未暂存/未跟踪/冲突）
+- [x] `git_diff` — 查看未暂存/已暂存变更（含统计信息）
+- [x] `git_commit` — 自动生成 commit message 并提交
+- [x] `git_push` — 推送（含安全检查，提示 pull 冲突）
+- [x] `git_pr` — 创建 Pull Request（支持 gh CLI 自动创建，无则给出操作指引）
+- [x] `git_log` — 查看提交历史（hash/日期/作者/信息）
+- [x] `git_branch` — 查看分支列表
 
 **涉及文件：** `src/tools/git.py`（新建）
 
-### 1.4 项目结构感知
+### ~~1.4 项目结构感知~~ ✅
 
-- [ ] 启动时自动扫描项目目录，生成项目结构树
-- [ ] 识别项目语言（检测 package.json / pyproject.toml / Cargo.toml 等）
-- [ ] 识别构建命令（npm test / pytest / cargo build 等）
-- [ ] 将项目上下文注入 system prompt
+- [x] `scan_project` 工具：扫描项目目录，生成结构树 + 技术栈分析
+- [x] 自动检测项目语言（Python/JS/Rust/Go/Java 等 20+ 种）
+- [x] 自动识别框架和构建命令（npm test/pytest/cargo build 等）
+- [x] 启动时自动注入项目上下文到 system prompt
+- [x] 依赖概览：自动读取 package.json / pyproject.toml 的依赖列表
+- [x] 文件树可视化：按深度展示目录结构，带文件大小
 
 **涉及文件：** `src/tools/project.py`（新建）、`src/main.py`
 
@@ -159,12 +162,10 @@
 
 ## 版本里程碑
 
-| 版本 | 目标 | 状态 |
-|------|------|------|
-| v0.1 | 通用对话 Agent（对话、搜索、文件读写、记忆） | ✅ 已完成 |
-| **v0.2** | **核心工具补齐（Shell 执行 + 文件行级编辑 + 热加载）** | **✅ 已完成** |
-| **v0.3** | **Git 操作 + 项目感知** | **等待开始** |
-| **v0.4** | 多模型路由 + Auto Mode | 中期 |
+| **v0.3** | **Git 操作 + 项目感知** | **✅ 已完成** |
+| **v0.4** | 多模型路由 + Auto Mode | 等待开始 |
+| **v0.5** | 目标驱动长任务 + 项目记忆 | 中期 |
+| **v1.0** | MCP 支持 + Skill 自动匹配 + IDE 集成 | 远期 |
 | **v0.5** | 目标驱动长任务 + 项目记忆 | 中期 |
 | **v1.0** | MCP 支持 + Skill 自动匹配 + IDE 集成 | 远期 |
 

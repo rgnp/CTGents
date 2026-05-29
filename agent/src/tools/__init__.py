@@ -12,12 +12,14 @@ from .plugin_mgr import get_plugin_tools, reload_plugins, get_plugin_spec
 # ── 内置模块清单（供热加载遍历）──
 # (模块路径, TOOLS_变量名, execute函数名)
 _BUILTIN_MODULES: list[tuple[str, str, str]] = [
-    (".web",       "TOOLS_WEB",   "execute"),
-    (".file",      "TOOLS_FILE",  "execute"),
-    (".exec",      "TOOLS_EXEC",  "execute"),
-    (".code",      "TOOLS_CODE",  "execute"),
-    (".think",     "TOOLS_THINK", "execute"),
-    (".memory",    "TOOLS_MEMORY","execute"),
+    (".web",       "TOOLS_WEB",    "execute"),
+    (".file",      "TOOLS_FILE",   "execute"),
+    (".exec",      "TOOLS_EXEC",   "execute"),
+    (".code",      "TOOLS_CODE",   "execute"),
+    (".think",     "TOOLS_THINK",  "execute"),
+    (".memory",    "TOOLS_MEMORY", "execute"),
+    (".git",       "TOOLS_GIT",    "execute"),
+    (".project",   "TOOLS_PROJECT","execute"),
 ]
 
 # discover + plugin_mgr 的工具直接定义在 __init__.py 的 _register_builtin 里
