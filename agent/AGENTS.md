@@ -41,17 +41,24 @@ agent/
 │   │   ├── code.py         #   代码搜索（grep_code）
 │   │   ├── git.py          #   Git 操作
 │   │   ├── project.py      #   项目扫描
-│   │   ├── lint.py         #   项目规范检查
-│   │   ├── web.py          #   网页搜索/阅读
-│   │   ├── memory.py       #   记忆系统
-│   │   ├── think.py        #   策略思考
-│   │   ├── discover.py     #   能力扫描
-│   │   ├── plugin_mgr.py   #   插件管理
-│   │   └── tokens.py       #   Token 预算
-│   ├── commands.py         # 指令系统（/help /save /load 等）
-│   ├── config.py           # 配置管理（环境变量 + 常量）
-│   ├── llm.py              # LLM 对话循环 + 双模型路由
-│   ├── main.py             # 主入口 + UI 循环
+├── docs/                  # 文档
+│   ├── architecture.md    #   系统架构
+│   ├── development.md     #   开发者指南
+│   └── skills.md          #   Skill 技能包参考
+├── tests/                 # 93 个测试用例
+├── AGENTS.md               # 本文档
+├── README.md               # 人类阅读的项目说明
+├── CHANGELOG.md            # 版本变更记录
+├── CONTRIBUTING.md         # 贡献指南
+├── ROADMAP.md              # 开发路线图
+├── FEATURES.md             # 功能列表（详细版）
+├── pyproject.toml          # 包配置 + ruff + pytest
+├── requirements.txt        # 依赖列表
+├── .env.example            # 环境变量模板
+├── .editorconfig           # 编辑器统一配置
+├── .pre-commit-config.yaml # 提交前自动检查
+├── Makefile                # 构建/测试/运行
+└── run.py                  # 启动入口
 │   └── session.py          # 会话持久化
 ├── memory/                 # 跨会话记忆（Markdown 文件）
 ├── sessions/               # 对话历史（自动管理）
@@ -76,6 +83,18 @@ agent/
 ├── tests/                  # 测试（待补充）
 ├── AGENTS.md               # 本文档
 ├── README.md               # 人类阅读的项目说明
+## CI/CD
+
+每次 push / PR 到 master，GitHub Actions 自动运行：
+1. **Lint**: `ruff check src/`
+2. **Tests**: `pytest -v`（93 个用例）
+3. **Spec**: `check_project` 评分（低于 80 分报错）
+
+配置见 `.github/workflows/ci.yml`。
+
+---
+
+
 ├── ROADMAP.md              # 开发路线图
 ├── FEATURES.md             # 功能列表
 ├── learn_skill.md          # Skill 学习说明
