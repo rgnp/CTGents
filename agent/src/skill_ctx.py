@@ -112,6 +112,46 @@ def list_active_skills(messages: list[dict]) -> list[str]:
     return sorted(seen)
 
 
+def auto_match_and_load(messages: list[dict], user_input: str) -> str:
+    """根据用户输入自动匹配并加载 Skill。返回状态消息。"""
+    skills = scan_skills()
+    if not skills:
+        return ""
+
+    active = set(list_active_skills(messages))
+    inp_words = set(_tokenize(user_input))
+
+    loaded: list[str] = []
+    for name, info in skills.items():
+        if name in active:
+            continue
+        desc_words = set(_tokenize(info["description"]))
+        if not inp_words or not desc_words:
+            continue
+        overlap = inp_words & desc_words
+        score = len(overlap) / min(len(inp_words), len(desc_words))
+        if score >= 0.15:
+            activate_skill(messages, name, info["content"])
+            loaded.append(name)
+
+    if loaded:
+        return f"自动加载 Skill: {', '.join(loaded)}"
+    return ""
+
+
+def _tokenize(text: str) -> list[str]:
+    """分词：CJK 单字 + ASCII 单词，过滤标点。"""
+    tokens: list[str] = []
+    t = text.lower()
+    # CJK 字符逐字
+    for ch in t:
+        if '一' <= ch <= '鿿' or '㐀' <= ch <= '䶿':
+            tokens.append(ch)
+    # ASCII 单词
+    tokens.extend(re.findall(r'[a-z0-9]{2,}', t))
+    return tokens
+
+
 # ── 辅助 ──
 
 
