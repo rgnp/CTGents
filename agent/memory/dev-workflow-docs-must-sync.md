@@ -11,9 +11,9 @@ metadata:
 2) docs/architecture.md — 核心模块/数据流变化必须同步
 3) docs/development.md — 开发流程/工具注册变化必须同步
 4) README.md — 功能列表/技术栈/命令变化必须同步
-5) CHANGELOG.md — 每次提交必须记录变更
-6) FEATURES.md — 每个版本的功能点必须记录
-7) ROADMAP.md — 版本状态变化必须更新
+5) docs/changelog.md — 每次提交必须记录变更
+6) docs/features.md — 每个版本的功能点必须记录
+7) docs/roadmap.md — 版本状态变化必须更新
 
 执行机制：
 - docs_sync_check 工具（src/tools/lint.py）：硬编码 _DOC_SYNC_MAP 映射表，自动检查违规

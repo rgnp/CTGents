@@ -113,6 +113,10 @@ agent/
 | [AGENTS.md](./AGENTS.md) | AI 编程智能体 | 构建命令、测试、代码风格、安全边界 |
 | [docs/architecture.md](./docs/architecture.md) | 开发者 | 系统架构、数据流、设计决策 |
 | [docs/development.md](./docs/development.md) | 开发者 | 添加工具/指令/插件的方法 |
-| [CONTRIBUTING.md](./CONTRIBUTING.md) | 贡献者 | 贡献流程、提交规范、测试要求 |
-| [ROADMAP.md](./ROADMAP.md) | 所有人 | 开发路线图与版本计划 |
-| [CHANGELOG.md](./CHANGELOG.md) | 所有人 | 版本变更记录 |
+| [AGENTS.md](./AGENTS.md) | AI 编程智能体 | 构建命令、测试、代码风格、安全边界 |
+| [docs/architecture.md](./docs/architecture.md) | 开发者 | 系统架构、数据流、设计决策 |
+| [docs/development.md](./docs/development.md) | 开发者 | 添加工具/指令/插件的方法 |
+| [docs/contributing.md](./docs/contributing.md) | 贡献者 | 贡献流程、提交规范、测试要求 |
+| [docs/roadmap.md](./docs/roadmap.md) | 所有人 | 开发路线图与版本计划 |
+| [docs/changelog.md](./docs/changelog.md) | 所有人 | 版本变更记录 |
+| [docs/features.md](./docs/features.md) | 所有人 | 详细功能列表 |

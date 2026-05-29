@@ -146,7 +146,7 @@ class TestCheckBonus:
         """有 ROADMAP.md → 加分。"""
         result = _check_bonus(tmp_project)
         items = [item for tag, item in result["items"] if tag == "+"]
-        assert any("ROADMAP" in i for i in items)
+        assert any("roadmap" in i.lower() for i in items)
 
 
 class TestDetectTechStack:

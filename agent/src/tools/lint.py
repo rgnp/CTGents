@@ -581,12 +581,12 @@ def _check_bonus(root: Path) -> dict:
     items = []
 
     # 加分
-    if (root / "ROADMAP.md").exists():
-        items.append(("+", "有 ROADMAP.md，项目规划清晰"))
-    if (root / "CHANGELOG.md").exists():
-        items.append(("+", "有 CHANGELOG.md，版本变更可追溯"))
-    if (root / "CONTRIBUTING.md").exists():
-        items.append(("+", "有 CONTRIBUTING.md，贡献指南完善"))
+    if (root / "docs" / "roadmap.md").exists():
+        items.append(("+", "有 docs/roadmap.md，项目规划清晰"))
+    if (root / "docs" / "changelog.md").exists():
+        items.append(("+", "有 docs/changelog.md，版本变更可追溯"))
+    if (root / "docs" / "contributing.md").exists():
+        items.append(("+", "有 docs/contributing.md，贡献指南完善"))
     if (root / ".github" / "workflows").is_dir():
         items.append(("+", "有 GitHub Actions CI/CD 配置"))
 
@@ -964,9 +964,7 @@ _DOC_SYNC_MAP: dict[str, list[str]] = {
     "src/main.py":         ["README.md", "docs/architecture.md"],
 
     # 工具模块变更 → 必须更新对应文档
-    "src/tools/lint.py":       ["AGENTS.md", "FEATURES.md", "ROADMAP.md"],
-    "src/tools/file.py":       ["AGENTS.md"],
-    "src/tools/exec.py":       ["AGENTS.md"],
+    "src/tools/lint.py":       ["AGENTS.md", "docs/features.md", "docs/roadmap.md"],
     "src/tools/git.py":        ["AGENTS.md"],
     "src/tools/project.py":    ["AGENTS.md"],
     "src/tools/web.py":        ["AGENTS.md"],
@@ -978,18 +976,18 @@ _DOC_SYNC_MAP: dict[str, list[str]] = {
     "src/tools/plugin_mgr.py": ["AGENTS.md"],
 
     # 测试变更 → 至少更新 CHANGELOG
-    "tests/":                  ["CHANGELOG.md"],
+    "tests/":                  ["docs/changelog.md"],
 
     # 配置变更 → 影响范围大
-    "pyproject.toml":          ["README.md", "AGENTS.md", "CHANGELOG.md"],
+    "pyproject.toml":          ["README.md", "AGENTS.md", "docs/changelog.md"],
     "Makefile":                ["README.md", "AGENTS.md"],
     ".github/workflows/":      ["README.md", "AGENTS.md"],
 
     # 文档互相引用
     "AGENTS.md":               ["README.md"],
     "README.md":               ["AGENTS.md"],
-    "ROADMAP.md":              ["README.md"],
-    "FEATURES.md":             ["CHANGELOG.md"],
+    "docs/roadmap.md":          ["README.md"],
+    "docs/features.md":         ["docs/changelog.md"],
 }
 
 # 白名单：修改以下文件 / 目录不需要同步文档

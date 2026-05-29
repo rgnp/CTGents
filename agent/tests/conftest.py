@@ -68,8 +68,9 @@ def tmp_project(tmp_path: Path) -> Path:
         ".PHONY: test\n\ntest:\n\tpytest -v\n"
     )
 
-    # ROADMAP.md（加分项）
-    (tmp_path / "ROADMAP.md").write_text(
+    # docs/roadmap.md（加分项）
+    (tmp_path / "docs").mkdir()
+    (tmp_path / "docs" / "roadmap.md").write_text(
         "# 路线图\n\n## v0.1\n基础功能\n"
     )
 
