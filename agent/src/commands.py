@@ -78,11 +78,23 @@ def _cmd_exit(r: CmdResult, _msgs, _args, _sid) -> None:
 
 @builtin_multi(["/help", "/h", "/?"], description="显示指令列表")
 def _cmd_help(r: CmdResult, _msgs, _args, _sid) -> None:
+    # 按 handler 去重，同 handler 的别名合并显示
+    seen: dict[int, list[Command]] = {}
+    for cmd in _registry:
+        hid = id(cmd.handler)
+        seen.setdefault(hid, []).append(cmd)
+
     lines = ["指令列表：\n"]
-    for cmd in sorted(_registry, key=lambda c: c.name):
-        lines.append(f"  {cmd.name:<12} {cmd.description}")
-        if cmd.usage:
-            lines.append(f"  {'':<12} 用法: {cmd.usage}")
+    for group in sorted(seen.values(), key=lambda g: g[0].name):
+        primary = group[0]
+        aliases = [c.name for c in group[1:]]
+        if aliases:
+            name_display = f"{primary.name}（{'、'.join(aliases)}）"
+        else:
+            name_display = primary.name
+        lines.append(f"  {name_display:<20} {primary.description}")
+        if primary.usage:
+            lines.append(f"  {'':<20} 用法: {primary.usage}")
     r.message = "\n".join(lines)
 
 
@@ -281,6 +293,84 @@ def _cmd_plugin(r: CmdResult, _msgs, args, _sid) -> None:
             r.message = execute_tool(tc)
             return
     r.message = f"未找到插件工具: {name}"
+
+
+# ═══════════════════════════════════════════════════════════════
+# Skill 指令
+# ═══════════════════════════════════════════════════════════════
+
+def _call_skill_tool(name: str, args: dict | None = None) -> str:
+    """通过 execute_tool 调用 skill 插件工具。"""
+    tc = SimpleNamespace(
+        function=SimpleNamespace(
+            name=name,
+            arguments=json.dumps(args or {}, ensure_ascii=False)
+        )
+    )
+    return execute_tool(tc)
+
+
+@builtin_multi(["/skill", "/skills"], description="Skill 管理：列出/查看/加载等", usage="/skill <子命令> [参数]")
+def _cmd_skill(r: CmdResult, _msgs, args, _sid) -> None:
+    if not args:
+        # 默认：列出所有 Skill
+        result = _call_skill_tool("skill_auto_discover")
+        r.message = result
+        return
+
+    sub = args[0]
+    rest = args[1:]
+
+    if sub in ("list", "ls"):
+        result = _call_skill_tool("skill_auto_discover")
+        r.message = result
+
+    elif sub in ("show", "view", "info"):
+        if not rest:
+            r.message = "用法: /skill show <名称>"
+            return
+        result = _call_skill_tool("skill_show", {"skill_path": " ".join(rest)})
+        r.message = result
+
+    elif sub in ("load", "use", "activate"):
+        if not rest:
+            r.message = "用法: /skill load <名称>"
+            return
+        result = _call_skill_tool("skill_auto_load", {"skill_name": " ".join(rest)})
+        r.message = result
+
+    elif sub in ("context", "active", "current"):
+        result = _call_skill_tool("skill_auto_context")
+        r.message = result
+
+    elif sub in ("reload", "refresh", "rescan"):
+        result = _call_skill_tool("skill_auto_reload")
+        r.message = result
+
+    elif sub in ("create", "new"):
+        if len(rest) < 2:
+            r.message = "用法: /skill create <名称> <描述>"
+            return
+        name = rest[0]
+        desc = " ".join(rest[1:])
+        # 调用 skill_create 需要更多参数，提示用户使用交互方式
+        r.message = (
+            f"创建 Skill 请使用工具接口更完善。\n"
+            f"试试: skill_create name=\"{name}\" description=\"{desc}\" instructions=\"...\""
+        )
+
+    elif sub in ("validate", "check"):
+        if not rest:
+            r.message = "用法: /skill validate <路径>"
+            return
+        result = _call_skill_tool("skill_validate", {"filepath": " ".join(rest)})
+        r.message = result
+
+    else:
+        r.message = (
+            f"未知子命令: {sub}\n"
+            f"可用子命令：list、show、load、context、reload、create、validate"
+        )
 
 
 # ═══════════════════════════════════════════════════════════════
