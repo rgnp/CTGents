@@ -122,15 +122,26 @@ TOOL_LABELS: dict[str, str] = {
     "search_web":   "搜索",
     "read_page":    "阅读网页",
     "read_file":    "读取文件",
+    "read_file_lines": "读取文件（带行号）",
     "write_file":   "写入文件",
+    "edit_file_lines": "行级编辑",
+    "undo_edit":    "撤销编辑",
     "list_files":   "浏览目录",
     "delete_file":  "删除文件",
     "run_python":   "执行代码",
+    "run_command":  "执行命令",
     "grep_code":    "搜索代码",
     "think":        "思考",
+    "remember":     "记住",
+    "recall":       "回忆",
+    "forget":       "忘记",
     "install_plugin": "安装插件",
     "list_plugins":  "列出插件",
     "discover":      "能力扫描",
+    "skill_list":    "Skill列表",
+    "skill_show":    "Skill查看",
+    "skill_load":    "Skill加载",
+    "skill_create":  "Skill创建",
 }
 
 
@@ -143,8 +154,12 @@ def _on_tool(name: str, args: dict) -> None:
 
 
 def _reload_dispatch():
-    """热加载 commands 模块、插件，刷新所有指令和工具。"""
+    """全量热加载：指令系统 + 内置工具 + 插件，无需重启。"""
     global dispatch_cmd
+
+    loaded_items = []
+
+    # 1. 热加载指令系统
     for k in list(sys.modules.keys()):
         if k == 'src.commands':
             del sys.modules[k]
@@ -152,14 +167,19 @@ def _reload_dispatch():
     try:
         import src.commands
         dispatch_cmd = src.commands.dispatch
-
-        from .tools.plugin_mgr import _plugins, reload_plugins
-        _plugins.clear()
-        reload_plugins()
-
-        return True, "指令系统、插件已热加载"
+        loaded_items.append("指令系统")
     except Exception as e:
-        return False, f"热加载失败: {type(e).__name__}: {e}"
+        return False, f"指令系统加载失败: {e}"
+
+    # 2. 热加载内置工具
+    try:
+        from .tools import reload_tools
+        mods = reload_tools()
+        loaded_items.append(f"内置工具（{len(mods)} 模块）")
+    except Exception as e:
+        return False, f"内置工具加载失败: {e}"
+
+    return True, f"已热加载：{'、'.join(loaded_items)}。LLM 下次请求将自动获取最新工具定义。"
 
 
 # ── 主入口 ──
@@ -232,6 +252,11 @@ def main() -> None:
                 if user_input.lower().startswith("/reload"):
                     ok, msg = _reload_dispatch()
                     print(msg)
+                    # 注入一条系统消息，告知 LLM 工具已更新
+                    messages.append({
+                        "role": "system",
+                        "content": "⚠️ 系统已热加载，工具列表已更新。执行 discover 查看最新可用工具。"
+                    })
                     continue
 
                 r = dispatch_cmd(user_input, messages, session_id)
