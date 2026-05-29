@@ -65,8 +65,11 @@ def save_session(messages: list[dict], session_id: str | None = None) -> str:
     sess_dir = _session_path(session_id)
     os.makedirs(sess_dir, exist_ok=True)
 
+    # 过滤掉运行时注入的易变消息（环境上下文等）
+    persist = [m for m in messages if not m.get("_volatile")]
+
     with open(_messages_path(session_id), "w", encoding="utf-8") as f:
-        json.dump(messages, f, ensure_ascii=False, indent=2)
+        json.dump(persist, f, ensure_ascii=False, indent=2)
 
     summary = _generate_summary(messages)
     with open(_summary_path(session_id), "w", encoding="utf-8") as f:

@@ -1,7 +1,9 @@
 import logging
 import os
+import platform
 import sys
 from collections.abc import Callable
+from datetime import datetime
 
 from .commands import CmdResult, dispatch as dispatch_cmd
 from .config import SESSION_DIR
@@ -9,6 +11,21 @@ from .llm import run_conversation, TokenCallback, ToolCallback
 from .session import list_sessions, load_session, save_session
 
 logger = logging.getLogger(__name__)
+
+
+def _make_env_message() -> dict:
+    """生成环境上下文系统消息，标记 _volatile 以在保存时自动过滤。"""
+    now = datetime.now()
+    return {
+        "role": "system",
+        "content": (
+            f"当前环境：\n"
+            f"- 工作目录: {os.getcwd()}\n"
+            f"- 当前时间: {now.strftime('%Y年%m月%d日 %H:%M:%S')}（星期{['一','二','三','四','五','六','日'][now.weekday()]}）\n"
+            f"- 操作系统: {platform.system()} {platform.release()}\n"
+        ),
+        "_volatile": True,
+    }
 
 
 # ── UI 辅助 ──
@@ -107,6 +124,9 @@ def main() -> None:
                 print()
         except ValueError:
             pass
+
+    # 注入环境上下文（每次启动刷新，不持久化到磁盘）
+    messages.insert(0, _make_env_message())
 
     print("Agent 已启动，输入 /help 查看指令列表\n")
 
