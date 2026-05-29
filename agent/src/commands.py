@@ -255,11 +255,16 @@ def _cmd_plugin(r: CmdResult, _msgs: list[dict], args: list[str], _sid: str | No
         if not _plugins:
             r.message = "未安装任何插件。"
             return
-        lines = ["已安装插件："]
+        lines = [f"已安装插件 ({len(_plugins)} 个)：\n"]
         for pname, mod in _plugins.items():
+            desc = getattr(mod, "DESCRIPTION", "（无描述）")
             tools = [t["function"]["name"] for t in getattr(mod, "TOOLS", [])]
-            lines.append(f"  {pname} → {', '.join(tools)}")
-        r.message = "\n".join(lines)
+            lines.append(f"  {pname}")
+            lines.append(f"    {desc}")
+            if tools:
+                lines.append(f"    工具: {', '.join(tools)}")
+            lines.append("")
+        r.message = "\n".join(lines).strip()
         return
 
     name = args[0]
