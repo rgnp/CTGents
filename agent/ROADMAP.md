@@ -25,21 +25,19 @@
 | ✅ Skill | 技能包管理（加载/卸载/自动匹配） |
 | ✅ 会话 | 保存/恢复/重命名/导出/列表 |
 | ✅ 指令系统 | 结构化注册、热加载、/help 自动聚合 |
+| ✅ Git 操作 | git_status / git_diff / git_add / git_commit / git_push / git_log / git_branch |
+| ✅ 项目感知 | 启动时自动检测项目类型、构建工具、测试命令、Git 状态、关键目录 |
+| ✅ 变更追踪 | write_file / edit_file_lines / delete_file 后自动检测 git 变更，提醒连带更新 |
 
-当前 Agent **缺乏**的关键能力：
 当前 Agent **缺乏**的关键能力：
 
 | 维度 | 缺失 |
 |------|------|
-| ❌ Git 集成 | 无 git 工具 |
 | ❌ 多模型 | 硬编码 DeepSeek，不支持按任务路由不同模型 |
 | ❌ Auto Mode | 所有工具调用都需要 LLM 判断，无安全等级机制 |
 | ❌ 长任务 | 无后台会话、无目标驱动持续执行 |
 | ❌ MCP | 无 MCP 服务器支持 |
-| ❌ 多模型 | 硬编码 DeepSeek，不支持按任务路由不同模型 |
-| ❌ Auto Mode | 所有工具调用都需要 LLM 判断，无安全等级机制 |
-| ❌ 长任务 | 无后台会话、无目标驱动持续执行 |
-| ❌ MCP | 无 MCP 服务器支持 |
+
 
 ---
 
