@@ -388,8 +388,7 @@ def _cmd_skill(r: CmdResult, msgs, args, _sid) -> None:
         name = rest[0]
         desc = " ".join(rest[1:]) if len(rest) > 1 else ""
         r.message = (
-            f"创建 Skill 请使用 skill_create 工具。
-"
+            f"创建 Skill 请使用 skill_create 工具。\n"
             f"示例: skill_create name=\"{name}\" description=\"{desc}\" instructions=\"...\""
         )
 
@@ -402,8 +401,7 @@ def _cmd_skill(r: CmdResult, msgs, args, _sid) -> None:
 
     else:
         r.message = (
-            f"未知子命令: {sub}
-"
+            f"未知子命令: {sub}\n"
             f"可用子命令：list、show、load、unload、context、reload、create、validate"
         )
 
