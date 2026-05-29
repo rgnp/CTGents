@@ -37,19 +37,6 @@ def register(*names: str):
     return deco
 
 
-def _install_plugin_commands() -> None:
-    """扫描已加载插件，将其 COMMANDS 注册到指令系统。"""
-    try:
-        plugins = discover_plugins()
-    except Exception:
-        return
-    from .tools.plugin_mgr import _plugins
-    for mod in _plugins.values():
-        if hasattr(mod, "COMMANDS") and isinstance(mod.COMMANDS, dict):
-            for cmd_name, handler in mod.COMMANDS.items():
-                if cmd_name not in COMMANDS:
-                    COMMANDS[cmd_name] = handler
-
 
 # ═══════════════════════════════════════════════════════════════
 # 内置指令
@@ -310,5 +297,14 @@ def dispatch(user_input: str, messages: list[dict], session_id: str | None) -> C
     return r
 
 
-# 启动时加载插件指令
-_install_plugin_commands()
+def register_plugin_commands() -> None:
+    """扫描已加载插件，将其 COMMANDS 注册到指令系统。可随时调用来刷新。"""
+    from .tools.plugin_mgr import _plugins
+    for mod in _plugins.values():
+        if hasattr(mod, "COMMANDS") and isinstance(mod.COMMANDS, dict):
+            for cmd_name, handler in mod.COMMANDS.items():
+                COMMANDS[cmd_name] = handler
+
+
+# 启动时加载
+register_plugin_commands()
