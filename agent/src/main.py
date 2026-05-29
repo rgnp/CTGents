@@ -30,19 +30,43 @@ def _make_env_message() -> dict:
 
 
 def _make_memory_context() -> dict | None:
-    """读取 MEMORY.md 索引，生成记忆上下文系统消息。无记忆时返回 None。"""
+    """读取记忆文件的 frontmatter，生成简洁的记忆索引。"""
     from .config import MEMORY_DIR
-    index_path = os.path.join(MEMORY_DIR, "MEMORY.md")
-    if not os.path.exists(index_path):
+    import re
+    mem_dir = os.path.join(MEMORY_DIR, "MEMORY.md")
+    if not os.path.exists(mem_dir):
         return None
-    content = open(index_path, encoding="utf-8").read().strip()
-    if not content:
+
+    # 从各 .md 文件 frontmatter 提取 name + description 首句
+    entries: list[str] = []
+    d = os.path.dirname(mem_dir)
+    for f in sorted(os.listdir(d)):
+        if f == "MEMORY.md" or not f.endswith(".md"):
+            continue
+        try:
+            text = open(os.path.join(d, f), encoding="utf-8").read()
+            name, desc = f[:-3], ""
+            if text.startswith("---"):
+                fm = text[3:text.find("---", 3)]
+                for line in fm.split("\n"):
+                    line = line.strip()
+                    if line.startswith("name:"):
+                        name = line.split(":", 1)[1].strip()
+                    elif line.startswith("description:"):
+                        desc = line.split(":", 1)[1].strip().rstrip(".")
+            # 只取 description 第一句（到第一个句号或 30 字）
+            short = desc.split("。")[0].split("，")[0][:30] if desc else ""
+            entries.append((name, short))
+        except Exception:
+            continue
+
+    if not entries:
         return None
-    return {
-        "role": "system",
-        "content": f"已积累的记忆（不需要复述，仅在相关时参考）：\n{content}",
-        "_volatile": True,
-    }
+
+    lines = ["你拥有以下记忆（需要时用 recall 搜索详情，不要在回复中逐字复述）："]
+    for name, short in entries:
+        lines.append(f"  {name}: {short}")
+    return {"role": "system", "content": "\n".join(lines), "_volatile": True}
 
 
 # ── UI 辅助 ──
