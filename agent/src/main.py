@@ -68,20 +68,6 @@ def _make_memory_context() -> dict | None:
         lines.append(f"  {name}: {short}")
     return {"role": "system", "content": "\n".join(lines), "_volatile": True}
 
-def _make_project_context() -> dict | None:
-    """生成项目结构感知上下文。"""
-    from .tools.project import scan_project
-    try:
-        content = scan_project()
-        if not content:
-            return None
-        return {"role": "system", "content": content, "_volatile": True}
-    except Exception:
-        return None
-
-
-
-
 
 # ── UI 辅助 ──
 
@@ -156,13 +142,6 @@ TOOL_LABELS: dict[str, str] = {
     "skill_show":    "Skill查看",
     "skill_load":    "Skill加载",
     "skill_create":  "Skill创建",
-    "git_status":   "Git状态",
-    "git_diff":     "Git差异",
-    "git_add":      "Git暂存",
-    "git_commit":   "Git提交",
-    "git_push":     "Git推送",
-    "git_log":      "Git日志",
-    "git_branch":   "Git分支",
 }
 
 
@@ -232,10 +211,6 @@ def main() -> None:
 
     # 注入已有记忆索引
     mem_ctx = _make_memory_context()
-    # 注入项目结构感知
-    proj_ctx = _make_project_context()
-    if proj_ctx:
-        messages.insert(2, proj_ctx)
     if mem_ctx:
         messages.insert(1, mem_ctx)
 
@@ -301,14 +276,11 @@ def main() -> None:
                     messages.clear()
                     if r.save:   # /new: 同时重置 session
                         session_id = None
-                    # 重新注入环境上下文、记忆索引、项目感知
+                    # 重新注入环境上下文和记忆索引
                     messages.insert(0, _make_env_message())
                     mem_ctx = _make_memory_context()
                     if mem_ctx:
                         messages.insert(1, mem_ctx)
-                    proj_ctx = _make_project_context()
-                    if proj_ctx:
-                        messages.insert(2, proj_ctx)
                 if r.exit:
                     break
                 if r.retry:

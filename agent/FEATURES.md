@@ -1,10 +1,4 @@
 # 功能列表
-- [x] 文件行级编辑：read_file_lines（带行号读取）、edit_file_lines（替换/删除/插入）、undo_edit（撤销），修改前自动备份
-- [x] 通用 Shell 执行：run_command（任意 Shell 命令）+ run_python 保留，含黑名单拦截、超时、输出截断
-- [x] 变更追踪连带提醒：write_file / edit_file_lines / delete_file 自动检测 git 变更，提示需要同步更新的文档
-- [x] 全量热加载：/reload 刷新指令系统 + 内置工具 + 插件，无需重启
-- [x] 项目结构感知：启动时自动检测项目类型、构建工具、测试命令、Git 状态、关键目录，注入 system prompt
-- [x] Git 操作工具集：git_status / git_diff / git_add / git_commit / git_push / git_log / git_branch，完整 Git 工作流
 
 ## 2026-05-29
 - [x] 环境认知：系统消息注入工作目录、当前日期时间、操作系统，保存时自动过滤
