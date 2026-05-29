@@ -224,25 +224,41 @@ def _detect_language_and_framework(root: Path) -> dict:
         except Exception:
             pass
 
-    # 从 pyproject.toml 读取构建系统和依赖
+    # 从 pyproject.toml 读取依赖
     pyproject = root / "pyproject.toml"
     if pyproject.exists():
         try:
             text = pyproject.read_text(encoding="utf-8")
-            # 提取依赖（简单解析）
             in_deps = False
             for line in text.split("\n"):
                 line_stripped = line.strip()
-                if line_stripped.startswith("dependencies = [") or line_stripped.startswith("requires-python"):
-                    in_deps = True
-                    continue
-                if in_deps and line_stripped.startswith("]"):
+                # 检测 section 切换，跳出 [project]
+                if line_stripped.startswith("[") and not line_stripped.startswith("[project"):
                     in_deps = False
                     continue
+                # 匹配 dependencies 行
+                if line_stripped.startswith("dependencies"):
+                    in_deps = True
+                    # 提取 = 后面的内容
+                    if "=" in line_stripped:
+                        deps_part = line_stripped.split("=", 1)[1].strip()
+                        # 去掉首尾的 [ ]
+                        if deps_part.startswith("["):
+                            deps_part = deps_part[1:]
+                        if deps_part.endswith("]"):
+                            deps_part = deps_part[:-1]
+                            in_deps = False
+                        for dep in deps_part.split(","):
+                            dep = dep.strip().strip('"').strip("'").strip()
+                            if dep and dep not in ("", "]", "["):
+                                result["dependencies"].append(dep)
+                    continue
                 if in_deps:
-                    dep = line_stripped.strip('", ')
-                    if dep:
-                        result["dependencies"].append(dep)
+                    cleaned = line_stripped.strip('",').strip()
+                    if cleaned and not cleaned.startswith("#") and cleaned not in ("]", "["):
+                        result["dependencies"].append(cleaned)
+                    if "]" in line_stripped:
+                        in_deps = False
         except Exception:
             pass
 
