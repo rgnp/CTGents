@@ -367,7 +367,7 @@ def main() -> None:
                     on_token, has_output = _make_display()
                     sid = [session_id]
                     _auto_load_skills(messages, guide)
-                        reply = run_conversation(
+                    reply = run_conversation(
                         messages, guide, on_token, _on_tool,
                         on_progress=lambda: sid.__setitem__(0, save_session(messages, sid[0])),
                     )
