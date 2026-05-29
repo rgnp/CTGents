@@ -23,6 +23,7 @@ def _make_env_message() -> dict:
             f"- 工作目录: {os.getcwd()}\n"
             f"- 当前时间: {now.strftime('%Y年%m月%d日 %H:%M:%S')}（星期{['一','二','三','四','五','六','日'][now.weekday()]}）\n"
             f"- 操作系统: {platform.system()} {platform.release()}\n"
+            f"\n以上为运行环境信息，不需要在回复中复述或罗列。"
         ),
         "_volatile": True,
     }
@@ -39,7 +40,7 @@ def _make_memory_context() -> dict | None:
         return None
     return {
         "role": "system",
-        "content": f"已积累的记忆：\n{content}",
+        "content": f"已积累的记忆（不需要复述，仅在相关时参考）：\n{content}",
         "_volatile": True,
     }
 

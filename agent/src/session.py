@@ -94,14 +94,14 @@ def load_session(session_id: str) -> tuple[list[dict], str]:
 
 
 def _generate_summary(messages: list[dict]) -> str:
-    """让 LLM 提炼会话摘要，包括用户信息、讨论主题、偏好、进行中任务。"""
+    """让 LLM 提炼会话摘要，关注任务主题和进行中事项。"""
     if not messages:
         return ""
 
     prompt = (
-        "请用 3-5 句话提炼以下对话的关键信息，包括："
-        "用户是谁、在做什么、偏好什么、有哪些进行中的任务或待办。"
-        "只输出摘要本身，不要加任何前缀。"
+        "请用 1-2 句话提炼以下对话的核心内容："
+        "讨论了什么主题、有哪些进行中的任务或待办。"
+        "不要描述用户的身份或个人背景。只输出摘要本身。"
     )
 
     summary_messages: list[dict] = list(messages)
