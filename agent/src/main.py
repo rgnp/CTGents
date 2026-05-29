@@ -285,6 +285,11 @@ def main() -> None:
         insert_pos = 2 if proj_ctx else 1
         messages.insert(insert_pos, mem_ctx)
 
+    # 注入安全模式信息
+    from .safety import get_mode_summary
+    mode_info = get_mode_summary()
+    messages.append({"role": "system", "content": mode_info, "_volatile": True})
+
     print("Agent 已启动，输入 /help 查看指令列表\n")
 
     _use_rich_input = sys.stdin.isatty()
@@ -355,6 +360,9 @@ def main() -> None:
                     if mem_ctx:
                         insert_pos = 2 if proj_ctx else 1
                         messages.insert(insert_pos, mem_ctx)
+                    # 重新注入安全模式信息
+                    from .safety import get_mode_summary
+                    messages.append({"role": "system", "content": get_mode_summary(), "_volatile": True})
                 if r.exit:
                     break
                 if r.retry:

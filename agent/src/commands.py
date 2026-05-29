@@ -389,6 +389,37 @@ def _cmd_status(r: CmdResult, msgs, _args, sid) -> None:
     r.message = "\n".join(lines)
 
 
+
+# ═══════════════════════════════════════════════════════════════
+# Auto Mode 指令
+# ═══════════════════════════════════════════════════════════════
+
+@builtin("/mode", description="查看/切换安全模式", usage="/mode [manual|auto]")
+def _cmd_mode(r: CmdResult, _msgs, args, _sid) -> None:
+    from .safety import get_mode_summary, set_mode
+    if not args:
+        r.message = get_mode_summary()
+        return
+    ok, msg = set_mode(args[0])
+    r.message = msg
+
+
+@builtin_multi(["/trust", "/allow"], description="信任工具（本会话自动放行）", usage="/trust <工具名>")
+def _cmd_trust(r: CmdResult, _msgs, args, _sid) -> None:
+    from .safety import clear_trust, list_trusted, revoke_trust, trust_tool
+    if not args:
+        r.message = list_trusted()
+        return
+    if args[0] == "clear":
+        r.message = clear_trust()
+    elif args[0] == "list":
+        r.message = list_trusted()
+    elif args[0].startswith("-"):
+        name = args[0][1:]
+        r.message = revoke_trust(name)
+    else:
+        r.message = trust_tool(args[0])
+
 # ═══════════════════════════════════════════════════════════════
 # 分发
 # ═══════════════════════════════════════════════════════════════

@@ -24,6 +24,41 @@ from .config import (
     TOOL_LOOP_THRESHOLD,
 )
 from .tools import execute_tool, get_tools, truncate_to_budget
+
+# 工具显示标签（用于安全确认提示，避免循环导入 main.py）
+_TOOL_LABEL_MAP: dict[str, str] = {
+    "search_web":    "搜索",
+    "read_page":     "阅读网页",
+    "read_file":     "读取文件",
+    "read_file_lines": "读取文件（带行号）",
+    "write_file":    "写入文件",
+    "edit_file_lines": "行级编辑",
+    "undo_edit":     "撤销编辑",
+    "list_files":    "浏览目录",
+    "delete_file":   "删除文件",
+    "count_lines":   "统计行数",
+    "run_python":    "执行代码",
+    "run_command":   "执行命令",
+    "grep_code":     "搜索代码",
+    "think":         "思考",
+    "remember":      "记住",
+    "recall":        "回忆",
+    "forget":        "忘记",
+    "install_plugin": "安装插件",
+    "list_plugins":   "列出插件",
+    "discover":       "能力扫描",
+    "plugin_spec":    "插件规范",
+    "git_status":    "Git 状态",
+    "git_diff":      "Git 差异",
+    "git_log":       "Git 日志",
+    "git_commit":    "Git 提交",
+    "git_push":      "Git 推送",
+    "git_pr":        "Git PR",
+    "git_branch":    "Git 分支",
+    "scan_project":  "扫描项目",
+    "check_project": "规范检查",
+    "generate_agents_md": "生成规范",
+}
 from .tools.tokens import count_messages_tokens
 
 logger = logging.getLogger(__name__)
@@ -451,8 +486,40 @@ def run_conversation(
                     )
                 )
                 args = json.loads(tc_data["function"]["arguments"])
-                on_tool(tc_data["function"]["name"], args)
-                result = execute_tool(tc)
+                tool_name = tc_data["function"]["name"]
+                on_tool(tool_name, args)
+
+                # ═══════════════════════════════════════════════
+                # Auto Mode 安全检查
+                # ═══════════════════════════════════════════════
+                from .safety import check_tool, trust_tool, get_mode, get_safety_level
+
+                safety = check_tool(tool_name)
+                if safety == "confirm":
+                    level = get_safety_level(tool_name).value
+                    mode = get_mode()
+                    label = _TOOL_LABEL_MAP.get(tool_name, tool_name)
+                    detail = " ".join(f"{k}={v}" for k, v in args.items())
+                    if len(detail) > 120:
+                        detail = detail[:117] + "..."
+
+                    print(f"\n  ⚠️ [{label}] 需要确认")
+                    print(f"     等级: {level.upper()} | 模式: {mode}")
+                    print(f"     参数: {detail}")
+                    choice = input("     执行？[y=确认/n=跳过/a=始终允许本次会话] ").strip().lower()
+
+                    if choice in ("a", "always"):
+                        trust_tool(tool_name)
+                        print(f"     ✅ 已信任 {tool_name}，本次会话自动放行\n")
+                        result = execute_tool(tc)
+                    elif choice in ("y", "yes", ""):
+                        result = execute_tool(tc)
+                    else:
+                        result = f"⛔ [{tool_name}] 已跳过（用户未批准）"
+                        print("     ⛔ 已跳过\n")
+                else:
+                    result = execute_tool(tc)
+
                 result = truncate_to_budget(result, copy)
                 copy.append({
                     "role": "tool",

@@ -56,6 +56,23 @@ agent/
 ├── memory/                 # 跨会话记忆（Markdown 文件）
 ├── sessions/               # 对话历史（自动管理）
 ├── plugins/                # 自学安装的插件（自动管理）
+## Auto Mode 安全系统
+
+本系统提供三级工具安全等级和手动/自动双模式：
+
+| 等级 | 说明 | 示例工具 |
+|------|------|----------|
+| ✅ SAFE | 只读操作，自动放行 | read_file, git_status, search_web |
+| ⚠️ RISKY | 修改文件但可逆 | write_file, run_command, git_commit |
+| 🚫 DANGEROUS | 破坏性/不可逆 | git_push |
+
+**模式：**
+- `manual`（默认）— RISKY + DANGEROUS 需要用户确认
+- `auto` — SAFE 和 RISKY 自动放行，DANGEROUS 仍需确认
+
+**会话信任：** 用 `/trust <工具名>` 将工具加入信任列表，本会话内自动放行。
+
+
 ├── tests/                  # 测试（待补充）
 ├── AGENTS.md               # 本文档
 ├── README.md               # 人类阅读的项目说明
