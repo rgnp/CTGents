@@ -1,20 +1,31 @@
-## 最新更新（2026-05-29 v0.6）
+# 开发路线图：从通用 Agent → 终端编程助手
 
-### 1.6 Auto Mode 安全系统 ✅
-
-- [x] `src/safety.py` 安全模块：三级安全等级（SAFE/RISKY/DANGEROUS）
-- [x] 29 个内置工具的安全等级标注
-- [x 手动/自动双模式（`/mode [manual|auto]`）
-- [x] 会话信任机制（`/trust <工具名>`，本会话自动放行）
-- [x] 工具执行前安全检查 + 交互式确认提示
-- [x] 安全模式信息自动注入 system prompt
-- [x] 29 个单元测试覆盖全部安全逻辑
-
-**涉及文件：** `src/safety.py`（新建）、`src/llm.py`、`src/commands.py`、`src/main.py`
-
----
 > 目标：以当前 Agent 框架为基础，开发出一个媲美 Claude Code 的终端 AI 编程助手，
 > 摆脱单一模型的绑定和约束，自由选择模型后端。
+
+---
+
+## 最新更新（2026-05-29 v0.7）
+
+### 1.7 文档同步强制机制 ✅
+
+- [x] `docs_sync_check` 工具：硬编码 _DOC_SYNC_MAP 映射表，改代码自动检查是否漏了文档
+- [x] CI 中新增 docs-sync job，违规阻止 PR 合并
+- [x] pre-commit 本地钩子，commit 前自动检查
+- [x] Makefile 新增 `make docs-sync` / `make preflight`
+- [x] AGENTS.md + docs/development.md 记录完整映射表和提交流程
+
+**涉及文件：** `src/tools/lint.py`、`.pre-commit-config.yaml`、`.github/workflows/ci.yml`
+
+### 1.8 根目录清理 + 文档全面整改 ✅
+
+- [x] 文档审计：发现并修复 6 个问题
+- [x] 创建 `docs/architecture.md`、`docs/development.md`、`docs/skills.md`
+- [x] CHANGELOG/CONTRIBUTING/FEATURES/ROADMAP 移入 docs/
+- [x] 删除根目录残留 `learn_skill.md`、`__init__.py`
+- [x] GitHub Actions CI：`make check` 评分低于 80 分报错
+
+**涉及文件：** `docs/`（7 个文档文件）、`README.md`、`AGENTS.md`
 
 ---
 
@@ -25,103 +36,98 @@
 | 维度 | 能力 |
 |------|------|
 | ✅ 会话 | 保存/恢复/重命名/导出/列表 |
-| ✅ 指令系统 | 结构化注册、热加载、/help 自动聚合 |
+| ✅ 指令系统 | 结构化注册、热加载、/help 自动聚合、/mode /trust |
 | ✅ 多模型 | Flash/Pro 双模型自动路由、/model 切换 |
 | ✅ 热加载 | `/reload` 刷新指令系统 + 内置工具 + 插件，无需重启 |
 | ✅ 文件操作 | read_file / write_file / list_files / delete_file |
 | ✅ 文件行级编辑 | read_file_lines（带行号读取）、edit_file_lines（替换/删除/插入）、undo_edit（撤销） |
-| ✅ Shell 执行 | run_command（通用 Shell）、run_python（便捷 Python 执行），含安全机制 |
+| ✅ Shell 执行 | run_command + run_python，含安全黑名单 |
 | ✅ 代码搜索 | grep_code（正则搜索） |
 | ✅ 网络 | search_web / read_page（Tavily + trafilatura） |
 | ✅ 思考 | think 工具（策略规划） |
 | ✅ 记忆 | remember / recall / forget（跨会话持久化） |
 | ✅ 插件 | 自学安装、热加载、COMMANDS 注册 |
 | ✅ Skill | 技能包管理（加载/卸载/自动匹配） |
-| ✅ 会话 | 保存/恢复/重命名/导出/列表 |
-| ✅ 指令系统 | 结构化注册、热加载、/help 自动聚合 |
+| ✅ 项目感知 | scan_project 自动检测语言/框架/依赖 |
+| ✅ 规范检查 | check_project 六维度评分 + AGENTS.md 自动生成 |
+| ✅ Git 集成 | status/diff/commit/push/PR/log/branch 全套 |
+| ✅ Auto Mode | 三级安全等级 + 手动/自动模式 + 会话信任 |
+| ✅ 文档同步强制 | docs_sync_check + CI + pre-commit 三重闸门 |
+| ✅ 文档体系 | 架构/开发/Changelog/贡献指南/Skills 完整 |
 
-当前 Agent **缺乏**的关键能力（已补齐 ✅）：
-当前 Agent **缺乏**的关键能力（已补齐 ✅）：
+当前 Agent **缺乏**的关键能力：
 
 | 维度 | 能力 |
 |------|------|
-| ✅ ~~多模型~~ | ~~硬编码 DeepSeek~~ → Flash/Pro 双模型自动路由 + /model 切换 |
-| ❌ Auto Mode | 所有工具调用都需要 LLM 判断，无安全等级机制 |
 | ❌ 长任务 | 无后台会话、无目标驱动持续执行 |
+| ❌ 多厂商 | 只有 DeepSeek，无 Claude/GPT/Qwen 后端 |
 | ❌ MCP | 无 MCP 服务器支持 |
+| ❌ 实时输出 | run_command 无流式输出（类 Claude Code 终端效果） |
+| ❌ 后台命令 | run_command 不支持后台运行 |
 
 ---
 
-## 第一阶段：核心能力补齐 ✅（已完成）
+## 第一阶段：基础能力 ✅（已完成）
 
 ### ~~1.1 通用 Shell 执行工具~~ ✅
-
-- [x] `run_command` — 支持任意 shell 命令（npm/pip/git/make 等）
-- [x] 安全机制：黑名单拦截（rm -rf /、shutdown、sudo 等）、超时控制、输出截断
-- [x] `run_python` 保留作为便捷工具（免输 `python -c` 前缀）
-- [ ] **未完成**：实时输出流式显示（类似 Claude Code 的终端输出）
-- [ ] **未完成**：后台命令执行（不阻塞对话，可查状态）
-
-**涉及文件：** `src/tools/exec.py`
+- [x] `run_command` + `run_python` 安全黑名单 + 超时控制
+- [ ] **待办**：实时输出流式显示（类似 Claude Code 的终端效果）
+- [ ] **待办**：后台命令执行（不阻塞对话，可查状态）
 
 ### ~~1.2 文件行级编辑工具~~ ✅
-
-- [x] `read_file_lines` — 带行号读取，可指定起始/结束行
-- [x] `edit_file_lines` — 三种操作：replace / delete / insert
-- [x] `undo_edit` — 撤销最近一次编辑，从备份恢复
-- [x] 自动备份到 `~/.agent_backups/`，按文件路径和时间戳组织
-- [x] 新增工具自动通过热加载注册，无需重启
-
-**涉及文件：** `src/tools/file.py`
+- [x] read_file_lines / edit_file_lines / undo_edit 三件套
+- [x] 自动备份 + Python 语法校验 + 自动回滚
 
 ### ~~1.3 Git 操作工具~~ ✅
-
-- [x] `git_status` — 查看工作区状态（分支/已暂存/未暂存/未跟踪/冲突）
-- [x] `git_diff` — 查看未暂存/已暂存变更（含统计信息）
-- [x] `git_commit` — 自动生成 commit message 并提交
-- [x] `git_push` — 推送（含安全检查，提示 pull 冲突）
-- [x] `git_pr` — 创建 Pull Request（支持 gh CLI 自动创建，无则给出操作指引）
-- [x] `git_log` — 查看提交历史（hash/日期/作者/信息）
-- [x] `git_branch` — 查看分支列表
-
-**涉及文件：** `src/tools/git.py`（新建）
+- [x] git_status / git_diff / git_commit / git_push / git_pr / git_log / git_branch
 
 ### ~~1.4 项目结构感知~~ ✅
+- [x] scan_project：20+ 语言/框架自动检测 + 文件树 + 依赖概览
 
-- [x] `scan_project` 工具：扫描项目目录，生成结构树 + 技术栈分析
-- [x] 自动检测项目语言（Python/JS/Rust/Go/Java 等 20+ 种）
-- [x] 自动识别框架和构建命令（npm test/pytest/cargo build 等）
-- [x] 启动时自动注入项目上下文到 system prompt
-- [x] 依赖概览：自动读取 package.json / pyproject.toml 的依赖列表
-- [x] 文件树可视化：按深度展示目录结构，带文件大小
+### ~~2.1 多模型后端与路由~~ ✅
+- [x] LLMBackend 抽象基类 + DeepSeekBackend 实现
+- [x] Flash/Pro 双模型 + 任务复杂度自动路由
+- [x] `/model` 命令切换
+- [ ] **待办**：Claude / GPT / Qwen 等其他厂商接入
+- [ ] **待办**：混合调用（思考用 Pro，执行用 Flash）
 
-**涉及文件：** `src/tools/project.py`（新建）、`src/main.py`
+---
 
-### ~~2.1 多模型后端与路由~~ ✅（2026-05-29）
+## 第二阶段：工程化增强 ✅（已完成）
 
-- [x] 抽象 LLM 后端接口（`LLMBackend` 抽象基类 + `DeepSeekBackend` 实现）
-- [x] 双模型支持：Flash（deepseek-v4-flash，32K 输出） + Pro（deepseek-v4-pro，64K 输出）
-- [x] 任务感知自动路由：简单任务（读文件、搜索、状态查询）→ Flash；复杂任务（写代码、重构、调试）→ Pro
-- [x] `/model` 命令：查看可用模型列表、手动切换 flash/pro
-- [x] 双模型独立配置：`.env` 中分别设置 MODEL_FLASH / MODEL_PRO 和各自的 max_tokens
-- [ ] **未完成**：Claude / GPT / Qwen 等其他厂商的接入
-- [ ] **未完成**：混合调用（思考用 Pro 规划，执行用 Flash 操作）
+### ~~2.2 Auto Mode 安全系统~~ ✅
+- [x] 三级安全等级：SAFE（只读）/ RISKY（可逆）/ DANGEROUS（破坏性）
+- [x] 29 个内置工具安全等级标注
+- [x] 手动/自动双模式（`/mode` 命令）
+- [x] 会话信任机制（`/trust` 命令）
+- [x] 工具执行前交互式确认
+- [x] 安全模式信息注入 system prompt
 
-**涉及文件：** `src/llm.py`（大重构）、`src/config.py`、`src/commands.py`、`src/session.py`
-- [ ] `/model` 命令：运行时切换模型（类似 Claude Code）
+### ~~1.5 项目规范检查~~ ✅
+- [x] check_project 六维度扫描 + 评分（0-100）
+- [x] generate_agents_md 自动生成 AGENTS.md
+- [x] 三级边界系统（✅始终 / ⚠️询问 / 🚫禁止）
 
-**涉及文件：** `src/llm.py`、`src/config.py`
+### ~~1.6 测试骨架 + CI~~ ✅
+- [x] tests/ 目录：4 个模块 93 个测试用例
+- [x] pyproject.toml pytest 配置
+- [x] .pre-commit-config.yaml（ruff + 文件校验）
+- [x] GitHub Actions CI（lint + test + spec + docs-sync）
 
-### 2.2 Auto Mode（安全自动执行）
+### ~~1.7 文档同步强制~~ ✅
+- [x] docs_sync_check 工具 + 硬编码映射表
+- [x] CI job + pre-commit 双重拦截
+- [x] AGENTS.md 显示完整规则
 
-- [ ] 给每个工具标注安全等级：
-  - `safe` — 自动放行（读文件、搜索等）
-  - `risky` — 暂停确认（写文件、删除等）
-  - `dangerous` — 必须确认（删除目录、推送等）
-- [ ] 可配置的安全策略（允许/拒绝/询问）
-- [ ] 会话内记住用户选择（例如"本次会话允许 git push"）
+### ~~1.8 文档体系完善~~ ✅
+- [x] docs/architecture.md / docs/development.md / docs/skills.md
+- [x] docs/changelog.md / docs/contributing.md / docs/features.md / docs/roadmap.md
+- [x] README.md 重写 + .env.example 修复
+- [x] 根目录清理（25→20 项）
 
-**涉及文件：** `src/tools/__init__.py`、`src/main.py` 新增安全模块
+---
+
+## 第三阶段：智能增强（🔄 进行中）
 
 ### 2.3 目标驱动长任务
 
@@ -129,70 +135,58 @@
 - [ ] Agent 循环中自动检查目标是否达成
 - [ ] 失败自动重试、变更自动 commit
 
-**涉及文件：** `src/commands.py`、`src/llm.py` 新增长任务循环
+**涉及文件：** `src/commands.py`、`src/llm.py`
 
 ### 2.4 项目级记忆
 
-- [ ] 跨会话记住项目的：
-  - 构建命令和测试命令
-  - 代码风格偏好
-  - 常用工具链
-  - 踩过的坑
+- [ ] 跨会话记住项目的构建命令、代码风格偏好、常用工具链、踩过的坑
 - [ ] 存储为项目本地 `.agent-memory/` 目录，随 Git 版本控制
 
 **涉及文件：** `src/tools/memory.py`
 
 ---
 
-## 第三阶段：平台化（远期 · 1-2 月）
+## 第四阶段：平台化（远期）
 
 ### 3.1 MCP 协议支持
-
-- [ ] 支持 Model Context Protocol（MCP）服务器接入
+- [ ] Model Context Protocol（MCP）服务器接入
 - [ ] 支持 stdio / HTTP / SSE 三种传输类型
-- [ ] 可接入外部数据源（数据库、文件系统、API 网关等）
 - [ ] MCP 工具自动注册为 Agent 可用工具
 
-### 3.2 Skill 自动匹配
-
-- [ ] Agent 启动时分析当前任务上下文
-- [ ] 自动加载最匹配的 Skill（已完成 skill_auto_match 接口）
-- [ ] 任务完成后自动卸载 Skill
+### 3.2 多厂商 LLM
+- [ ] Claude / GPT / Qwen 后端接入
+- [ ] 混合调用（思考用 Pro，执行用 Flash）
 
 ### 3.3 IDE/编辑器集成
-
 - [ ] VS Code 扩展：在编辑器内对话，高亮代码片段
-- [ ] 行内建议（类似 Copilot）
-- [ ] 文件差异对比（修改前/修改后）
 
 ### 3.4 架构自进化
-
 - [ ] Agent 能识别自己的性能瓶颈并生成改进提案
 - [ ] 工具调用热替换（不停机更新工具实现）
-- [ ] Agent 间协作（多 Agent 分布式执行）
 
 ---
 
 ## 版本里程碑
 
-| **v0.3** | **Git 操作 + 项目感知** | **✅ 已完成** |
 | 版本 | 目标 | 状态 |
-|------|------|------|
-| v0.1 | 通用对话 Agent | ✅ 已完成 |
-| v0.2 | 核心工具补齐 | ✅ 已完成 |
+|------|------|:----:|
+| v0.1 | 基础对话 Agent | ✅ 已完成 |
+| v0.2 | 核心工具补齐（文件/Shell/插件/记忆） | ✅ 已完成 |
 | v0.3 | Git 操作 + 项目感知 | ✅ 已完成 |
 | v0.4 | 多模型路由（Flash/Pro） | ✅ 已完成 |
-| v0.5 | Auto Mode（安全自动执行） | ⏳ 下一步 |
-| v0.6 | 目标驱动长任务 + 项目记忆 | 🗓️ 规划中 |
-| v1.0 | MCP + Skill 自动匹配 + IDE 集成 | 🗓️ 远期 |
-| v0.5 | 项目规范检查 + AGENTS.md | ✅ 已完成 |
-| v0.6 | Auto Mode（安全自动执行） | ⏳ 下一步 |
-| v0.7 | 目标驱动长任务 + 项目记忆 | 🗓️ 规划中 |
-| v0.5 | 项目规范检查 + AGENTS.md | ✅ 已完成 |
+| v0.5 | 项目规范检查 + AGENTS.md + 测试骨架 | ✅ 已完成 |
 | v0.6 | Auto Mode 安全系统 | ✅ 已完成 |
-| v0.7 | 目标驱动长任务 + 项目记忆 | 🗓️ 规划中 |
-| v1.0 | MCP + Skill 自动匹配 + IDE 集成 | 🗓️ 远期 |
+| v0.7 | 文档同步强制 + 文档体系 + CI | ✅ 已完成 |
+| v0.8 | 目标驱动长任务 + 项目级记忆 | 🗓️ 规划中 |
+| v1.0 | MCP + 多厂商 + IDE 集成 | 🗓️ 远期 |
+
+## 技术债务
+
+- [ ] **实时输出**：`run_command` 支持流式输出，类似 Claude Code 终端效果
 - [ ] **后台命令**：`run_command` 支持后台运行，不阻塞对话
+- [ ] **配置集中化**：`.env` + 环境变量 + 常量的统一管理
+- [ ] **日志系统**：补充详细的调用链路追踪
+- [ ] **错误恢复**：工具调用失败时更友好的回退路径
 
 ---
 
@@ -200,5 +194,6 @@
 
 1. **模型无关**：核心逻辑不依赖任何特定模型，LLM 是可插拔的后端
 2. **安全优先**：所有自动化操作必须有安全护栏，用户始终有最终控制权
-3. **渐进增强**：每阶段的能力独立可运行，不等待全部完成再发布
-4. **可观测**：Agent 做的每件事、花的每个 token、调用的每个工具都可查
+3. **文档同步**：写代码只是完成了一半，同步更新文档才算完成
+4. **渐进增强**：每阶段的能力独立可运行，不等待全部完成再发布
+5. **可观测**：Agent 做的每件事、花的每个 token、调用的每个工具都可查
