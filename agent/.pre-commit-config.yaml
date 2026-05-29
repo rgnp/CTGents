@@ -1,0 +1,33 @@
+# ── Pre-commit: 提交前自动检查 ──
+# 安装: pip install pre-commit && pre-commit install
+# 手动运行: pre-commit run --all-files
+
+repos:
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    # Ruff version - 与 pyproject.toml 中一致
+    rev: v0.15.15
+    hooks:
+      # 运行 ruff linter
+      - id: ruff
+        args: [--fix]
+      # 运行 ruff formatter
+      - id: ruff-format
+
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v5.0.0
+    hooks:
+      # 检查是否存在合并冲突标记
+      - id: check-merge-conflict
+      # 检查 yaml 文件语法
+      - id: check-yaml
+      # 检查 toml 文件语法
+      - id: check-toml
+      # 检查是否不小心添加了文件大小超过 500KB
+      - id: check-added-large-files
+        args: [--maxkb=500]
+      # 确保文件以换行符结尾
+      - id: end-of-file-fixer
+      # 去除行尾空白
+      - id: trailing-whitespace
+      # 检查 JSON 语法
+      - id: check-json

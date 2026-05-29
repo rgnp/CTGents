@@ -306,6 +306,8 @@ def _detect_language_and_framework(root: Path) -> dict:
 def _build_tree(root: Path, depth: int = 2, current_depth: int = 0,
                 prefix: str = "", is_last: bool = True) -> list[str]:
     """递归构建文件树。"""
+    if not root.exists() or not root.is_dir():
+        return [f"{prefix}{'└── ' if is_last else '├── '}[目录不存在]"]
     if current_depth > depth:
         return [f"{prefix}{'└── ' if is_last else '├── '}..."]
 

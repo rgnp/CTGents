@@ -44,6 +44,28 @@ ignore = [
 "tests/**/*.py" = ["D103"]
 "run.py" = ["D100", "D103"]
 
+
+# ── pytest: 测试配置 ──
+[tool.pytest.ini_options]
+minversion = "7.0"
+testpaths = ["tests"]
+pythonpath = ["src"]
+addopts = "-v --tb=short -p no:cacheprovider"
+# 标记: pytest -m slow
+markers = [
+    "slow: 速度较慢的测试（依赖安装等）",
+]
+
+[tool.coverage.run]
+source = ["src"]
+omit = ["src/tools/tokens.py"]
+
+[tool.coverage.report]
+exclude_also = [
+    "if __name__ == .__main__.:",
+    "except Exception:",
+    "pass",
+]
 [tool.ruff.format]
 quote-style = "double"
 indent-style = "space"
