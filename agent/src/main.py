@@ -226,6 +226,11 @@ def main() -> None:
                     messages.clear()
                     if r.save:   # /new: 同时重置 session
                         session_id = None
+                    # 重新注入环境上下文和记忆索引
+                    messages.insert(0, _make_env_message())
+                    mem_ctx = _make_memory_context()
+                    if mem_ctx:
+                        messages.insert(1, mem_ctx)
                 if r.exit:
                     break
                 if r.retry:
