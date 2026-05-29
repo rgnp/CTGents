@@ -296,6 +296,18 @@ def _cmd_plugin(r: CmdResult, _msgs, args, _sid) -> None:
 
 
 # ═══════════════════════════════════════════════════════════════
+# 热加载指令
+# ═══════════════════════════════════════════════════════════════
+
+@builtin("/reload", description="热加载指令系统（改 commands.py 后无需重启）")
+def _cmd_reload(r: CmdResult, _msgs, _args, _sid) -> None:
+    """重新加载 commands 模块自身，使新增/修改的指令立即生效。"""
+    from .tools.plugin_mgr import _plugins as plugin_cache
+    plugin_cache.clear()
+    r.message = "🔄 触发热加载，请稍后..."
+
+
+# ═══════════════════════════════════════════════════════════════
 # Skill 指令
 # ═══════════════════════════════════════════════════════════════
 
@@ -313,7 +325,6 @@ def _call_skill_tool(name: str, args: dict | None = None) -> str:
 @builtin_multi(["/skill", "/skills"], description="Skill 管理：列出/查看/加载等", usage="/skill <子命令> [参数]")
 def _cmd_skill(r: CmdResult, _msgs, args, _sid) -> None:
     if not args:
-        # 默认：列出所有 Skill
         result = _call_skill_tool("skill_auto_discover")
         r.message = result
         return
@@ -353,7 +364,6 @@ def _cmd_skill(r: CmdResult, _msgs, args, _sid) -> None:
             return
         name = rest[0]
         desc = " ".join(rest[1:])
-        # 调用 skill_create 需要更多参数，提示用户使用交互方式
         r.message = (
             f"创建 Skill 请使用工具接口更完善。\n"
             f"试试: skill_create name=\"{name}\" description=\"{desc}\" instructions=\"...\""
@@ -371,6 +381,73 @@ def _cmd_skill(r: CmdResult, _msgs, args, _sid) -> None:
             f"未知子命令: {sub}\n"
             f"可用子命令：list、show、load、context、reload、create、validate"
         )
+
+
+# ═══════════════════════════════════════════════════════════════
+# 状态指令
+# ═══════════════════════════════════════════════════════════════
+
+@builtin("/status", description="系统状态概览：插件、Skill、会话、配置一览")
+def _cmd_status(r: CmdResult, msgs, _args, sid) -> None:
+    from .config import (
+        MAX_CONTEXT_TOKENS, TOOL_RESULT_BUDGET, TOKEN_PER_CHAR,
+        TOOL_LOOP_THRESHOLD, MAX_RETRIES, DEEPSEEK_MODEL,
+        SESSION_DIR, PLUGINS_DIR,
+    )
+    from .tools.plugin_mgr import _plugins
+    from .tools.tokens import count_messages_tokens
+    from .session import list_sessions
+
+    # ── 插件 ──
+    plugin_count = len(_plugins)
+    tool_count = sum(len(getattr(mod, "TOOLS", [])) for mod in _plugins.values())
+
+    # ── Skill ──
+    skills_dir = Path("skills")
+    skill_dirs = [d for d in skills_dir.iterdir() if d.is_dir() and (d / "SKILL.md").is_file()] if skills_dir.is_dir() else []
+    skill_count = len(skill_dirs)
+
+    # ── 会话 ──
+    sessions = list_sessions()
+    session_count = len(sessions)
+    current_idx = None
+    if sid:
+        for i, s in enumerate(sessions, 1):
+            if s == sid:
+                current_idx = i
+                break
+
+    # ── 上下文 ──
+    msg_count = len(msgs)
+    used_tokens = count_messages_tokens(msgs)
+    usage_pct = used_tokens / MAX_CONTEXT_TOKENS * 100
+
+    lines = [
+        "╔══════════════════════════════╗",
+        "║      系统状态概览            ║",
+        "╚══════════════════════════════╝",
+        "",
+        f"  📦 插件    {plugin_count} 个 · {tool_count} 个工具",
+        f"  🧠 Skill   {skill_count} 个",
+        f"  💬 会话    {session_count} 个{'（当前第 ' + str(current_idx) + '）' if current_idx else ''}",
+        "",
+        "── 当前会话 ──",
+        f"  消息数:    {msg_count} 条",
+        f"  Token 占:  {used_tokens:,} / {MAX_CONTEXT_TOKENS:,}（{usage_pct:.1f}%）",
+        "",
+        "── 配置 ──",
+        f"  模型:           {DEEPSEEK_MODEL}",
+        f"  工具循环阈值:   {TOOL_LOOP_THRESHOLD:.0%}",
+        f"  工具结果预算:   {TOOL_RESULT_BUDGET:.0%}",
+        f"  Token/字符:     {TOKEN_PER_CHAR}",
+        f"  最大重试:       {MAX_RETRIES} 次",
+        "",
+        "── 路径 ──",
+        f"  工作目录: {os.getcwd()}",
+        f"  插件目录: {PLUGINS_DIR}",
+    ]
+
+    r.message = "\n".join(lines)
 
 
 # ═══════════════════════════════════════════════════════════════
