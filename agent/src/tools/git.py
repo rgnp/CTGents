@@ -1,7 +1,5 @@
 """Git 操作工具：状态查看、变更对比、提交、推送、PR、日志。"""
 
-import json
-import os
 import re
 import subprocess
 from pathlib import Path
@@ -611,7 +609,7 @@ def git_pr(title: str | None = None, body: str | None = None,
                 lines = commits.split("\n")
                 title = lines[0]  # 用第一个 commit message 作为 PR 标题
                 if len(lines) > 1:
-                    body = f"## 变更内容\n\n" + "\n".join(f"- {line}" for line in lines)
+                    body = "## 变更内容\n\n" + "\n".join(f"- {line}" for line in lines)
                 else:
                     body = "自动生成的 PR 描述。"
             else:

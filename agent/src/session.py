@@ -1,8 +1,10 @@
 import json
 import os
+from datetime import datetime
+
 from openai import OpenAI
 
-from .config import SESSION_DIR, DEEPSEEK_API_KEY, DEEPSEEK_BASE_URL
+from .config import DEEPSEEK_API_KEY, DEEPSEEK_BASE_URL, SESSION_DIR
 
 
 def list_sessions() -> list[str]:
@@ -34,7 +36,7 @@ def _meta_path(session_id: str) -> str:
 def get_session_name(session_id: str) -> str:
     """获取会话名称，未设置则返回会话 ID。"""
     try:
-        with open(_meta_path(session_id), "r", encoding="utf-8") as f:
+        with open(_meta_path(session_id), encoding="utf-8") as f:
             meta = json.load(f)
             return meta.get("name", session_id)
     except Exception:
@@ -47,7 +49,7 @@ def rename_session(session_id: str, name: str) -> None:
     meta_path = _meta_path(session_id)
     if os.path.exists(meta_path):
         try:
-            with open(meta_path, "r", encoding="utf-8") as f:
+            with open(meta_path, encoding="utf-8") as f:
                 meta = json.load(f)
         except Exception:
             pass
@@ -80,12 +82,12 @@ def save_session(messages: list[dict], session_id: str | None = None) -> str:
 
 def load_session(session_id: str) -> tuple[list[dict], str]:
     """加载会话，返回 (messages, summary)。"""
-    with open(_messages_path(session_id), "r", encoding="utf-8") as f:
+    with open(_messages_path(session_id), encoding="utf-8") as f:
         messages = json.load(f)
 
     summary_path = _summary_path(session_id)
     if os.path.exists(summary_path):
-        with open(summary_path, "r", encoding="utf-8") as f:
+        with open(summary_path, encoding="utf-8") as f:
             summary = f.read()
     else:
         summary = ""

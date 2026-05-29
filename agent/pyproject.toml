@@ -12,3 +12,39 @@ ctg = "src.main:main"
 
 [tool.setuptools.packages.find]
 include = ["src*"]
+
+# ── Ruff: 一站式 linter + formatter ──
+[tool.ruff]
+target-version = "py311"
+line-length = 120
+
+[tool.ruff.lint]
+select = [
+    "E", "W",     # pycodestyle
+    "F",           # Pyflakes
+    "I",           # isort
+    "N",           # pep8-naming
+    "D",           # pydocstyle
+    "UP",          # pyupgrade
+    "B",           # flake8-bugbear
+    "SIM",         # flake8-simplify
+    "C4",          # flake8-comprehensions
+]
+ignore = [
+    "D100",   # 不强制模块级 docstring
+    "D104",   # 不强制包级 docstring
+    "D107",   # 不强制 __init__ 的 docstring
+    "D205",   # 中文 docstring 摘要与正文之间无空行
+    "RUF001", # 中文项目允许全角标点在字符串中
+    "RUF002", # 中文项目允许全角标点在 docstring 中
+    "RUF003", # 中文项目允许全角标点在注释中
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**/*.py" = ["D103"]
+"run.py" = ["D100", "D103"]
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
+skip-magic-trailing-comma = false

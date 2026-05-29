@@ -9,9 +9,9 @@ pip install -r requirements.txt
 python run.py
 ```
 
-## 功能
-
-- 🗣️ 多轮对话 + 流式输出 + Token 预算管理
+- 🔍 **项目感知** — 自动扫描项目结构、语言、框架、依赖、构建命令
+- 📋 **规范检查** — 六维度扫描项目规范（基于 2500+ 案例的六大军规），评分 + 优化建议
+- 📝 **AGENTS.md** — 自动生成/更新面向 AI 的规范文件，定义命令/边界/工作流
 - 📝 文件行级编辑（read_file_lines / edit_file_lines / undo_edit）
 - 💻 Shell 命令执行（Python / 通用命令 / 代码搜索）
 - 🌿 **Git 集成** — 状态查看、差异对比、自动提交、推送、PR

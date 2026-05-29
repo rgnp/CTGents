@@ -7,10 +7,16 @@ import time
 from collections.abc import Callable
 from datetime import datetime
 
-from .commands import CmdResult, dispatch as dispatch_cmd
-from .config import SESSION_DIR
-from .llm import run_conversation, TokenCallback, ToolCallback, request_interrupt, clear_interrupt
+logging.basicConfig(
+    level=logging.WARNING,
+    format="%(asctime)s [%(levelname)s] %(message)s",
+    datefmt="%H:%M:%S",
+)
 
+from .commands import dispatch as dispatch_cmd
+from .config import SESSION_DIR
+from .llm import TokenCallback, clear_interrupt, request_interrupt, run_conversation
+from .session import list_sessions, load_session, save_session
 
 # ═══════════════════════════════════════════════════════════════
 # Esc 打断监听（Windows msvcrt 后台线程）
@@ -81,7 +87,6 @@ def _make_env_message() -> dict:
 def _make_memory_context() -> dict | None:
     """读取记忆文件的 frontmatter，生成简洁的记忆索引。"""
     from .config import MEMORY_DIR
-    import re
     mem_dir = os.path.join(MEMORY_DIR, "MEMORY.md")
     if not os.path.exists(mem_dir):
         return None
@@ -127,7 +132,7 @@ def _print_sessions(sessions: list[str]) -> None:
         preview = ""
         try:
             if os.path.exists(summary_path):
-                with open(summary_path, "r", encoding="utf-8") as f:
+                with open(summary_path, encoding="utf-8") as f:
                     preview = f.read()[:80].replace("\n", " ")
         except Exception:
             pass
@@ -199,6 +204,8 @@ TOOL_LABELS: dict[str, str] = {
     "git_branch":    "Git 分支",
     # 项目感知
     "scan_project":  "扫描项目",
+    "check_project": "规范检查",
+    "generate_agents_md": "生成规范",
 }
 
 

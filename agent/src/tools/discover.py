@@ -1,7 +1,5 @@
 """统一能力发现——一次调用了解所有可用能力。"""
 
-import re
-from pathlib import Path
 
 
 def discover_capabilities() -> str:

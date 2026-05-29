@@ -1,5 +1,12 @@
 # 功能列表
 
+## 2026-05-29（v0.5 规范检查）
+- [x] AGENTS.md：面向 AI 智能体的项目操作手册，含命令/测试/结构/风格/Git/边界
+- [x] check_project 工具：六维度扫描项目规范（命令/测试/结构/代码风格/Git/边界）
+- [x] check_project 评分系统：0-100 分 + 四级评级（优秀/良好/一般/需改进）
+- [x] generate_agents_md 工具：自动扫描项目并生成 AGENTS.md
+- [x] check_project 支持 fix=True 自动修复（自动生成缺失的 AGENTS.md）
+
 ## 2026-05-29（v0.4）
 ## 2026-05-29（增强）
 - [x] Esc 打断：流式回复时按 Esc 立即中断 API 调用，保留已收到的内容

@@ -1,4 +1,4 @@
-from ..config import TOKEN_PER_CHAR, MAX_CONTEXT_TOKENS, TOOL_RESULT_BUDGET
+from ..config import MAX_CONTEXT_TOKENS, TOKEN_PER_CHAR, TOOL_RESULT_BUDGET
 
 
 def estimate_tokens(text: str) -> int:
@@ -18,7 +18,8 @@ def count_messages_tokens(messages: list[dict]) -> int:
 
 def truncate_to_budget(raw_text: str, messages: list[dict]) -> str:
     """根据当前消息列表的剩余 token 预算动态截断文本。
-    不设固定上限——剩余空间多就多留，少就少留。"""
+    不设固定上限——剩余空间多就多留，少就少留。
+    """
     used = count_messages_tokens(messages)
     remaining = MAX_CONTEXT_TOKENS - used
 

@@ -5,6 +5,7 @@ import platform
 import shlex
 import subprocess
 from pathlib import Path
+
 from ..config import MAX_EXEC_TIMEOUT
 
 # ── 安全配置 ──
@@ -162,6 +163,7 @@ def run_command(command: str, timeout: int = 30, workdir: str | None = None) -> 
 
     Returns:
         命令输出（stdout + stderr）
+
     """
     # ── 安全检查 ──
     is_blocked, reason = _is_blocked(command)

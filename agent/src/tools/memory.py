@@ -1,7 +1,6 @@
 """记忆系统：agent 可以 remember / recall / forget 跨会话知识。"""
 
-import os
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 from ..config import MEMORY_DIR
@@ -116,7 +115,7 @@ def _rebuild_index() -> None:
 
 def _remember(name: str, content: str, mem_type: str) -> str:
     """创建或更新一条记忆。"""
-    now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    now = datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
     # description 只取第一句或前 30 字，避免索引过于冗长
     first_sentence = content.split("。")[0].split("\n")[0].strip()
     desc = first_sentence[:30] if first_sentence else content[:30]

@@ -1,7 +1,6 @@
 """项目结构感知：自动扫描项目、识别语言/框架、分析依赖、生成结构树。"""
 
 import json
-import os
 import re
 from pathlib import Path
 
@@ -323,8 +322,8 @@ def _build_tree(root: Path, depth: int = 2, current_depth: int = 0,
     # 过滤排除项
     entries = [
         e for e in entries
-        if e.name not in _EXCLUDE_DIRS
-        and not e.name.startswith(".")
+        if (e.name not in _EXCLUDE_DIRS
+        and not e.name.startswith("."))
         or e.name == ".env.example"  # 保留一些重要的点文件
         or e.name == ".gitignore"
     ]
@@ -447,7 +446,7 @@ def scan_project(path: str | None = None, depth: int = 2,
             if f.suffix in _SOURCE_EXTENSIONS:
                 source_files += 1
 
-    lines.append(f"📊 统计：")
+    lines.append("📊 统计：")
     lines.append(f"  目录: {total_dirs}")
     lines.append(f"  文件: {total_files}")
     lines.append(f"  源码文件: {source_files}")

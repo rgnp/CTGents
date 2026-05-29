@@ -1,3 +1,4 @@
+- [ai-agent-dev-standards-six-dimensions](ai-agent-dev-standards-six-dimensions.md) — 基于 GitHub 2500+ 案例研究的 AI Agent
 - [dev-workflow-docs-must-sync](dev-workflow-docs-must-sync.md) — 任何功能开发完成后必须同步更新以下文档（写代码只是完成了一半
 - [user-grade](user-grade.md) — 用户是2025年入学的研究生，当前为研一（硕士一年级）学生
 - [user-major-direction](user-major-direction.md) — 用户的专业是计算机技术，研究生大方向是自动驾驶，目前还在寻找

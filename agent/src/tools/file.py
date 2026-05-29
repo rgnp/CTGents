@@ -648,29 +648,32 @@ def delete_file(path: str) -> str:
 
 def execute(name: str, args: dict) -> str | None:
     if name == "read_file":
-        return read_file(args["path"])
+        return read_file(args.get("path", ""))
     if name == "read_file_lines":
         return read_file_lines(
-            args["path"],
+            args.get("path", ""),
             args.get("start_line"),
             args.get("end_line"),
         )
     if name == "write_file":
-        return write_file(args["path"], args.get("content", ""))
+        return write_file(args.get("path", ""), args.get("content", ""))
     if name == "edit_file_lines":
+        action = args.get("action", "")
+        if action not in ("replace", "delete", "insert"):
+            return f"edit_file_lines 缺少有效的 action 参数（received: {action!r}），必须为 replace/delete/insert 之一"
         return edit_file_lines(
-            args["path"],
-            args["action"],
-            args["start_line"],
+            args.get("path", ""),
+            action,
+            args.get("start_line", 1),
             args.get("end_line"),
             args.get("new_lines"),
         )
     if name == "undo_edit":
-        return undo_edit(args["path"])
+        return undo_edit(args.get("path", ""))
     if name == "count_lines":
-        return count_lines(args["path"])
+        return count_lines(args.get("path", ""))
     if name == "list_files":
         return list_files(args.get("path"))
     if name == "delete_file":
-        return delete_file(args["path"])
+        return delete_file(args.get("path", ""))
     return None

@@ -9,9 +9,8 @@ from pathlib import Path
 from types import SimpleNamespace
 
 from .config import SESSION_DIR
-from .session import list_sessions, get_session_name, rename_session
+from .session import get_session_name, list_sessions, rename_session
 from .tools import execute_tool
-
 
 # ═══════════════════════════════════════════════════════════════
 # 数据结构
@@ -30,6 +29,7 @@ class CmdResult:
 @dataclass
 class Command:
     """指令描述。提供这几个字段，系统自动处理帮助和分发。"""
+
     name: str
     description: str = ""
     usage: str = ""
@@ -313,7 +313,7 @@ def _cmd_reload(r: CmdResult, _msgs, _args, _sid) -> None:
 
 @builtin("/model", description="查看/切换 LLM 模型", usage="/model [flash|pro]")
 def _cmd_model(r: CmdResult, _msgs, args, _sid) -> None:
-    from .llm import get_current_model_name, switch_model, list_models
+    from .llm import get_current_model_name, list_models, switch_model
     if not args:
         current = get_current_model_name()
         r.message = f"当前模型: {current}\n" + list_models()
@@ -331,17 +331,17 @@ def _cmd_model(r: CmdResult, _msgs, args, _sid) -> None:
 @builtin("/status", description="系统状态概览：插件、会话、配置一览")
 def _cmd_status(r: CmdResult, msgs, _args, sid) -> None:
     from .config import (
-        MAX_CONTEXT_TOKENS, TOOL_RESULT_BUDGET, TOKEN_PER_CHAR,
-        TOOL_LOOP_THRESHOLD, MAX_RETRIES,
-        SESSION_DIR, PLUGINS_DIR,
+        MAX_CONTEXT_TOKENS,
+        MAX_RETRIES,
+        PLUGINS_DIR,
+        TOKEN_PER_CHAR,
+        TOOL_LOOP_THRESHOLD,
+        TOOL_RESULT_BUDGET,
     )
-    from .llm import get_current_model_name, get_current_model_id, list_models
-    from .tools.plugin_mgr import _plugins
-    from .tools.tokens import count_messages_tokens
+    from .llm import get_current_model_id, get_current_model_name
     from .session import list_sessions
     from .tools.plugin_mgr import _plugins
     from .tools.tokens import count_messages_tokens
-    from .session import list_sessions
 
     # ── 插件 ──
     plugin_count = len(_plugins)

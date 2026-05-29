@@ -9,16 +9,21 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from types import SimpleNamespace
 
-from openai import APITimeoutError, RateLimitError, APIConnectionError, InternalServerError, OpenAI
+from openai import APIConnectionError, APITimeoutError, InternalServerError, OpenAI, RateLimitError
 
 from .config import (
-    DEEPSEEK_API_KEY, DEEPSEEK_BASE_URL,
-    MAX_CONTEXT_TOKENS, TOOL_LOOP_THRESHOLD,
-    MAX_RETRIES, RETRY_BASE_DELAY,
-    MODEL_FLASH, MODEL_PRO,
-    FLASH_MAX_TOKENS, PRO_MAX_TOKENS,
+    DEEPSEEK_API_KEY,
+    DEEPSEEK_BASE_URL,
+    FLASH_MAX_TOKENS,
+    MAX_CONTEXT_TOKENS,
+    MAX_RETRIES,
+    MODEL_FLASH,
+    MODEL_PRO,
+    PRO_MAX_TOKENS,
+    RETRY_BASE_DELAY,
+    TOOL_LOOP_THRESHOLD,
 )
-from .tools import execute_tool, truncate_to_budget, get_tools
+from .tools import execute_tool, get_tools, truncate_to_budget
 from .tools.tokens import count_messages_tokens
 
 logger = logging.getLogger(__name__)
@@ -39,6 +44,7 @@ RETRYABLE = (
 
 class UserInterrupt(Exception):
     """用户主动中断（按 Esc 触发）。"""
+
     pass
 
 
@@ -68,6 +74,7 @@ def is_interrupt_requested() -> bool:
 @dataclass
 class ModelInfo:
     """模型元信息。"""
+
     id: str                    # 模型 ID，如 deepseek-v4-flash
     name: str                  # 显示名称，如 "Flash"
     provider: str = "deepseek" # 提供商
@@ -180,11 +187,16 @@ class DeepSeekBackend(LLMBackend):
                             if tc_delta.function.arguments:
                                 tc["function"]["arguments"] += tc_delta.function.arguments
         except UserInterrupt:
-            # 中断时返回已经收到的内容（不重复 clear_interrupt，已在前面清过）
+            # 中断时返回已收到的部分内容，但不作为完整回复
             content = "".join(content_parts) if content_parts else None
             if content:
                 on_token("\n\n[⚠️ 已中断 — 以上是已收到的部分回复]\n")
-            return content, None  # 中断时丢弃 tool_calls，返回 None 避免错误执行
+            raise  # 重新抛出，让 run_conversation 处理消息清理
+
+        # 流式正常结束
+        content = "".join(content_parts) if content_parts else None
+        final_tool_calls = tool_calls if tool_calls else None
+        return content, final_tool_calls
 
     def chat_non_stream(
         self,
@@ -451,7 +463,7 @@ def run_conversation(
             if on_progress:
                 on_progress()
         else:
-            copy.append({"role": "assistant", "content": content})
+            copy.append({"role": "assistant", "content": content or ""})
             messages[:] = copy
             if on_progress:
                 on_progress()

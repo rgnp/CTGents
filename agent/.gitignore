@@ -1,0 +1,78 @@
+# ── Python ──
+__pycache__/
+*.py[cod]
+*.pyo
+*.egg-info/
+*.egg
+dist/
+build/
+*.so
+*.manifest
+*.spec
+
+# ── 虚拟环境 ──
+.venv/
+venv/
+env/
+ENV/
+env.bak/
+venv.bak/
+
+# ── 环境变量（含密钥！）──
+.env
+*.env.local
+*.env.production
+
+# ── IDE / 编辑器 ──
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+.project
+.pydevproject
+.settings/
+*.sublime-workspace
+*.sublime-project
+
+# ── 操作系统 ──
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+Desktop.ini
+$RECYCLE.BIN/
+
+# ── 测试/覆盖率 ──
+.pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
+.tox/
+.mypy_cache/
+.ruff_cache/
+*.cover
+!.coveragerc
+
+# ── Jupyter ──
+.ipynb_checkpoints/
+*.ipynb
+
+# ── 日志 ──
+*.log
+logs/
+
+# ── 临时文件 ──
+tmp/
+temp/
+*.tmp
+*.bak
+*.orig
+
+# ── 项目内部（自动生成，不提交）──
+sessions/
+plugins/
+.agent_backups/

@@ -6,8 +6,8 @@ import sys
 
 from openai.types.chat import ChatCompletionMessageToolCall
 
-from .tokens import truncate_to_budget, estimate_tokens, count_messages_tokens
-from .plugin_mgr import get_plugin_tools, reload_plugins, get_plugin_spec
+from .plugin_mgr import get_plugin_spec, get_plugin_tools, reload_plugins
+from .tokens import count_messages_tokens, estimate_tokens, truncate_to_budget
 
 # ── 内置模块清单（供热加载遍历）──
 # (模块路径, TOOLS_变量名, execute函数名)
@@ -20,8 +20,8 @@ _BUILTIN_MODULES: list[tuple[str, str, str]] = [
     (".memory",    "TOOLS_MEMORY", "execute"),
     (".git",       "TOOLS_GIT",    "execute"),
     (".project",   "TOOLS_PROJECT","execute"),
+    (".lint",      "TOOLS_LINT",   "execute"),
 ]
-
 # discover + plugin_mgr 的工具直接定义在 __init__.py 的 _register_builtin 里
 _PLUGIN_MGR_TOOLS = [
     {
