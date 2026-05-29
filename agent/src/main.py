@@ -86,12 +86,7 @@ def _make_skill_context() -> dict | None:
     return make_discovery_context()
 
 
-def _auto_load_skills(messages: list[dict], user_input: str) -> None:
-    """根据用户输入自动匹配并加载 Skill。"""
-    from .skill_ctx import auto_match_and_load
-    result = auto_match_and_load(messages, user_input)
-    if result:
-        print(f"  [{result}]")
+
 
 
 # ── UI 辅助 ──
@@ -336,7 +331,6 @@ def main() -> None:
                     if last_user:
                         on_token, has_output = _make_display()
                         sid = [session_id]
-                        _auto_load_skills(messages, last_user)
                         reply = run_conversation(
                             messages, last_user, on_token, _on_tool,
                             on_progress=lambda: sid.__setitem__(0, save_session(messages, sid[0])),
@@ -349,7 +343,6 @@ def main() -> None:
             try:
                 on_token, has_output = _make_display()
                 sid = [session_id]
-                _auto_load_skills(messages, user_input)
                 reply = run_conversation(
                     messages, user_input, on_token, _on_tool,
                     on_progress=lambda: sid.__setitem__(0, save_session(messages, sid[0])),
@@ -366,8 +359,7 @@ def main() -> None:
                 if guide:
                     on_token, has_output = _make_display()
                     sid = [session_id]
-                    _auto_load_skills(messages, guide)
-                        reply = run_conversation(
+                    reply = run_conversation(
                         messages, guide, on_token, _on_tool,
                         on_progress=lambda: sid.__setitem__(0, save_session(messages, sid[0])),
                     )
