@@ -13,6 +13,7 @@ from .plugin_mgr import get_plugin_tools, reload_plugins, get_plugin_spec
 # (模块路径, TOOLS_变量名, execute函数名)
 _BUILTIN_MODULES: list[tuple[str, str, str]] = [
     (".web",       "TOOLS_WEB",   "execute"),
+    (".git",       "TOOLS_GIT",  "execute"),
     (".file",      "TOOLS_FILE",  "execute"),
     (".exec",      "TOOLS_EXEC",  "execute"),
     (".code",      "TOOLS_CODE",  "execute"),

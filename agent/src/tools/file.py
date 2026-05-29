@@ -576,8 +576,8 @@ def delete_file(path: str) -> str:
     if not filepath.is_file():
         return f"路径不是文件: {path}"
     try:
-        filepath.unlink()
-        return f"已删除: {filepath}"
+        track = _track_changes(str(filepath))
+        return f"已删除: {filepath}{track}"
     except OSError as e:
         return f"删除失败: {e}"
 
