@@ -37,6 +37,7 @@ MAX_EXEC_TIMEOUT: int = 5
 # ── 路径 ──
 SESSION_DIR: str = str(Path(__file__).parent.parent / "sessions")
 PLUGINS_DIR: str = str(Path(__file__).parent.parent / "plugins")
+MEMORY_DIR: str = str(Path(__file__).parent.parent / "memory")
 
 # ── Token 预算（核心设计）──
 # 放弃了写死字符数的做法，改为动态 token 预算管理。

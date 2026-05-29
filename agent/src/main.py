@@ -28,6 +28,22 @@ def _make_env_message() -> dict:
     }
 
 
+def _make_memory_context() -> dict | None:
+    """读取 MEMORY.md 索引，生成记忆上下文系统消息。无记忆时返回 None。"""
+    from .config import MEMORY_DIR
+    index_path = os.path.join(MEMORY_DIR, "MEMORY.md")
+    if not os.path.exists(index_path):
+        return None
+    content = open(index_path, encoding="utf-8").read().strip()
+    if not content:
+        return None
+    return {
+        "role": "system",
+        "content": f"已积累的记忆：\n{content}",
+        "_volatile": True,
+    }
+
+
 # ── UI 辅助 ──
 
 def _print_sessions(sessions: list[str]) -> None:
@@ -147,6 +163,11 @@ def main() -> None:
 
     # 注入环境上下文（每次启动刷新，不持久化到磁盘）
     messages.insert(0, _make_env_message())
+
+    # 注入已有记忆索引
+    mem_ctx = _make_memory_context()
+    if mem_ctx:
+        messages.insert(1, mem_ctx)
 
     print("Agent 已启动，输入 /help 查看指令列表\n")
 

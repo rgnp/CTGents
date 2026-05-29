@@ -8,6 +8,7 @@ from .file import TOOLS_FILE
 from .exec import TOOLS_EXEC
 from .code import TOOLS_CODE
 from .think import TOOLS_THINK
+from .memory import TOOLS_MEMORY
 from .plugin_mgr import get_plugin_tools, reload_plugins, get_plugin_spec
 
 # 每个内置模块的 execute 函数，按优先级排列（插件优先于内置）
@@ -35,12 +36,14 @@ from .code import execute as _exec_code
 from .think import execute as _exec_think
 from .discover import execute as _exec_discover
 from .plugin_mgr import execute as _exec_plugin_mgr
+from .memory import execute as _exec_memory
 
 _register_builtin(TOOLS_WEB, _exec_web)
 _register_builtin(TOOLS_FILE, _exec_file)
 _register_builtin(TOOLS_EXEC, _exec_exec)
 _register_builtin(TOOLS_CODE, _exec_code)
 _register_builtin(TOOLS_THINK, _exec_think)
+_register_builtin(TOOLS_MEMORY, _exec_memory)
 _register_builtin([
     {
         "type": "function",
