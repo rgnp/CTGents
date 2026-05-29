@@ -21,6 +21,129 @@ def _backup_path(filepath: Path) -> Path:
     return dst
 
 
+# ── 变更追踪 ──
+
+# 项目文档文件（搜索连带影响时的目标文件）
+_DOC_FILES = [
+    "ROADMAP.md",
+    "FEATURES.md",
+    "README.md",
+    "CHANGELOG.md",
+]
+
+# 排除的目录（搜索结果过滤）
+_EXCLUDE_DIRS = [".git", "__pycache__", "node_modules", ".venv", "venv", ".agent_backups"]
+
+
+def _get_changed_files() -> list[str]:
+    """通过 git 获取当前工作区的变更文件列表。
+    同时检查已修改（working tree）和未跟踪（untracked）的文件。
+    如果 git 不可用，返回空列表。
+    """
+    import subprocess
+
+    changed: set[str] = set()
+
+    try:
+        # 已修改但未暂存
+        r1 = subprocess.run(
+            ["git", "diff", "--name-only"],
+            capture_output=True, text=True, timeout=5, cwd=Path.cwd(),
+        )
+        if r1.returncode == 0:
+            for line in r1.stdout.strip().split("\n"):
+                if line.strip():
+                    changed.add(line.strip())
+
+        # 已暂存但未提交
+        r2 = subprocess.run(
+            ["git", "diff", "--cached", "--name-only"],
+            capture_output=True, text=True, timeout=5, cwd=Path.cwd(),
+        )
+        if r2.returncode == 0:
+            for line in r2.stdout.strip().split("\n"):
+                if line.strip():
+                    changed.add(line.strip())
+
+        # 未跟踪的新文件
+        r3 = subprocess.run(
+            ["git", "status", "--porcelain"],
+            capture_output=True, text=True, timeout=5, cwd=Path.cwd(),
+        )
+        if r3.returncode == 0:
+            for line in r3.stdout.strip().split("\n"):
+                line = line.strip()
+                if line.startswith("?? "):
+                    changed.add(line[3:].strip())
+    except Exception:
+        pass
+
+    return sorted(changed)
+
+
+def _find_affected_docs(changed_file: str) -> list[str]:
+    """搜索项目文档中哪些文件提到了这个变更文件的路径或名称。
+    返回匹配的文档文件路径列表（相对路径）。
+    """
+    import subprocess
+
+    if not Path.cwd().exists():
+        return []
+
+    # 用文件名（不含路径）和目标文件路径两种模式搜索
+    filename = Path(changed_file).name
+    patterns = [filename, changed_file.replace("\\", "/")]
+
+    affected: set[str] = set()
+    for doc in _DOC_FILES:
+        doc_path = Path.cwd() / doc
+        if not doc_path.exists():
+            continue
+        try:
+            text = doc_path.read_text(encoding="utf-8")
+            for pattern in patterns:
+                if pattern in text:
+                    affected.add(doc)
+                    break
+        except Exception:
+            continue
+
+    return sorted(affected)
+
+
+def _track_changes(just_modified: str) -> str:
+    """变更追踪：分析刚刚修改的文件，找出需要连带更新的文档。
+    返回格式化提醒字符串，空表示无连带。
+    """
+    changed_all = _get_changed_files()
+    if not changed_all:
+        return ""
+
+    # 收集所有受影响的文档
+    all_affected: set[str] = set()
+    for f in changed_all:
+        for doc in _find_affected_docs(f):
+            all_affected.add(doc)
+
+    # 排除刚修改的文件自身
+    just_name = Path(just_modified).name
+    all_affected.discard(just_name)
+    # 排除不存在的文件
+    all_affected = {d for d in all_affected if (Path.cwd() / d).exists()}
+
+    if not all_affected:
+        return ""
+
+    docs_list = "、".join(sorted(all_affected))
+    return (
+        f"\n\n📋 变更追踪：本轮共修改 {len(changed_all)} 个文件\n"
+        f"  受影响文档：{docs_list}\n"
+        f"  提示：上述文档中提到了被修改的文件，建议同步更新。"
+    )
+
+
+
+
 TOOLS_FILE = [
     {
         "type": "function",
@@ -288,7 +411,8 @@ def write_file(path: str, content: str) -> str:
     try:
         filepath.parent.mkdir(parents=True, exist_ok=True)
         filepath.write_text(content, encoding="utf-8")
-        return f"已写入: {filepath}（{len(content)} 字符）"
+        track = _track_changes(str(filepath))
+        return f"已写入: {filepath}（{len(content)} 字符）{track}"
     except OSError as e:
         return f"写入失败: {e}"
 
@@ -354,11 +478,13 @@ def edit_file_lines(path: str, action: str, start_line: int,
     elif action == "insert":
         changed_range += f"后（插入 {new_count} 行）"
 
+    track = _track_changes(str(filepath))
     return (
         f"已编辑: {filepath}\n"
         f"操作: {action} {changed_range}\n"
         f"备份: {backup_path}\n"
         f"文件现在共 {len(result)} 行"
+        f"{track}"
     )
 
 
