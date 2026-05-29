@@ -429,7 +429,10 @@ def git_commit(message: str | None = None, auto_stage: bool = True, path: str | 
     if not r2["success"]:
         return f"提交失败:\n{r2['stderr']}"
 
-    return f"✅ 提交成功\n\n{message}\n\n{r2['stdout'].strip()}"
+    # 提交后触发变更追踪：提醒需要同步的文档
+    from .file import _track_changes
+    track = _track_changes("(git_commit)")
+    return f"✅ 提交成功\n\n{message}\n\n{r2['stdout'].strip()}{track}"
 
 
 def _generate_commit_message(repo_path: str) -> str:

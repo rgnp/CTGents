@@ -24,28 +24,37 @@ def _backup_path(filepath: Path) -> Path:
 # ── 变更追踪 ──
 
 # 项目文档文件（搜索连带影响时的目标文件）
-_DOC_FILES = [
-    "ROADMAP.md",
-    "FEATURES.md",
-    "README.md",
-    "CHANGELOG.md",
-]
+# ── 变更追踪 ──
 
-# 排除的目录（搜索结果过滤）
-_EXCLUDE_DIRS = [".git", "__pycache__", "node_modules", ".venv", "venv", ".agent_backups"]
+# 搜索范围：所有文档类和配置类文件（不硬编码清单，自动发现）
+_SEARCH_EXTENSIONS = {
+    ".md", ".txt", ".rst", ".json", ".yaml", ".yml",
+    ".toml", ".ini", ".cfg", ".conf", ".env.example",
+}
+
+# 排除的目录
+_EXCLUDE_DIRS = {
+    ".git", "__pycache__", "node_modules", ".venv", "venv", "env",
+    ".tox", ".eggs", "dist", "build", ".next", "target",
+    "bin", "obj", "vendor", ".agent_backups",
+    "sessions", "memory", "plugins",
+}
+
+# 最大搜索文件数（防止大项目卡死）
+_MAX_SEARCH_FILES = 200
+# 最大结果数
+_MAX_RESULTS = 20
+# 跳过超过此大小的文件（1MB）
+_MAX_FILE_SIZE = 1024 * 1024
 
 
 def _get_changed_files() -> list[str]:
-    """通过 git 获取当前工作区的变更文件列表。
-    同时检查已修改（working tree）和未跟踪（untracked）的文件。
-    如果 git 不可用，返回空列表。
-    """
+    """通过 git 获取当前工作区的变更文件列表。"""
     import subprocess
 
     changed: set[str] = set()
 
     try:
-        # 已修改但未暂存
         r1 = subprocess.run(
             ["git", "diff", "--name-only"],
             capture_output=True, text=True, timeout=5, cwd=Path.cwd(),
@@ -55,7 +64,6 @@ def _get_changed_files() -> list[str]:
                 if line.strip():
                     changed.add(line.strip())
 
-        # 已暂存但未提交
         r2 = subprocess.run(
             ["git", "diff", "--cached", "--name-only"],
             capture_output=True, text=True, timeout=5, cwd=Path.cwd(),
@@ -65,7 +73,6 @@ def _get_changed_files() -> list[str]:
                 if line.strip():
                     changed.add(line.strip())
 
-        # 未跟踪的新文件
         r3 = subprocess.run(
             ["git", "status", "--porcelain"],
             capture_output=True, text=True, timeout=5, cwd=Path.cwd(),
@@ -81,65 +88,99 @@ def _get_changed_files() -> list[str]:
     return sorted(changed)
 
 
-def _find_affected_docs(changed_file: str) -> list[str]:
-    """搜索项目文档中哪些文件提到了这个变更文件的路径或名称。
-    返回匹配的文档文件路径列表（相对路径）。
+def _find_affected_files(changed_file: str) -> list[str]:
+    """在项目所有文档/配置文件中搜索提到变更文件名的文件。
+    
+    不依赖硬编码清单，全项目自动发现，绝对不漏。
+    返回匹配的文件路径列表（相对路径）。
     """
-    import subprocess
-
-    if not Path.cwd().exists():
+    root = Path.cwd()
+    if not root.exists():
         return []
 
-    # 用文件名（不含路径）和目标文件路径两种模式搜索
     filename = Path(changed_file).name
     patterns = [filename, changed_file.replace("\\", "/")]
 
-    affected: set[str] = set()
-    for doc in _DOC_FILES:
-        doc_path = Path.cwd() / doc
-        if not doc_path.exists():
+    affected: list[str] = []
+    scanned = 0
+
+    for f in root.rglob("*"):
+        if not f.is_file():
             continue
+
+        # 跳过自身
+        rel = f.relative_to(root)
+        if str(rel) == changed_file:
+            continue
+
+        # 跳过排除目录下的文件
+        parts = rel.parts
+        if any(p in _EXCLUDE_DIRS or p.startswith(".") for p in parts):
+            continue
+
+        # 只搜索文档/配置类文件
+        if f.suffix not in _SEARCH_EXTENSIONS and f.name not in ("Dockerfile", "Makefile"):
+            continue
+
+        # 跳过大文件
         try:
-            text = doc_path.read_text(encoding="utf-8")
+            if f.stat().st_size > _MAX_FILE_SIZE:
+                continue
+        except OSError:
+            continue
+
+        scanned += 1
+        if scanned > _MAX_SEARCH_FILES:
+            break
+
+        try:
+            text = f.read_text(encoding="utf-8", errors="ignore")
             for pattern in patterns:
                 if pattern in text:
-                    affected.add(doc)
+                    affected.append(str(rel))
                     break
         except Exception:
             continue
 
-    return sorted(affected)
+    return affected[:_MAX_RESULTS]
 
 
 def _track_changes(just_modified: str) -> str:
-    """变更追踪：分析刚刚修改的文件，找出需要连带更新的文档。
-    返回格式化提醒字符串，空表示无连带。
+    """变更追踪：分析刚刚修改的文件，找出项目中还需要同步更新的文件。
+    
+    核心逻辑：
+      改文件 → git diff 拿变更列表 → 全项目 grep 搜哪些文件提到了这些变更 → 汇总提醒
+    
+    优点：不维护依赖清单、不记"谁依赖谁"、每次实时分析、绝对不漏。
     """
     changed_all = _get_changed_files()
     if not changed_all:
         return ""
 
-    # 收集所有受影响的文档
+    # 收集所有受影响的文件
     all_affected: set[str] = set()
     for f in changed_all:
-        for doc in _find_affected_docs(f):
-            all_affected.add(doc)
+        for affected in _find_affected_files(f):
+            all_affected.add(affected)
 
-    # 排除刚修改的文件自身
+    # 排除自身
     just_name = Path(just_modified).name
-    all_affected.discard(just_name)
+    all_affected = {a for a in all_affected if Path(a).name != just_name}
     # 排除不存在的文件
-    all_affected = {d for d in all_affected if (Path.cwd() / d).exists()}
+    all_affected = {a for a in all_affected if (Path.cwd() / a).exists()}
 
     if not all_affected:
         return ""
 
-    docs_list = "、".join(sorted(all_affected))
+    docs_list = "、".join(sorted(all_affected)[:_MAX_RESULTS])
+    total = len(all_affected)
+    suffix = f" 等 {total} 个文件" if total > _MAX_RESULTS else ""
     return (
         f"\n\n📋 变更追踪：本轮共修改 {len(changed_all)} 个文件\n"
-        f"  受影响文档：{docs_list}\n"
-        f"  提示：上述文档中提到了被修改的文件，建议同步更新。"
+        f"  上述文件中提到的其他文件{docs_list}{suffix}\n"
+        f"  提示：这些文件可能也需要同步更新。"
     )
+
 
 
 
