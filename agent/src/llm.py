@@ -112,6 +112,7 @@ class DeepSeekBackend(LLMBackend):
             "model": self.info.id,
             "messages": messages,
             "stream": True,
+            "max_tokens": self.info.max_tokens,
         }
         if tools and self.info.supports_tools:
             kwargs["tools"] = tools
@@ -155,6 +156,7 @@ class DeepSeekBackend(LLMBackend):
         kwargs = {
             "model": self.info.id,
             "messages": messages,
+            "max_tokens": self.info.max_tokens,
         }
         if tools and self.info.supports_tools:
             kwargs["tools"] = tools

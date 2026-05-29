@@ -1,9 +1,8 @@
-"""配置中心：环境变量 → 安全配置 + 模型配置 + 行为参数。"""
+"""配置中心：环境变量 → 模型配置 + 行为参数。"""
 
 import os
 from pathlib import Path
 
-from openai import OpenAI
 from dotenv import load_dotenv
 from tavily import TavilyClient
 
@@ -22,13 +21,13 @@ DEEPSEEK_API_KEY: str = _require_env("DEEPSEEK_API_KEY")
 DEEPSEEK_BASE_URL: str = os.getenv("DEEPSEEK_BASE_URL", "https://api.deepseek.com")
 
 # ── 双模型配置 ──
-# Flash: 快速/便宜/带工具调用，适合日常问答和简单操作
+# Flash: 快速/省钱（1元/M入, 2元/M出），32K 输出足够日常操作和问答
 MODEL_FLASH: str = os.getenv("MODEL_FLASH", "deepseek-v4-flash")
-FLASH_MAX_TOKENS: int = int(os.getenv("FLASH_MAX_TOKENS", "8192"))
+FLASH_MAX_TOKENS: int = int(os.getenv("FLASH_MAX_TOKENS", "32768"))
 
-# Pro: 强推理/代码生成，适合复杂任务
+# Pro: 强推理/长代码（3元/M入, 6元/M出），64K 给大型重构留空间
 MODEL_PRO: str = os.getenv("MODEL_PRO", "deepseek-v4-pro")
-PRO_MAX_TOKENS: int = int(os.getenv("PRO_MAX_TOKENS", "8192"))
+PRO_MAX_TOKENS: int = int(os.getenv("PRO_MAX_TOKENS", "65536"))
 
 # Tavily 搜索
 TAVILY_API_KEY: str = _require_env("TAVILY_API_KEY")
