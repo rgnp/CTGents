@@ -383,6 +383,19 @@ def _backup(filepath: Path) -> Path:
     return dst
 
 
+def _validate_py(filepath: Path, backup_path: Path | None) -> str | None:
+    """Python 语法校验。失败则自动回滚到备份，返回错误消息。"""
+    if filepath.suffix != ".py":
+        return None
+    try:
+        compile(filepath.read_text(encoding="utf-8"), str(filepath), "exec")
+        return None
+    except SyntaxError as e:
+        if backup_path and backup_path.exists():
+            shutil.copy2(backup_path, filepath)
+        return f"语法校验失败，已自动回滚:\n  {e.filename}:{e.lineno}:{e.offset} {e.msg}\n  {e.text.rstrip() if e.text else ''}\n  请修正后重试。"
+
+
 def _list_backups(filepath: Path) -> list[Path]:
     """列出文件的所有备份，按时间倒序。"""
     try:
@@ -444,14 +457,15 @@ def read_file_lines(path: str, start_line: int | None = None, end_line: int | No
 
 
 def write_file(path: str, content: str) -> str:
-    """创建或覆写文件。写入前自动备份。"""
+    """创建或覆写文件。写入前自动备份，.py 文件自动语法校验。"""
     filepath = _resolve(path)
-    # 备份旧文件（如果存在）
-    if filepath.exists():
-        _backup(filepath)
+    backup = _backup(filepath) if filepath.exists() else None
     try:
         filepath.parent.mkdir(parents=True, exist_ok=True)
         filepath.write_text(content, encoding="utf-8")
+        err = _validate_py(filepath, backup)
+        if err:
+            return f"写入失败: {err}"
         track = _track_changes(str(filepath))
         return f"已写入: {filepath}（{len(content)} 字符）{track}"
     except OSError as e:
@@ -505,6 +519,12 @@ def edit_file_lines(path: str, action: str, start_line: int,
 
     # ── 写回 ──
     filepath.write_text("\n".join(result), encoding="utf-8")
+
+    # ── Python 语法校验 ──
+    err = _validate_py(filepath, backup_path)
+    if err:
+        track = _track_changes(str(filepath))
+        return f"编辑失败: {err}{track}"
 
     # ── 构造详细的变更报告 ──
     old_count = (e - s + 1) if action in ("replace", "delete") else 0
