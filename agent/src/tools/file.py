@@ -144,3 +144,15 @@ def delete_file(path: str) -> str:
         return f"已删除: {filepath}"
     except OSError as e:
         return f"删除失败: {e}"
+
+
+def execute(name: str, args: dict) -> str | None:
+    if name == "read_file":
+        return read_file(args["path"])
+    if name == "write_file":
+        return write_file(args["path"], args["content"])
+    if name == "list_files":
+        return list_files(args.get("path"))
+    if name == "delete_file":
+        return delete_file(args["path"])
+    return None

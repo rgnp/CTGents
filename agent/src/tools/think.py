@@ -27,3 +27,9 @@ TOOLS_THINK = [
 
 def think(thought: str) -> str:
     return ""
+
+
+def execute(name: str, args: dict) -> str | None:
+    if name == "think":
+        return think(args["thought"])
+    return None

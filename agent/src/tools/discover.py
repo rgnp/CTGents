@@ -76,3 +76,9 @@ def discover_capabilities() -> str:
             lines.append("")
 
     return "\n".join(lines).strip() if lines else "未找到任何能力"
+
+
+def execute(name: str, args: dict) -> str | None:
+    if name == "discover":
+        return discover_capabilities()
+    return None

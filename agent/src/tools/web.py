@@ -86,3 +86,11 @@ def read_page(url: str) -> str:
     if not text:
         return f"{url} 未能提取到有效正文内容。"
     return text
+
+
+def execute(name: str, args: dict) -> str | None:
+    if name == "search_web":
+        return search_web(args["query"])
+    if name == "read_page":
+        return read_page(args["url"])
+    return None

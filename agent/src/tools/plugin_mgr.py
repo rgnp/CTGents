@@ -62,6 +62,35 @@ def get_plugin_spec() -> str:
     return PLUGIN_SPEC
 
 
+def execute(name: str, args: dict) -> str | None:
+    if name == "install_plugin":
+        result = install_plugin(args["name"], args["code"])
+        _reload_all()
+        return result
+    if name == "list_plugins":
+        return list_plugins()
+    if name == "plugin_spec":
+        return get_plugin_spec()
+    return None
+
+
+def _reload_all() -> None:
+    """重扫描所有插件，刷新工具列表。"""
+    global _plugin_tools
+    _plugin_tools = discover_plugins()
+
+
+_plugin_tools: list[dict] = []
+
+
+def get_plugin_tools() -> list[dict]:
+    return _plugin_tools
+
+
+def reload_plugins() -> None:
+    _reload_all()
+
+
 def discover_plugins() -> list[dict]:
     """扫描 plugins/ 目录，加载所有 .py 插件，返回聚合的 TOOLS 列表。"""
     dirpath = Path(PLUGINS_DIR)

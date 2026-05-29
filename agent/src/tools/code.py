@@ -61,3 +61,9 @@ def grep_code(pattern: str, path: str | None = None) -> str:
             return f"搜索超时: {pattern}"
 
     return "系统中未找到 grep/rg/findstr，无法搜索代码。"
+
+
+def execute(name: str, args: dict) -> str | None:
+    if name == "grep_code":
+        return grep_code(args["pattern"], args.get("path"))
+    return None

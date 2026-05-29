@@ -56,3 +56,9 @@ def run_python(code: str) -> str:
         parts.append(f"[stderr]\n{result.stderr.rstrip()}")
 
     return "\n".join(parts) if parts else "(无输出)"
+
+
+def execute(name: str, args: dict) -> str | None:
+    if name == "run_python":
+        return run_python(args["code"])
+    return None
