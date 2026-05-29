@@ -45,7 +45,7 @@ def _add_cmd(cmd: Command) -> None:
     _registry.append(cmd)
     if cmd.handler:
         _handlers[cmd.name] = cmd.handler
-        # / 前缀别名
+        # / 前缀别名：/xxx 也能通过 xxx 调用
         if cmd.name.startswith("/") and len(cmd.name) > 1:
             _handlers.setdefault(cmd.name[1:], cmd.handler)
 
@@ -76,9 +76,7 @@ def _cmd_exit(r: CmdResult, _msgs, _args, _sid) -> None:
     r.exit = True
 
 
-@builtin("/help", description="显示指令列表")
-@builtin("/h", description="显示指令列表")
-@builtin("/?", description="显示指令列表")
+@builtin_multi(["/help", "/h", "/?"], description="显示指令列表")
 def _cmd_help(r: CmdResult, _msgs, _args, _sid) -> None:
     lines = ["指令列表：\n"]
     for cmd in sorted(_registry, key=lambda c: c.name):
