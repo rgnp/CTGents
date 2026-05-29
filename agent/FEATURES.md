@@ -1,10 +1,13 @@
 # 功能列表
 
+## 2026-05-29（v0.4）
+- [x] 多模型路由：LLMBackend 抽象基类 + DeepSeekBackend 实现，架构支持扩展其他厂商
+- [x] Flash/Pro 双模型：deepseek-v4-flash（32K 输出）和 deepseek-v4-pro（64K 输出）
+- [x] 任务自动路由：简单操作 → Flash（省钱），复杂代码 → Pro（强推理）
+- [x] /model 命令：查看可用模型列表，手动切换 flash/pro
+- [x] 双模型独立配置：MODEL_FLASH / MODEL_PRO 可分别设模型 ID 和 max_tokens
 
 ## 2026-05-29（v0.3）
-- [x] Git 操作工具集：git_status / git_diff / git_commit / git_push / git_pr / git_log / git_branch
-- [x] 自动生成 commit message（分析变更类型和文件，智能推断 prefix 和 scope）
-- [x] 项目结构感知：scan_project 工具（技术栈检测 + 文件树 + 依赖概览）
 - [x] 启动时自动注入项目结构上下文到 system prompt
 - [x] 识别 20+ 种编程语言和框架（Python/JS/Rust/Go/Java/C++ 等）
 ## 2026-05-29

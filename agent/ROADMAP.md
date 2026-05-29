@@ -11,8 +11,9 @@
 
 | 维度 | 能力 |
 |------|------|
-| ✅ 对话 | 多轮对话、流式输出、上下文管理、Token 预算 |
-| ✅ 工具系统 | 工具注册/调度、插件热加载、Tool Call 循环 |
+| ✅ 会话 | 保存/恢复/重命名/导出/列表 |
+| ✅ 指令系统 | 结构化注册、热加载、/help 自动聚合 |
+| ✅ 多模型 | Flash/Pro 双模型自动路由、/model 切换 |
 | ✅ 热加载 | `/reload` 刷新指令系统 + 内置工具 + 插件，无需重启 |
 | ✅ 文件操作 | read_file / write_file / list_files / delete_file |
 | ✅ 文件行级编辑 | read_file_lines（带行号读取）、edit_file_lines（替换/删除/插入）、undo_edit（撤销） |
@@ -30,8 +31,8 @@
 
 | 维度 | 能力 |
 |------|------|
-| ✅ ~~Git 集成~~ | ~~无 git 工具~~ → git_status/diff/log/commit/push/pr/branch |
-| ✅ ~~项目感知~~ | ~~不自动分析项目结构~~ → scan_project + 启动自动注入 |
+| ✅ ~~多模型~~ | ~~硬编码 DeepSeek~~ → Flash/Pro 双模型自动路由 + /model 切换 |
+| ❌ Auto Mode | 所有工具调用都需要 LLM 判断，无安全等级机制 |
 | ❌ 多模型 | 硬编码 DeepSeek，不支持按任务路由不同模型 |
 | ❌ Auto Mode | 所有工具调用都需要 LLM 判断，无安全等级机制 |
 | ❌ 长任务 | 无后台会话、无目标驱动持续执行 |
@@ -84,17 +85,17 @@
 
 **涉及文件：** `src/tools/project.py`（新建）、`src/main.py`
 
----
+### ~~2.1 多模型后端与路由~~ ✅（2026-05-29）
 
-## 第二阶段：工作流深度（中期 · 3-4 周）
+- [x] 抽象 LLM 后端接口（`LLMBackend` 抽象基类 + `DeepSeekBackend` 实现）
+- [x] 双模型支持：Flash（deepseek-v4-flash，32K 输出） + Pro（deepseek-v4-pro，64K 输出）
+- [x] 任务感知自动路由：简单任务（读文件、搜索、状态查询）→ Flash；复杂任务（写代码、重构、调试）→ Pro
+- [x] `/model` 命令：查看可用模型列表、手动切换 flash/pro
+- [x] 双模型独立配置：`.env` 中分别设置 MODEL_FLASH / MODEL_PRO 和各自的 max_tokens
+- [ ] **未完成**：Claude / GPT / Qwen 等其他厂商的接入
+- [ ] **未完成**：混合调用（思考用 Pro 规划，执行用 Flash 操作）
 
-### 2.1 多模型后端与路由
-
-- [ ] 抽象 LLM 后端接口（`LLMBackend` 类），支持切换：
-  - DeepSeek V3/V4
-  - Claude（Sonnet/Opus）
-  - GLM / Qwen / MiniMax 等国产模型
-- [ ] 简单任务 / 复杂任务路由（按 Token 预算或任务复杂度自动选择模型）
+**涉及文件：** `src/llm.py`（大重构）、`src/config.py`、`src/commands.py`、`src/session.py`
 - [ ] `/model` 命令：运行时切换模型（类似 Claude Code）
 
 **涉及文件：** `src/llm.py`、`src/config.py`
@@ -164,10 +165,10 @@
 
 | **v0.3** | **Git 操作 + 项目感知** | **✅ 已完成** |
 | **v0.4** | 多模型路由 + Auto Mode | 等待开始 |
-| **v0.5** | 目标驱动长任务 + 项目记忆 | 中期 |
+| **v0.4** | **多模型路由（Flash/Pro）** | **✅ 已完成** |
+| **v0.5** | Auto Mode（安全自动执行） | 等待开始 |
+| **v0.6** | 目标驱动长任务 + 项目记忆 | 中期 |
 | **v1.0** | MCP 支持 + Skill 自动匹配 + IDE 集成 | 远期 |
-
----
 
 ## 技术债务与架构优化
 
