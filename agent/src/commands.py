@@ -1,4 +1,4 @@
-"""指令系统。添加新指令：@register("/xxx") + 函数。"""
+"""指令系统。结构化注册：提供 name/description/usage/handler 即可。"""
 
 import json
 import os
@@ -11,8 +11,11 @@ from types import SimpleNamespace
 from .config import SESSION_DIR
 from .session import list_sessions, get_session_name, rename_session
 from .tools import execute_tool
-from .tools.plugin_mgr import discover_plugins
 
+
+# ═══════════════════════════════════════════════════════════════
+# 数据结构
+# ═══════════════════════════════════════════════════════════════
 
 @dataclass
 class CmdResult:
@@ -24,57 +27,81 @@ class CmdResult:
     retry: bool = False
 
 
-CmdHandler = Callable[["CmdResult", list[dict], list[str], str | None], None]
+@dataclass
+class Command:
+    """指令描述。提供这几个字段，系统自动处理帮助和分发。"""
+    name: str
+    description: str = ""
+    usage: str = ""
+    handler: Callable[["CmdResult", list[dict], list[str], str | None], None] | None = None
 
-COMMANDS: dict[str, CmdHandler] = {}
+
+# 内部注册表
+_registry: list[Command] = []
+_handlers: dict[str, Callable] = {}
 
 
-def register(*names: str):
-    def deco(fn: CmdHandler):
-        for name in names:
-            COMMANDS[name] = fn
+def _add_cmd(cmd: Command) -> None:
+    _registry.append(cmd)
+    if cmd.handler:
+        _handlers[cmd.name] = cmd.handler
+        # / 前缀别名
+        if cmd.name.startswith("/") and len(cmd.name) > 1:
+            _handlers.setdefault(cmd.name[1:], cmd.handler)
+
+
+# ── 给内置命令用的装饰器 ──
+
+def builtin(name: str, description: str = "", usage: str = ""):
+    def deco(fn):
+        _add_cmd(Command(name=name, description=description, usage=usage, handler=fn))
         return fn
     return deco
 
+
+def builtin_multi(names: list[str], description: str = "", usage: str = ""):
+    def deco(fn):
+        for name in names:
+            _add_cmd(Command(name=name, description=description, usage=usage, handler=fn))
+        return fn
+    return deco
 
 
 # ═══════════════════════════════════════════════════════════════
 # 内置指令
 # ═══════════════════════════════════════════════════════════════
 
-@register("/exit", "/quit", "/q")
-def _cmd_exit(r: CmdResult, _msgs: list[dict], _args: list[str], _sid: str | None) -> None:
-    """退出程序"""
+@builtin_multi(["/exit", "/quit", "/q"], description="退出程序")
+def _cmd_exit(r: CmdResult, _msgs, _args, _sid) -> None:
     r.exit = True
 
 
-@register("/help", "/h", "/?")
-def _cmd_help(r: CmdResult, _msgs: list[dict], _args: list[str], _sid: str | None) -> None:
-    """显示指令列表"""
-    lines = ["可用指令："]
-    for name in sorted(COMMANDS):
-        doc = COMMANDS[name].__doc__ or ""
-        lines.append(f"  {name:<14} {doc}")
+@builtin("/help", description="显示指令列表")
+@builtin("/h", description="显示指令列表")
+@builtin("/?", description="显示指令列表")
+def _cmd_help(r: CmdResult, _msgs, _args, _sid) -> None:
+    lines = ["指令列表：\n"]
+    for cmd in sorted(_registry, key=lambda c: c.name):
+        lines.append(f"  {cmd.name:<12} {cmd.description}")
+        if cmd.usage:
+            lines.append(f"  {'':<12} 用法: {cmd.usage}")
     r.message = "\n".join(lines)
 
 
-@register("/clear", "/c")
-def _cmd_clear(r: CmdResult, msgs: list[dict], _args: list[str], _sid: str | None) -> None:
-    """清除对话上下文"""
+@builtin_multi(["/clear", "/c"], description="清除对话上下文")
+def _cmd_clear(r: CmdResult, msgs, _args, _sid) -> None:
     msgs.clear()
     r.save = True
     r.message = "上下文已清除"
 
 
-@register("/save")
-def _cmd_save(r: CmdResult, _msgs: list[dict], _args: list[str], _sid: str | None) -> None:
-    """强制保存当前会话"""
+@builtin("/save", description="强制保存当前会话")
+def _cmd_save(r: CmdResult, _msgs, _args, _sid) -> None:
     r.save = True
 
 
-@register("/rename")
-def _cmd_rename(r: CmdResult, msgs: list[dict], args: list[str], sid: str | None) -> None:
-    """重命名当前会话  /rename <名称>"""
+@builtin("/rename", description="重命名当前会话", usage="/rename <名称>")
+def _cmd_rename(r: CmdResult, _msgs, args, sid) -> None:
     if not args:
         r.message = "用法: /rename <名称>"
         return
@@ -86,9 +113,8 @@ def _cmd_rename(r: CmdResult, msgs: list[dict], args: list[str], sid: str | None
         r.save = True
 
 
-@register("/sessions", "/ls")
-def _cmd_sessions(r: CmdResult, _msgs: list[dict], _args: list[str], _sid: str | None) -> None:
-    """列出历史会话"""
+@builtin_multi(["/sessions", "/ls"], description="列出历史会话")
+def _cmd_sessions(r: CmdResult, _msgs, _args, _sid) -> None:
     sessions = list_sessions()
     if not sessions:
         r.message = "没有历史会话"
@@ -96,26 +122,22 @@ def _cmd_sessions(r: CmdResult, _msgs: list[dict], _args: list[str], _sid: str |
     lines = ["历史会话："]
     for i, sid in enumerate(sessions, 1):
         name = get_session_name(sid)
-        summary_path = os.path.join(SESSION_DIR, sid, "summary.txt")
-        preview = ""
         try:
-            if os.path.exists(summary_path):
-                with open(summary_path, "r", encoding="utf-8") as f:
-                    preview = f.read()[:50].replace("\n", " ")
+            sp = os.path.join(SESSION_DIR, sid, "summary.txt")
+            with open(sp, encoding="utf-8") as f:
+                preview = f.read()[:50].replace("\n", " ")
         except Exception:
-            pass
+            preview = ""
         marker = "← 当前" if sid == _sid else ""
-        if name != sid:
-            lines.append(f"  [{i}] {name}  {marker}")
-            lines.append(f"         {sid}  {preview}")
-        else:
-            lines.append(f"  [{i}] {sid}  {preview}  {marker}")
+        display = name if name != sid else sid
+        lines.append(f"  [{i}] {display}  {marker}")
+        if preview:
+            lines.append(f"         {preview}")
     r.message = "\n".join(lines)
 
 
-@register("/load")
-def _cmd_load(r: CmdResult, _msgs: list[dict], args: list[str], _sid: str | None) -> None:
-    """切换会话  /load <编号>"""
+@builtin("/load", description="切换会话", usage="/load <编号>")
+def _cmd_load(r: CmdResult, _msgs, args, _sid) -> None:
     if not args:
         r.message = "用法: /load <编号>"
         return
@@ -123,27 +145,23 @@ def _cmd_load(r: CmdResult, _msgs: list[dict], args: list[str], _sid: str | None
     try:
         idx = int(args[0]) - 1
         if 0 <= idx < len(sessions):
-            target = sessions[idx]
-            name = get_session_name(target)
-            r.load = target
+            r.load = sessions[idx]
             r.save = True
-            r.message = f"切换到: {name}"
+            r.message = f"切换到: {get_session_name(r.load)}"
         else:
             r.message = f"无效编号，共 {len(sessions)} 个会话"
     except ValueError:
         r.message = f"无效编号: {args[0]}"
 
 
-@register("/new")
-def _cmd_new(r: CmdResult, _msgs: list[dict], _args: list[str], _sid: str | None) -> None:
-    """新建会话（自动保存当前）"""
+@builtin("/new", description="新建会话（自动保存当前）")
+def _cmd_new(r: CmdResult, _msgs, _args, _sid) -> None:
     r.save = True
     r.clear = True
 
 
-@register("/pop")
-def _cmd_pop(r: CmdResult, msgs: list[dict], args: list[str], _sid: str | None) -> None:
-    """撤回最后一条对话  /pop [数量]"""
+@builtin("/pop", description="撤回最后一条对话", usage="/pop [数量]")
+def _cmd_pop(r: CmdResult, msgs, args, _sid) -> None:
     n = int(args[0]) if args else 1
     removed = 0
     for _ in range(n):
@@ -156,12 +174,10 @@ def _cmd_pop(r: CmdResult, msgs: list[dict], args: list[str], _sid: str | None) 
     r.message = f"已撤回 {removed} 条对话"
 
 
-@register("/export")
-def _cmd_export(r: CmdResult, msgs: list[dict], args: list[str], sid: str | None) -> None:
-    """导出对话为 Markdown  /export [轮数] [文件名]"""
+@builtin("/export", description="导出对话为 Markdown", usage="/export [轮数] [文件名]")
+def _cmd_export(r: CmdResult, msgs, args, sid) -> None:
     count: int | None = None
     name_parts: list[str] = []
-
     if args:
         try:
             count = int(args[0])
@@ -174,21 +190,18 @@ def _cmd_export(r: CmdResult, msgs: list[dict], args: list[str], sid: str | None
 
     messages = list(msgs)
     if count is not None:
-        rounds = []
-        user_count = 0
+        rounds, n = [], 0
         for m in reversed(messages):
             rounds.insert(0, m)
             if m.get("role") == "user":
-                user_count += 1
-                if user_count >= count:
+                n += 1
+                if n >= count:
                     break
         messages = rounds
 
     lines = [f"# {name}\n"]
     for m in messages:
-        role = m.get("role", "")
-        content = m.get("content", "") or ""
-        tc = m.get("tool_calls")
+        role, content, tc = m.get("role", ""), m.get("content", "") or "", m.get("tool_calls")
         if role == "system":
             continue
         elif role == "user":
@@ -203,15 +216,13 @@ def _cmd_export(r: CmdResult, msgs: list[dict], args: list[str], sid: str | None
             preview = content[:120].replace("\n", " ") + ("..." if len(content) > 120 else "")
             lines.append(f"*[工具结果: {preview}]*\n")
 
-    text = "\n".join(lines)
     filepath = Path(filename)
-    filepath.write_text(text, encoding="utf-8")
-    r.message = f"已导出到: {filepath.resolve()}（{len(text)} 字符）"
+    filepath.write_text("\n".join(lines), encoding="utf-8")
+    r.message = f"已导出到: {filepath.resolve()}（{len(lines)} 行）"
 
 
-@register("/edit")
-def _cmd_edit(r: CmdResult, msgs: list[dict], args: list[str], _sid: str | None) -> None:
-    """修改并重发最后一条对话  /edit <新内容>"""
+@builtin("/edit", description="修改最后一条对话并重发", usage="/edit <新内容>")
+def _cmd_edit(r: CmdResult, msgs, args, _sid) -> None:
     if not args:
         r.message = "用法: /edit <新内容>"
         return
@@ -226,9 +237,8 @@ def _cmd_edit(r: CmdResult, msgs: list[dict], args: list[str], _sid: str | None)
     r.message = f"已修改: {new_text}"
 
 
-@register("/run")
-def _cmd_run(r: CmdResult, _msgs: list[dict], args: list[str], _sid: str | None) -> None:
-    """直接调用工具  /run <工具名> <参数=值...>"""
+@builtin("/run", description="直接调用工具", usage="/run <工具名> <参数=值...>")
+def _cmd_run(r: CmdResult, _msgs, args, _sid) -> None:
     if not args:
         r.message = "用法: /run <工具名> <参数=值...>"
         return
@@ -242,16 +252,10 @@ def _cmd_run(r: CmdResult, _msgs: list[dict], args: list[str], _sid: str | None)
     r.message = execute_tool(tc)
 
 
-# ═══════════════════════════════════════════════════════════════
-# 插件指令（agent 可通过 install_plugin 扩展）
-# ═══════════════════════════════════════════════════════════════
-
-@register("/plugin")
-def _cmd_plugin(r: CmdResult, _msgs: list[dict], args: list[str], _sid: str | None) -> None:
-    """插件快捷入口  /plugin <插件名> [参数=值...]  或 /plugin 列出所有"""
+@builtin("/plugin", description="列出/调用插件", usage="/plugin [工具名] [参数=值...]")
+def _cmd_plugin(r: CmdResult, _msgs, args, _sid) -> None:
+    from .tools.plugin_mgr import _plugins
     if not args:
-        # 列出所有插件及其工具
-        from .tools.plugin_mgr import _plugins
         if not _plugins:
             r.message = "未安装任何插件。"
             return
@@ -268,12 +272,8 @@ def _cmd_plugin(r: CmdResult, _msgs: list[dict], args: list[str], _sid: str | No
         return
 
     name = args[0]
-    # 找匹配的插件工具
-    from .tools.plugin_mgr import _plugins
     for mod in _plugins.values():
-        if hasattr(mod, "TOOLS") and any(
-            t["function"]["name"] == name for t in mod.TOOLS
-        ):
+        if hasattr(mod, "TOOLS") and any(t["function"]["name"] == name for t in mod.TOOLS):
             raw = " ".join(args[1:])
             tool_args: dict[str, str] = {}
             if raw:
@@ -282,8 +282,7 @@ def _cmd_plugin(r: CmdResult, _msgs: list[dict], args: list[str], _sid: str | No
             tc = SimpleNamespace(function=SimpleNamespace(name=name, arguments=json.dumps(tool_args)))
             r.message = execute_tool(tc)
             return
-
-    r.message = f"未找到插件工具: {name}\n（用 /plugin 查看所有可用插件工具）"
+    r.message = f"未找到插件工具: {name}"
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -296,20 +295,30 @@ def dispatch(user_input: str, messages: list[dict], session_id: str | None) -> C
     cmd = parts[0].lower()
     args = parts[1:]
 
-    handler = COMMANDS.get(cmd)
+    handler = _handlers.get(cmd)
     if handler:
         handler(r, messages, args, session_id)
     return r
 
 
 def register_plugin_commands() -> None:
-    """扫描已加载插件，将其 COMMANDS 注册到指令系统。可随时调用来刷新。"""
+    """扫描插件，将其 COMMANDS 注册到指令系统。"""
     from .tools.plugin_mgr import _plugins
     for mod in _plugins.values():
-        if hasattr(mod, "COMMANDS") and isinstance(mod.COMMANDS, dict):
-            for cmd_name, handler in mod.COMMANDS.items():
-                COMMANDS[cmd_name] = handler
+        cmds = getattr(mod, "COMMANDS", None)
+        if cmds is None:
+            continue
+        # 支持两种格式：list[Command] 或 dict{name: handler}
+        if isinstance(cmds, dict):
+            for cmd_name, handler in cmds.items():
+                c = Command(name=cmd_name, handler=handler)
+                _add_cmd(c)
+        elif isinstance(cmds, list):
+            for c in cmds:
+                if isinstance(c, Command):
+                    _add_cmd(c)
+                elif isinstance(c, dict) and "name" in c:
+                    _add_cmd(Command(**c))
 
-
-# 启动时加载
+# 启动时加载插件指令
 register_plugin_commands()
