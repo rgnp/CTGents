@@ -234,20 +234,24 @@ def main() -> None:
                     )
                     if last_user:
                         on_token, has_output = _make_display()
+                        sid = [session_id]
                         reply = run_conversation(
                             messages, last_user, on_token, _on_tool,
-                            on_progress=lambda: save_session(messages, session_id),
+                            on_progress=lambda: sid.__setitem__(0, save_session(messages, sid[0])),
                         )
+                        session_id = sid[0]
                         if has_output():
                             print()
                 continue
 
             try:
                 on_token, has_output = _make_display()
+                sid = [session_id]
                 reply = run_conversation(
                     messages, user_input, on_token, _on_tool,
-                    on_progress=lambda: save_session(messages, session_id),
+                    on_progress=lambda: sid.__setitem__(0, save_session(messages, sid[0])),
                 )
+                session_id = sid[0]
                 if has_output():
                     print()
             except KeyboardInterrupt:
@@ -258,10 +262,12 @@ def main() -> None:
                     guide = ""
                 if guide:
                     on_token, has_output = _make_display()
+                    sid = [session_id]
                     reply = run_conversation(
                         messages, guide, on_token, _on_tool,
-                        on_progress=lambda: save_session(messages, session_id),
+                        on_progress=lambda: sid.__setitem__(0, save_session(messages, sid[0])),
                     )
+                    session_id = sid[0]
                     if has_output():
                         print()
             except Exception as e:
