@@ -98,6 +98,32 @@ def _cmd_hello(r: CmdResult, _msgs, args, _sid) -> None:
 ### CmdResult 字段参考
 
 | 字段 | 类型 | 说明 |
+---
+
+## 七、硬性要求：文档同步
+
+> **写代码只是完成了一半，同步更新文档才算完成。**
+
+每次修改代码后，在 commit 前必须运行：
+
+```bash
+make docs-sync
+```
+
+这个命令会检查你修改的文件是否漏掉了应该同步的文档。如果提示违规，先去更新对应的文档再提交。
+
+完整的提交流程：
+
+```bash
+make lint        # 1. 代码检查
+make test        # 2. 测试通过
+make docs-sync   # 3. 文档同步检查
+make check       # 4. 规范评分 ≥ 80
+git commit       # 5. 提交（pre-commit 会自动重复检查 3 和 4）
+```
+
+映射关系定义在 `src/tools/lint.py` 的 `_DOC_SYNC_MAP` 中。新增模块时记得更新这个映射表。
+
 |------|------|------|
 | `message` | str | 显示给用户的消息 |
 | `exit` | bool | 是否退出程序 |

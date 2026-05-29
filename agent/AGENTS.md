@@ -98,6 +98,35 @@ agent/
 ├── ROADMAP.md              # 开发路线图
 ├── FEATURES.md             # 功能列表
 ├── learn_skill.md          # Skill 学习说明
+## 文档同步规则（硬性要求）
+
+> **写代码只是完成了一半，同步更新文档才算完成。**
+
+每次修改代码后，必须同步更新以下对应文档：
+
+| 修改的文件 | 必须同步更新的文档 |
+|------------|-------------------|
+| `src/llm.py`、`src/safety.py` | AGENTS.md、docs/architecture.md |
+| `src/commands.py` | AGENTS.md、README.md |
+| `src/main.py` | README.md、docs/architecture.md |
+| `src/tools/*.py` | AGENTS.md |
+| `src/config.py` | .env.example、README.md |
+| `tests/` | CHANGELOG.md |
+| `pyproject.toml`、`Makefile` | README.md、AGENTS.md、CHANGELOG.md |
+| `.github/workflows/` | README.md、AGENTS.md |
+| AGENTS.md | README.md |
+| README.md | AGENTS.md |
+
+**提交前的标准流程：**
+1. `make lint` — 代码检查
+2. `make test` — 测试通过
+3. `make docs-sync` — 文档同步检查
+4. `make check` — 规范评分 ≥ 80
+5. `git commit` — 提交
+
+`docs_sync_check` 工具可在 commit 前调用，自动检查是否有违反规则。
+
+
 ├── pyproject.toml          # 包配置
 ├── requirements.txt        # 依赖列表
 ├── .env.example            # 环境变量模板

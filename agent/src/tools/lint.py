@@ -69,6 +69,28 @@ TOOLS_LINT = [
             },
         },
     },
+    {
+        "type": "function",
+        "function": {
+            "name": "docs_sync_check",
+            "description": (
+                "检查当前 Git 工作区的文件变更是否违反了文档同步规范。"
+                "遍历所有修改/新增/删除的文件，根据硬编码的映射表检查"
+                "是否应该同步更新对应的文档。如果违反（改了代码但没改文档），"
+                "给出明确的违规提醒。建议每次 commit 前运行。"
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "path": {
+                        "type": "string",
+                        "description": "项目路径，默认当前项目目录",
+                    },
+                },
+                "required": [],
+            },
+        },
+    },
 ]
 
 
@@ -925,9 +947,186 @@ def generate_agents_md(path: str | None = None, overwrite: bool = False) -> str:
         return f"生成 AGENTS.md 失败: {e}"
 
 
+# ═══════════════════════════════════════════════════════════════
+# 文档同步检查
+# ═══════════════════════════════════════════════════════════════
+
+# 硬编码的"改代码 → 必须更新哪些文档"映射表
+# 新增/修改模块后必须同步对应的文档，否则检查不通过
+_DOC_SYNC_MAP: dict[str, list[str]] = {
+    # 核心模块变更 → 影响哪些文档
+    "src/llm.py":          ["AGENTS.md", "docs/architecture.md"],
+    "src/safety.py":       ["AGENTS.md", "docs/architecture.md"],
+    "src/commands.py":     ["AGENTS.md", "README.md"],
+    "src/main.py":         ["README.md", "docs/architecture.md"],
+    "src/config.py":       [".env.example", "README.md"],
+    "src/session.py":      ["AGENTS.md", "docs/architecture.md"],
+    "src/main.py":         ["README.md", "docs/architecture.md"],
+
+    # 工具模块变更 → 必须更新对应文档
+    "src/tools/lint.py":       ["AGENTS.md", "FEATURES.md", "ROADMAP.md"],
+    "src/tools/file.py":       ["AGENTS.md"],
+    "src/tools/exec.py":       ["AGENTS.md"],
+    "src/tools/git.py":        ["AGENTS.md"],
+    "src/tools/project.py":    ["AGENTS.md"],
+    "src/tools/web.py":        ["AGENTS.md"],
+    "src/tools/memory.py":     ["AGENTS.md"],
+    "src/tools/code.py":       ["AGENTS.md"],
+    "src/tools/think.py":      ["AGENTS.md"],
+    "src/tools/tokens.py":     ["AGENTS.md"],
+    "src/tools/discover.py":   ["AGENTS.md"],
+    "src/tools/plugin_mgr.py": ["AGENTS.md"],
+
+    # 测试变更 → 至少更新 CHANGELOG
+    "tests/":                  ["CHANGELOG.md"],
+
+    # 配置变更 → 影响范围大
+    "pyproject.toml":          ["README.md", "AGENTS.md", "CHANGELOG.md"],
+    "Makefile":                ["README.md", "AGENTS.md"],
+    ".github/workflows/":      ["README.md", "AGENTS.md"],
+
+    # 文档互相引用
+    "AGENTS.md":               ["README.md"],
+    "README.md":               ["AGENTS.md"],
+    "ROADMAP.md":              ["README.md"],
+    "FEATURES.md":             ["CHANGELOG.md"],
+}
+
+# 白名单：修改以下文件 / 目录不需要同步文档
+_DOC_SYNC_IGNORE = {
+    ".gitignore", ".editorconfig",
+    "__pycache__", ".ruff_cache", ".pytest_cache",
+    ".env", ".env.local",
+    "sessions/", "plugins/", "memory/", ".agent_backups/",
+    ".pre-commit-config.yaml",
+}
+
+
+def _classify_changed_file(changed: str) -> str:
+    """将变更文件归类到 _DOC_SYNC_MAP 中的 key。"""
+    changed = changed.replace("\\", "/")
+
+    # 精确匹配
+    if changed in _DOC_SYNC_MAP:
+        return changed
+
+    # 前缀匹配（如 tests/xxx → tests/）
+    for key in _DOC_SYNC_MAP:
+        if key.endswith("/") and changed.startswith(key):
+            return key
+
+    # tools/ 目录下任意文件
+    if changed.startswith("src/tools/"):
+        return changed  # 精确返回，不走默认
+
+    # 不在映射表中 → 不需要强制同步
+    return ""
+
+
+def docs_sync_check(path: str | None = None) -> str:
+    """检查当前变更是否违反了文档同步规范。
+    
+    遍历所有修改/新增/删除的文件，检查是否应该更新对应的文档。
+    如果违反（改了代码但没改文档），给出明确提醒。
+    """
+    import subprocess
+
+    root = Path(path).resolve() if path else Path.cwd()
+
+    # 获取变更文件列表
+    changed_files: list[str] = []
+    try:
+        # 未暂存 + 已暂存
+        for cmd_flag in ["--name-only", "--cached --name-only"]:
+            r = subprocess.run(
+                f"git -C {root} diff {cmd_flag}".split(),
+                capture_output=True, text=True, timeout=10,
+            )
+            if r.returncode == 0:
+                for line in r.stdout.strip().split("\n"):
+                    line = line.strip()
+                    if line:
+                        changed_files.append(line)
+
+        # 未跟踪文件
+        r = subprocess.run(
+            f"git -C {root} status --porcelain".split(),
+            capture_output=True, text=True, timeout=10,
+        )
+        if r.returncode == 0:
+            for line in r.stdout.strip().split("\n"):
+                line = line.strip()
+                if line.startswith("?? "):
+                    changed_files.append(line[3:].strip())
+    except Exception:
+        return "无法获取 Git 变更（可能不是 Git 仓库）"
+
+    if not changed_files:
+        return "✅ 没有检测到变更"
+
+    # 去重
+    changed_files = sorted(set(changed_files))
+
+    lines = []
+    lines.append("📋 文档同步检查")
+    lines.append("")
+    lines.append(f"检测到 {len(changed_files)} 个变更文件：")
+
+    has_violations = False
+
+    for f in changed_files:
+        # 跳过忽略的文件
+        f_norm = f.replace("\\", "/")
+        if any(ig in f_norm for ig in _DOC_SYNC_IGNORE):
+            continue
+
+        key = _classify_changed_file(f_norm)
+        if not key:
+            continue
+
+        # 获取该文件的文档依赖
+        if key in _DOC_SYNC_MAP:
+            required_docs = _DOC_SYNC_MAP[key]
+        elif key.endswith("/"):
+            required_docs = _DOC_SYNC_MAP.get(key, [])
+        else:
+            required_docs = []
+
+        if not required_docs:
+            continue
+
+        # 检查这些文档是否也在变更中（说明被同步更新了）
+        changed_norm = {c.replace("\\", "/") for c in changed_files}
+        missing = [d for d in required_docs if d not in changed_norm]
+
+        f_short = f_norm
+        if len(f_short) > 50:
+            f_short = "..." + f_short[-47:]
+
+        if missing:
+            has_violations = True
+            lines.append(f"  🔴 {f_short}")
+            for m in missing:
+                lines.append(f"       ⚠️ 必须同步更新: {m}")
+        else:
+            lines.append(f"  ✅ {f_short}")
+
+    lines.append("")
+
+    if has_violations:
+        lines.append("🔴 文档同步违规！以下规则未遵守：")
+        lines.append("   改代码 → 必须同步更新对应的文档文件")
+        lines.append("   请修改上述标记 ⚠️ 的文档文件后再提交。")
+        lines.append("")
+        lines.append("📖 文档同步映射关系定义在: src/tools/lint.py _DOC_SYNC_MAP")
+    else:
+        lines.append("✅ 所有变更都已同步对应文档，合规！")
+
+    return "\n".join(lines)
+
+
 # ── 调度 ──
 
-def execute(name: str, args: dict) -> str | None:
     if name == "check_project":
         return check_project(
             path=args.get("path"),
@@ -937,5 +1136,9 @@ def execute(name: str, args: dict) -> str | None:
         return generate_agents_md(
             path=args.get("path"),
             overwrite=args.get("overwrite", False),
+        )
+    if name == "docs_sync_check":
+        return docs_sync_check(
+            path=args.get("path"),
         )
     return None

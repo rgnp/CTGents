@@ -58,6 +58,9 @@ _TOOL_LABEL_MAP: dict[str, str] = {
     "scan_project":  "扫描项目",
     "check_project": "规范检查",
     "generate_agents_md": "生成规范",
+    "docs_sync_check": "文档同步检查",
+    "check_project": "规范检查",
+    "generate_agents_md": "生成规范",
 }
 from .tools.tokens import count_messages_tokens
 

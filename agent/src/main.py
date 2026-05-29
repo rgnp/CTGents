@@ -202,10 +202,10 @@ TOOL_LABELS: dict[str, str] = {
     "git_push":      "Git 推送",
     "git_pr":        "Git PR",
     "git_branch":    "Git 分支",
-    # 项目感知
     "scan_project":  "扫描项目",
     "check_project": "规范检查",
     "generate_agents_md": "生成规范",
+    "docs_sync_check": "文档同步检查",
 }
 
 

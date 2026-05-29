@@ -4,7 +4,7 @@
 PYTHON := py
 PYTEST := $(PYTHON) -m pytest
 
-.PHONY: help install test lint lint-fix run clean check precommit precommit-install coverage
+.PHONY: help install test lint lint-fix run clean check precommit precommit-install coverage docs-sync preflight
 
 # 默认目标：显示帮助
 help:
@@ -19,6 +19,8 @@ help:
 	@echo "  make precommit      手动运行 pre-commit 检查"
 	@echo "  make precommit-install  安装 pre-commit hooks"
 	@echo "  make coverage       测试覆盖率报告"
+	@echo "  make docs-sync      检查文档是否同步（改代码后必做）"
+	@echo "  make preflight      一站式 lint + test + docs-sync + check"
 # 安装依赖
 install:
 	pip install -r requirements.txt
@@ -61,6 +63,14 @@ precommit:
 # 测试覆盖率报告（需先 pip install pytest-cov）
 coverage:
 	$(PYTEST) --cov --cov-report=term --cov-report=html
+
+# 文档同步检查（改代码后检查是否忘了更新文档）
+docs-sync:
+	$(PYTHON) -c "from src.tools.lint import docs_sync_check; print(docs_sync_check())"
+
+# 一站式检查：lint + test + docs-sync + spec
+preflight: lint test docs-sync check
+	@echo "✅ 全部检查通过"
 	@echo "HTML 报告: htmlcov/index.html"
 
 # 项目规范检查（需先安装依赖）

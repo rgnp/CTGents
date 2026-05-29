@@ -66,6 +66,27 @@ jobs:
           python -c "
           from src.tools.lint import check_project;
           result = check_project();
+  docs-sync:
+    name: Docs Sync Check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Run docs_sync_check
+        run: |
+          python -c "
+          from src.tools.lint import docs_sync_check;
+          result = docs_sync_check();
+          print(result);
+          if '🔴' in result:
+              raise SystemExit(1)
+          "
+
           print(result);
           # 如果总分低于 80 则报错退出
           score_line = [l for l in result.split('\n') if '总分' in l][0]

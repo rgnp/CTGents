@@ -19,6 +19,15 @@ repos:
       # 检查是否存在合并冲突标记
       - id: check-merge-conflict
       # 检查 yaml 文件语法
+  # 本地钩子：文档同步检查（改代码必须改对应文档）
+  - repo: local
+    hooks:
+      - id: docs-sync-check
+        name: Docs Sync Check
+        entry: python -c "from src.tools.lint import docs_sync_check; import sys; result = docs_sync_check(); print(result); sys.exit(1 if '🔴' in result else 0)"
+        language: system
+        pass_filenames: false
+
       - id: check-yaml
       # 检查 toml 文件语法
       - id: check-toml
