@@ -101,6 +101,26 @@ def _on_tool(name: str, args: dict) -> None:
     print(f"  [{label}] {detail}")
 
 
+def _reload_dispatch():
+    """热加载 commands 模块、插件，刷新所有指令和工具。"""
+    global dispatch_cmd
+    for k in list(sys.modules.keys()):
+        if k == 'src.commands':
+            del sys.modules[k]
+            break
+    try:
+        import src.commands
+        dispatch_cmd = src.commands.dispatch
+
+        from .tools.plugin_mgr import _plugins, reload_plugins
+        _plugins.clear()
+        reload_plugins()
+
+        return True, "指令系统、插件已热加载"
+    except Exception as e:
+        return False, f"热加载失败: {type(e).__name__}: {e}"
+
+
 # ── 主入口 ──
 
 def main() -> None:
@@ -162,6 +182,12 @@ def main() -> None:
                 continue
 
             if user_input.startswith("/"):
+                # ── 热加载：拦截 /reload，不经过旧 dispatch ──
+                if user_input.lower().startswith("/reload"):
+                    ok, msg = _reload_dispatch()
+                    print(msg)
+                    continue
+
                 r = dispatch_cmd(user_input, messages, session_id)
                 if r.message:
                     print(r.message)
