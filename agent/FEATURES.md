@@ -1,6 +1,10 @@
 # 功能列表
 
 ## 2026-05-29（v0.4）
+## 2026-05-29（增强）
+- [x] Esc 打断：流式回复时按 Esc 立即中断 API 调用，保留已收到的内容
+- [x] Esc 清空：输入框按 Esc 清空当前输入行，不撤回对话历史
+- [x] 中断标志系统：`UserInterrupt` 异常 + `threading.Event`，每 chunk 检查
 - [x] 多模型路由：LLMBackend 抽象基类 + DeepSeekBackend 实现，架构支持扩展其他厂商
 - [x] Flash/Pro 双模型：deepseek-v4-flash（32K 输出）和 deepseek-v4-pro（64K 输出）
 - [x] 任务自动路由：简单操作 → Flash（省钱），复杂代码 → Pro（强推理）
