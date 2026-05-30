@@ -1,5 +1,6 @@
 """文件操作工具：读写、行级编辑、备份与撤销。"""
 
+import contextlib
 import shutil
 from datetime import datetime
 from pathlib import Path
@@ -393,8 +394,74 @@ def _validate_py(filepath: Path, backup_path: Path | None) -> str | None:
     except SyntaxError as e:
         if backup_path and backup_path.exists():
             shutil.copy2(backup_path, filepath)
-        return f"语法校验失败，已自动回滚:\n  {e.filename}:{e.lineno}:{e.offset} {e.msg}\n  {e.text.rstrip() if e.text else ''}\n  请修正后重试。"
+        else:
+            with contextlib.suppress(OSError):
+                filepath.unlink(missing_ok=True)
+        return (
+            f"语法校验失败，已自动回滚:\n"
+            f"  {e.filename}:{e.lineno}:{e.offset} {e.msg}\n"
+            f"  {e.text.rstrip() if e.text else ''}\n"
+            f"  请修正后重试。"
+        )
 
+
+def _validate_imports(filepath: Path, backup_path: Path | None) -> str | None:
+    """Import 校验：语法正确不代表 import 不报错。
+
+    用子进程隔离执行 import——捕获 ImportError/ModuleNotFoundError。
+    这类错误在用户重启时会直接崩溃，必须在编辑阶段拦截。
+    """
+    import os
+    import subprocess
+
+    if filepath.suffix != ".py":
+        return None
+
+    # 从文件路径推断 Python 模块名
+    # D:/project/agent/src/tools/git.py      → src.tools.git
+    # D:/project/agent/src/tools/__init__.py → src.tools
+    # D:/project/agent/src/llm.py            → src.llm
+    parts = list(filepath.parts)
+    try:
+        src_idx = parts.index("src")
+    except ValueError:
+        return None  # 不在 src 包内，跳过
+
+    module_parts = list(parts[src_idx:])
+    module_parts[-1] = module_parts[-1].replace(".py", "")
+    if module_parts[-1] == "__init__":
+        module_parts.pop()
+    module_name = ".".join(module_parts)
+
+    # 项目根是 src 的父目录
+    project_root = Path(*parts[:src_idx])
+
+    try:
+        r = subprocess.run(
+            ["py", "-c", f"import {module_name}"],
+            capture_output=True, text=True, timeout=15,
+            cwd=str(project_root),
+            env={**os.environ, "PYTHONDONTWRITEBYTECODE": "1"},
+        )
+        if r.returncode != 0:
+            stderr = r.stderr.strip()
+            # 只拦截真正的 import 错误，不拦截运行时初始化错误（如缺失 .env）
+            if "ImportError" in stderr or "ModuleNotFoundError" in stderr:
+                if backup_path and backup_path.exists():
+                    shutil.copy2(backup_path, filepath)
+                else:
+                    # 新文件无备份，直接删除
+                    with contextlib.suppress(OSError):
+                        filepath.unlink(missing_ok=True)
+                return (
+                    f"导入校验失败——语法正确但 import 会崩溃，已自动回滚！\n"
+                    f"  模块: {module_name}\n"
+                    f"  {stderr[:600]}\n"
+                    f"  请修正后重试。"
+                )
+        return None
+    except Exception:
+        return None  # 子进程异常不阻塞编辑
 
 def _list_backups(filepath: Path) -> list[Path]:
     """列出文件的所有备份，按时间倒序。"""
@@ -466,6 +533,9 @@ def write_file(path: str, content: str) -> str:
         err = _validate_py(filepath, backup)
         if err:
             return f"写入失败: {err}"
+        err = _validate_imports(filepath, backup)
+        if err:
+            return f"写入失败: {err}"
         track = _track_changes(str(filepath))
         return f"已写入: {filepath}（{len(content)} 字符）{track}"
     except OSError as e:
@@ -522,6 +592,12 @@ def edit_file_lines(path: str, action: str, start_line: int,
 
     # ── Python 语法校验 ──
     err = _validate_py(filepath, backup_path)
+    if err:
+        track = _track_changes(str(filepath))
+        return f"编辑失败: {err}{track}"
+
+    # ── Import 校验 ──
+    err = _validate_imports(filepath, backup_path)
     if err:
         track = _track_changes(str(filepath))
         return f"编辑失败: {err}{track}"
