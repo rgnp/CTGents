@@ -57,6 +57,7 @@ htmlcov/
 .tox/
 .mypy_cache/
 .ruff_cache/
+.rag-index/                   # RAG 代码索引缓存（自动生成）
 *.cover
 
 # ── 调试/测试临时文件 ──

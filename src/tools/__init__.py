@@ -21,7 +21,7 @@ _BUILTIN_MODULES: list[tuple[str, str, str]] = [
     (".project",   "TOOLS_PROJECT","execute"),
     (".lint",      "TOOLS_LINT",   "execute"),
     (".mcp",       "TOOLS_MCP",    "execute"),
-
+    (".rag",       "TOOLS_RAG",    "execute"),
 ]
 # discover + plugin_mgr 的工具直接定义在 __init__.py 的 _register_builtin 里
 _PLUGIN_MGR_TOOLS = [

@@ -1,0 +1,13 @@
+{
+  "total_files": 61,
+  "total_chunks": 360,
+  "languages": [
+    "json",
+    "markdown",
+    "python",
+    "toml",
+    "yaml"
+  ],
+  "force_rebuild": false,
+  "updated_at": 1780184661.805593
+}

@@ -15,9 +15,10 @@
 │  /help /mode /save│   三级等级 · 双模式      │
 │  /load /trust...  │   会话信任               │
 ├──────────────────────────────────────────────┤
-│              tools/ (13 个模块)              │
+│              tools/ (14 个模块)              │
 │  file  exec  git  project  lint  web  code   │
-│  memory  think  discover  plugin_mgr  tokens │
+│  memory  think  discover  plugin_mgr  tokens  │
+│  mcp  rag                                      │
 ├──────────────────────────────────────────────┤
 │  config.py  │  session.py  │  plugins/       │
 │  配置管理    │  会话持久化   │  插件热加载     │
@@ -28,6 +29,8 @@
 
 ### main.py — 主入口
 - 负责启动 UI 循环、加载历史会话
+- 注入 RAG 索引状态（如果已建立索引，告知 LLM 可用语义搜索）
+
 - 注入环境/项目/记忆/安全模式四层上下文到 system prompt
 - 处理 `/reload` 热加载、对话流式输出
 - 集成 Esc 打断监听（Windows msvcrt）
@@ -54,6 +57,14 @@
 - 环境变量驱动（`.env`），无硬编码密钥
 - 双模型独立配置：MODEL_FLASH / MODEL_PRO
 
+
+### rag.py — RAG 代码索引与语义搜索
+- 扫描项目文件，智能分块（按函数/类/行数），建立 TF-IDF 加权索引
+- BM25 评分 + 代码语义关键词加权（函数名×3、注释×2、标识符×1.5）
+- 零额外依赖，纯 Python 实现
+- 增量更新：文件哈希缓存，只重新索引变更的文件
+- 提供三个工具：`rag_index`（建立/更新索引）、`rag_query`（语义搜索）、`rag_status`（查看状态）
+- 启动时自动注入索引状态到 system prompt
 ### session.py — 会话管理
 - JSON 持久化，自动摘要生成
 - 过滤 `_volatile` 运行时注入消息

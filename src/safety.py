@@ -34,6 +34,9 @@ TOOL_SAFETY: dict[str, SafetyLevel] = {
     "search_web":      SafetyLevel.SAFE,
     "read_page":       SafetyLevel.SAFE,
     "read_file":       SafetyLevel.SAFE,
+    "rag_query":      SafetyLevel.SAFE,
+    "rag_status":     SafetyLevel.SAFE,
+    "rag_index":      SafetyLevel.RISKY,  # 写文件到 .rag-index/
     "read_file_lines": SafetyLevel.SAFE,
     "list_files":      SafetyLevel.SAFE,
     "count_lines":     SafetyLevel.SAFE,

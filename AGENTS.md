@@ -15,7 +15,7 @@
 - **终端**: prompt_toolkit（增强交互）
 - **网页解析**: trafilatura
 - **代码检查**: ruff
-- **测试**: pytest（93 个用例）
+- **测试**: pytest（120 个用例）
 - **CI**: GitHub Actions
 
 ---
@@ -59,6 +59,7 @@
 │   │   ├── think.py        #   策略思考
 │   │   ├── discover.py     #   能力扫描
 │   │   ├── plugin_mgr.py   #   插件管理
+│   │   ├── rag.py          #   RAG 代码索引 + 语义搜索
 │   │   └── tokens.py       #   Token 预算
 │   ├── safety.py           #   Auto Mode 安全系统
 │   ├── commands.py         # 指令系统（/help /save /load 等）
