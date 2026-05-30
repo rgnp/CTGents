@@ -5,9 +5,23 @@
 
 ---
 
-## 最新更新（2026-05-30 v0.8 — 🚧 进行中）
+## 最新更新（2026-05-30 v0.9 — 🚧 进行中）
 
-### 1.9 DeepSeek 前缀缓存优化（基于 Reasonix 调研）
+### 2.0 MCP 协议支持 ✅
+
+> [Model Context Protocol](https://modelcontextprotocol.io) 是 AI 工具的标准协议。
+> 接入后 CTGents 可连接任意 MCP 服务器——数据库、文件系统、浏览器、API。
+
+- [x] MCP Client 模块（`src/tools/mcp.py`），支持 stdio 和 HTTP/SSE 传输
+- [x] MCP 工具自动注册为 Agent 可用工具（`server_name__tool_name` 前缀防冲突）
+- [x] MCP 管理命令：`mcp_connect` / `mcp_disconnect` / `mcp_list` / `mcp_save_config`
+- [x] 配置持久化：`~/.ctgents/mcp.json`，启动时自动恢复连接
+- [x] MCP SDK 设为可选依赖，未安装时友好提示
+- [ ] 内置 MCP 服务器示例（文件系统 + 搜索）
+
+**涉及文件：** `src/tools/mcp.py`（新模块）、`src/tools/__init__.py`、`requirements.txt`
+
+### 2.1 DeepSeek 前缀缓存优化（基于 Reasonix 调研）
 
 > 目标：将会话上下文改为三段式结构（Immutable Prefix / Append-Only Log / Volatile Scratch），
 > 把 DeepSeek 前缀缓存命中率从 ~0% 提升到 90%+，大幅降低长期会话的 token 费用。
@@ -20,29 +34,6 @@
 - [ ] Storm：相同 tool+args 滑动窗口去重
 
 ---
-
-## v0.9 规划 — 多后端 + 体验增强
-
-### 2.0 多 LLM 后端抽象
-
-> 当前仅支持 DeepSeek，扩展后将支持任意兼容 OpenAI API 的模型。
-
-- [ ] `LLMBackend` 抽象层完善：统一 streaming / 工具调用 / 错误处理接口
-- [ ] OpenAI 后端（GPT-4o / o3 / o4-mini）
-- [ ] Anthropic 后端（Claude Sonnet 4 / Opus）
-- [ ] Ollama 后端（本地模型，零成本调试）
-- [ ] 多后端自动路由：按任务类型 / 成本 / 可用性自动选择
-- [ ] `/model` 命令升级：支持切换后端 + 模型组合
-
-**涉及文件：** `src/llm.py`、`src/config.py`
-
-### 2.1 终端体验升级
-
-- [ ] `run_command` 流式实时输出（类似 Claude Code 终端效果）
-- [ ] `run_command` 后台运行（不阻塞对话，`/jobs` 查看状态）
-- [ ] 多 Tab / 分屏支持（对话 + 文件 + 终端）
-
-**涉及文件：** `src/tools/exec.py`、`src/main.py`
 
 ---
 
@@ -157,8 +148,8 @@
 | v0.6 | Auto Mode 安全系统 | ✅ |
 | v0.7 | 文档同步强制 + 文档体系 + CI | ✅ |
 | v0.8 | DeepSeek 前缀缓存优化 | 🚧 进行中 |
-| v0.9 | 多 LLM 后端 + 终端体验增强 | 🗓️ 规划中 |
-| v1.0 | MCP + RAG + 长任务 | 🗓️ 规划中 |
+| v0.9 | MCP 协议支持 | 🚧 进行中 |
+| v1.0 | 多 LLM 后端 + 终端体验 + RAG + 长任务 | 🗓️ 规划中 |
 | v1.x | Web UI + IDE 集成 + 自进化 | 🗓️ 远期 |
 
 ---

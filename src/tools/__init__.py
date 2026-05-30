@@ -20,6 +20,8 @@ _BUILTIN_MODULES: list[tuple[str, str, str]] = [
     (".git",       "TOOLS_GIT",    "execute"),
     (".project",   "TOOLS_PROJECT","execute"),
     (".lint",      "TOOLS_LINT",   "execute"),
+    (".mcp",       "TOOLS_MCP",    "execute"),
+
 ]
 # discover + plugin_mgr 的工具直接定义在 __init__.py 的 _register_builtin 里
 _PLUGIN_MGR_TOOLS = [
@@ -128,6 +130,9 @@ def get_tools() -> list[dict]:
     for src in _TOOL_SOURCES:
         tools.extend(src)
     tools.extend(get_plugin_tools())
+    # MCP 工具动态变化，不进缓存
+    from .mcp import get_mcp_tools
+    tools.extend(get_mcp_tools())
     _tools_cache = tools
     return tools
 
@@ -152,6 +157,12 @@ def execute_tool(tool_call: ChatCompletionMessageToolCall) -> str:
         result = executor(name, args)
         if result is not None:
             return result
+
+    # MCP 工具（server_name__tool_name 格式）
+    from .mcp import execute_mcp_tool
+    result = execute_mcp_tool(name, args)
+    if result is not None:
+        return result
 
     return json.dumps({"error": f"未知工具: {name}"}, ensure_ascii=False)
 
