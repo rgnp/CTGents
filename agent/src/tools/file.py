@@ -463,6 +463,30 @@ def _validate_imports(filepath: Path, backup_path: Path | None) -> str | None:
     except Exception:
         return None  # 子进程异常不阻塞编辑
 
+
+def _invalidate_pyc(filepath: Path) -> None:
+    """删除 .py 文件对应的 __pycache__ 中的字节码缓存。
+
+    编辑后必须清缓存，否则 Python 可能用旧的 .pyc，
+    导致 `from src.llm import xx` 拿到旧版本代码。
+    """
+    if filepath.suffix != ".py":
+        return
+    import os
+
+    pycache = filepath.parent / "__pycache__"
+    if not pycache.is_dir():
+        return
+    # 匹配规则：module_name.cpython-*.pyc
+    stem = filepath.stem
+    for pyc in pycache.glob(f"{stem}.cpython-*.pyc"):
+        with contextlib.suppress(OSError):
+            os.remove(pyc)
+    # 也删除 .pyo（老版本 Python）
+    for pyc in pycache.glob(f"{stem}.*.pyo"):
+        with contextlib.suppress(OSError):
+            os.remove(pyc)
+
 def _list_backups(filepath: Path) -> list[Path]:
     """列出文件的所有备份，按时间倒序。"""
     try:
@@ -536,6 +560,7 @@ def write_file(path: str, content: str) -> str:
         err = _validate_imports(filepath, backup)
         if err:
             return f"写入失败: {err}"
+        _invalidate_pyc(filepath)
         track = _track_changes(str(filepath))
         return f"已写入: {filepath}（{len(content)} 字符）{track}"
     except OSError as e:
@@ -601,6 +626,9 @@ def edit_file_lines(path: str, action: str, start_line: int,
     if err:
         track = _track_changes(str(filepath))
         return f"编辑失败: {err}{track}"
+
+    # ── 清理字节码缓存 ──
+    _invalidate_pyc(filepath)
 
     # ── 构造详细的变更报告 ──
     old_count = (e - s + 1) if action in ("replace", "delete") else 0
