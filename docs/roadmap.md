@@ -18,135 +18,62 @@
 - [ ] SAFE 工具并行分发（read_file、git_status 等）
 - [ ] Flatten：深度嵌套工具 schema 自动扁平化
 - [ ] Storm：相同 tool+args 滑动窗口去重
----
-
-
-
-## 最新更新（2026-05-29 v0.7）
-
-### 1.7 文档同步强制机制 ✅
-
-- [x] `docs_sync_check` 工具：硬编码 _DOC_SYNC_MAP 映射表，改代码自动检查是否漏了文档
-- [x] CI 中新增 docs-sync job，违规阻止 PR 合并
-- [x] pre-commit 本地钩子，commit 前自动检查
-- [x] Makefile 新增 `make docs-sync` / `make preflight`
-- [x] AGENTS.md + docs/development.md 记录完整映射表和提交流程
-
-**涉及文件：** `src/tools/lint.py`、`.pre-commit-config.yaml`、`.github/workflows/ci.yml`
-
-### 1.8 根目录清理 + 文档全面整改 ✅
-
-- [x] 文档审计：发现并修复 6 个问题
-- [x] 创建 `docs/architecture.md`、`docs/development.md`、`docs/skills.md`
-- [x] CHANGELOG/CONTRIBUTING/FEATURES/ROADMAP 移入 docs/
-- [x] 删除根目录残留 `learn_skill.md`、`__init__.py`
-- [x] GitHub Actions CI：`make check` 评分低于 80 分报错
-
-**涉及文件：** `docs/`（7 个文档文件）、`README.md`、`AGENTS.md`
 
 ---
 
-## 现状评估
+## v0.9 规划 — 多后端 + 体验增强
 
-当前 Agent 已有的能力：
+### 2.0 多 LLM 后端抽象
 
-| 维度 | 能力 |
-|------|------|
-| ✅ 会话 | 保存/恢复/重命名/导出/列表 |
-| ✅ 指令系统 | 结构化注册、热加载、/help 自动聚合、/mode /trust |
-| ✅ 多模型 | Flash/Pro 双模型自动路由、/model 切换 |
-| ✅ 热加载 | `/reload` 刷新指令系统 + 内置工具 + 插件，无需重启 |
-| ✅ 文件操作 | read_file / write_file / list_files / delete_file |
-| ✅ 文件行级编辑 | read_file_lines（带行号读取）、edit_file_lines（替换/删除/插入）、undo_edit（撤销） |
-| ✅ Shell 执行 | run_command + run_python，含安全黑名单 |
-| ✅ 代码搜索 | grep_code（正则搜索） |
-| ✅ 网络 | search_web / read_page（Tavily + trafilatura） |
-| ✅ 思考 | think 工具（策略规划） |
-| ✅ 记忆 | remember / recall / forget（跨会话持久化） |
-| ✅ 插件 | 自学安装、热加载、COMMANDS 注册 |
-| ✅ Skill | 技能包管理（加载/卸载/自动匹配） |
-| ✅ 项目感知 | scan_project 自动检测语言/框架/依赖 |
-| ✅ 规范检查 | check_project 六维度评分 + AGENTS.md 自动生成 |
-| ✅ Git 集成 | status/diff/commit/push/PR/log/branch 全套 |
-| ✅ Auto Mode | 三级安全等级 + 手动/自动模式 + 会话信任 |
-| ✅ 文档同步强制 | docs_sync_check + CI + pre-commit 三重闸门 |
-| ✅ 文档体系 | 架构/开发/Changelog/贡献指南/Skills 完整 |
+> 当前仅支持 DeepSeek，扩展后将支持任意兼容 OpenAI API 的模型。
 
-当前 Agent **缺乏**的关键能力：
+- [ ] `LLMBackend` 抽象层完善：统一 streaming / 工具调用 / 错误处理接口
+- [ ] OpenAI 后端（GPT-4o / o3 / o4-mini）
+- [ ] Anthropic 后端（Claude Sonnet 4 / Opus）
+- [ ] Ollama 后端（本地模型，零成本调试）
+- [ ] 多后端自动路由：按任务类型 / 成本 / 可用性自动选择
+- [ ] `/model` 命令升级：支持切换后端 + 模型组合
 
-| 维度 | 能力 |
-|------|------|
-| ❌ 长任务 | 无后台会话、无目标驱动持续执行 |
-| ❌ 多厂商 | 只有 DeepSeek，无 Claude/GPT/Qwen 后端 |
-| ❌ MCP | 无 MCP 服务器支持 |
-| ❌ 实时输出 | run_command 无流式输出（类 Claude Code 终端效果） |
-| ❌ 后台命令 | run_command 不支持后台运行 |
+**涉及文件：** `src/llm.py`、`src/config.py`
 
-| ❌ Token 缓存 | DeepSeek 前缀缓存命中率 ~0%，长期会话浪费大量费用 |
-| ❌ 长任务 | 无后台会话、无目标驱动持续执行 |
-| ❌ 多厂商 | 只有 DeepSeek，无 Claude/GPT/Qwen 后端 |
-| ❌ MCP | 无 MCP 服务器支持 |
-### ~~1.1 通用 Shell 执行工具~~ ✅
-- [x] `run_command` + `run_python` 安全黑名单 + 超时控制
-- [ ] **待办**：实时输出流式显示（类似 Claude Code 的终端效果）
-- [ ] **待办**：后台命令执行（不阻塞对话，可查状态）
+### 2.1 终端体验升级
 
-### ~~1.2 文件行级编辑工具~~ ✅
-- [x] read_file_lines / edit_file_lines / undo_edit 三件套
-- [x] 自动备份 + Python 语法校验 + 自动回滚
+- [ ] `run_command` 流式实时输出（类似 Claude Code 终端效果）
+- [ ] `run_command` 后台运行（不阻塞对话，`/jobs` 查看状态）
+- [ ] 多 Tab / 分屏支持（对话 + 文件 + 终端）
 
-### ~~1.3 Git 操作工具~~ ✅
-- [x] git_status / git_diff / git_commit / git_push / git_pr / git_log / git_branch
-
-### ~~1.4 项目结构感知~~ ✅
-- [x] scan_project：20+ 语言/框架自动检测 + 文件树 + 依赖概览
-
-### ~~2.1 多模型后端与路由~~ ✅
-- [x] LLMBackend 抽象基类 + DeepSeekBackend 实现
-- [x] Flash/Pro 双模型 + 任务复杂度自动路由
-- [x] `/model` 命令切换
-- [ ] **待办**：Claude / GPT / Qwen 等其他厂商接入
-- [ ] **待办**：混合调用（思考用 Pro，执行用 Flash）
+**涉及文件：** `src/tools/exec.py`、`src/main.py`
 
 ---
 
-## 第二阶段：工程化增强 ✅（已完成）
+## v1.0 规划 — 智能 + 平台化
 
-### ~~2.2 Auto Mode 安全系统~~ ✅
-- [x] 三级安全等级：SAFE（只读）/ RISKY（可逆）/ DANGEROUS（破坏性）
-- [x] 29 个内置工具安全等级标注
-- [x] 手动/自动双模式（`/mode` 命令）
-- [x] 会话信任机制（`/trust` 命令）
-- [x] 工具执行前交互式确认
-- [x] 安全模式信息注入 system prompt
+### 3.1 MCP 协议支持
 
-### ~~1.5 项目规范检查~~ ✅
-- [x] check_project 六维度扫描 + 评分（0-100）
-- [x] generate_agents_md 自动生成 AGENTS.md
-- [x] 三级边界系统（✅始终 / ⚠️询问 / 🚫禁止）
+> [Model Context Protocol](https://modelcontextprotocol.io) 是 AI Agent 的标准化工具协议。
+> 接入后 CTGents 可连接任何 MCP 服务器——数据库、文件系统、浏览器、第三方 API。
 
-### ~~1.6 测试骨架 + CI~~ ✅
-- [x] tests/ 目录：4 个模块 93 个测试用例
-- [x] pyproject.toml pytest 配置
-- [x] .pre-commit-config.yaml（ruff + 文件校验）
-- [x] GitHub Actions CI（lint + test + spec + docs-sync）
+- [ ] MCP Client 实现（支持 stdio / HTTP / SSE 传输）
+- [ ] MCP 工具自动注册为 Agent 可用工具
+- [ ] MCP 服务器配置管理（`~/.ctgents/mcp.json`）
+- [ ] 内置 MCP 服务器示例（文件系统 + 搜索）
 
-### ~~1.7 文档同步强制~~ ✅
-- [x] docs_sync_check 工具 + 硬编码映射表
-- [x] CI job + pre-commit 双重拦截
-- [x] AGENTS.md 显示完整规则
+**涉及文件：** `src/tools/mcp.py`（新模块）
 
-### ~~1.8 文档体系完善~~ ✅
-- [x] docs/architecture.md / docs/development.md / docs/skills.md
-- [x] docs/changelog.md / docs/contributing.md / docs/features.md / docs/roadmap.md
-- [x] README.md 重写 + .env.example 修复
-- [x] 根目录清理（25→20 项）
+### 3.2 项目级 RAG 检索
 
----
+> 当前记忆系统是手动 `remember`/`recall`。加上自动索引——启动时扫描项目文件，
+> embedding 存入向量库，对话中自动检索相关代码上下文。
 
-## 第三阶段：智能增强（🔄 进行中）
+- [ ] 项目文件自动索引（支持 Python / JS / TS / Go / Rust 等）
+- [ ] 轻量级向量存储（chromadb / local 文件）
+- [ ] 对话中自动检索：检测到代码相关问题时自动召回上下文
+- [ ] 索引增量更新（文件变更时重新索引）
+- [ ] `.agent-memory/` 目录随 Git 版本控制
 
-### 2.3 目标驱动长任务
+**涉及文件：** `src/tools/memory.py`、`src/tools/rag.py`（新模块）
+
+### 3.3 目标驱动长任务
 
 - [ ] `/goal` 命令：设定完成条件，Agent 自主持续执行直到达成
 - [ ] Agent 循环中自动检查目标是否达成
@@ -154,47 +81,87 @@
 
 **涉及文件：** `src/commands.py`、`src/llm.py`
 
-### 2.4 项目级记忆
+---
 
-- [ ] 跨会话记住项目的构建命令、代码风格偏好、常用工具链、踩过的坑
-- [ ] 存储为项目本地 `.agent-memory/` 目录，随 Git 版本控制
+## 远期规划
 
-**涉及文件：** `src/tools/memory.py`
+### 4.1 Web UI
+
+> 轻量级 Web 界面，方便手机 / 平板 / 远程使用。
+
+- [ ] FastAPI + HTMX（前后端一体，零 JS 构建）
+- [ ] 流式响应输出
+- [ ] 会话管理（保存 / 加载 / 历史）
+- [ ] 文件浏览 + 差异对比视图
+
+### 4.2 IDE 集成
+
+- [ ] VS Code 扩展：在编辑器内对话，高亮代码片段
+- [ ] GitHub Copilot 扩展协议对接
+
+### 4.3 架构自进化
+
+- [ ] Agent 能识别自己的性能瓶颈并生成改进提案
+- [ ] 工具调用热替换（不停机更新工具实现）
 
 ---
 
-## 第四阶段：平台化（远期）
+## 现状评估
 
-### 3.1 MCP 协议支持
-- [ ] Model Context Protocol（MCP）服务器接入
-- [ ] 支持 stdio / HTTP / SSE 三种传输类型
-- [ ] MCP 工具自动注册为 Agent 可用工具
+### 已有能力
 
-### 3.2 多厂商 LLM
-- [ ] Claude / GPT / Qwen 后端接入
-- [ ] 混合调用（思考用 Pro，执行用 Flash）
+| 维度 | 状态 |
+|------|:----:|
+| 会话保存 / 恢复 / 重命名 / 导出 / 列表 | ✅ |
+| 指令系统（结构化注册、热加载、/help 自动聚合） | ✅ |
+| Flash/Pro 双模型自动路由、/model 切换 | ✅ |
+| `/reload` 热加载（指令 + 工具 + 插件） | ✅ |
+| 文件操作（read_file / write_file / list_files / delete_file） | ✅ |
+| 文件行级编辑（read_file_lines / edit_file_lines / undo_edit） | ✅ |
+| Shell 执行（run_command + run_python，安全黑名单） | ✅ |
+| 代码搜索（grep_code 正则搜索） | ✅ |
+| 网络（search_web / read_page，Tavily + trafilatura） | ✅ |
+| think 工具（策略规划） | ✅ |
+| 记忆系统（remember / recall / forget，跨会话持久化） | ✅ |
+| 插件系统（自学安装、热加载、COMMANDS 注册） | ✅ |
+| Skill 技能包（加载 / 卸载 / 自动匹配） | ✅ |
+| 项目感知（scan_project，20+ 语言框架自动检测） | ✅ |
+| 规范检查（check_project 六维度评分 + AGENTS.md 自动生成） | ✅ |
+| Git 集成（status / diff / commit / push / PR / log / branch） | ✅ |
+| Auto Mode（三级安全 + 手动/自动 + 会话信任） | ✅ |
+| 文档同步强制（docs_sync_check + CI + pre-commit） | ✅ |
+| 文档体系（架构 / 开发 / Changelog / 贡献指南 / Skills） | ✅ |
+| DeepSeek 前缀缓存（三段式上下文） | ✅ |
 
-### 3.3 IDE/编辑器集成
-- [ ] VS Code 扩展：在编辑器内对话，高亮代码片段
+### 待建设能力
 
-### 3.4 架构自进化
-- [ ] Agent 能识别自己的性能瓶颈并生成改进提案
-- [ ] 工具调用热替换（不停机更新工具实现）
+| 维度 | 优先级 | 预计版本 |
+|------|:------:|:--------:|
+| 多 LLM 后端（OpenAI / Claude / Ollama） | 🔴 高 | v0.9 |
+| 终端流式输出 + 后台命令 | 🔴 高 | v0.9 |
+| MCP 协议支持 | 🟡 中 | v1.0 |
+| 项目级 RAG 检索 | 🟡 中 | v1.0 |
+| 目标驱动长任务 | 🟡 中 | v1.0 |
+| Web UI | 🟢 低 | 远期 |
+| IDE 集成 | 🟢 低 | 远期 |
+| 架构自进化 | 🟢 低 | 远期 |
 
 ---
 
 ## 版本里程碑
 
 | 版本 | 目标 | 状态 |
-| v0.8 | DeepSeek 前缀缓存优化（三段式上下文） | 🚧 进行中 |
-| v0.9 | 目标驱动长任务 + 项目级记忆 | 🗓️ 规划中 |
-| v1.0 | MCP + 多厂商 + IDE 集成 | 🗓️ 远期 |
-| v0.4 | 多模型路由（Flash/Pro） | ✅ 已完成 |
-| v0.5 | 项目规范检查 + AGENTS.md + 测试骨架 | ✅ 已完成 |
-| v0.6 | Auto Mode 安全系统 | ✅ 已完成 |
-| v0.7 | 文档同步强制 + 文档体系 + CI | ✅ 已完成 |
-| v0.8 | 目标驱动长任务 + 项目级记忆 | 🗓️ 规划中 |
-| v1.0 | MCP + 多厂商 + IDE 集成 | 🗓️ 远期 |
+|:----:|------|:----:|
+| v0.4 | 多模型路由（Flash/Pro） | ✅ |
+| v0.5 | 项目规范检查 + AGENTS.md + 测试骨架 | ✅ |
+| v0.6 | Auto Mode 安全系统 | ✅ |
+| v0.7 | 文档同步强制 + 文档体系 + CI | ✅ |
+| v0.8 | DeepSeek 前缀缓存优化 | 🚧 进行中 |
+| v0.9 | 多 LLM 后端 + 终端体验增强 | 🗓️ 规划中 |
+| v1.0 | MCP + RAG + 长任务 | 🗓️ 规划中 |
+| v1.x | Web UI + IDE 集成 + 自进化 | 🗓️ 远期 |
+
+---
 
 ## 技术债务
 
