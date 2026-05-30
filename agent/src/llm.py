@@ -7,6 +7,7 @@ import time
 from abc import ABC, abstractmethod
 from collections.abc import Callable
 from dataclasses import dataclass
+from pathlib import Path
 from types import SimpleNamespace
 
 from openai import APIConnectionError, APITimeoutError, InternalServerError, OpenAI, RateLimitError
@@ -412,20 +413,50 @@ def auto_select_model(user_input: str) -> LLMBackend:
     return selected
 
 
-# ── 缓存统计（按模型区分 + 从 API 响应获取真实数据） ──
+# ── 缓存统计（按模型区分 + 持久化到文件，重启不丢失） ──
 
-# 每模型独立统计
-_CACHE_STATS: dict[str, dict] = {
-    "flash": {"requests": 0, "prompt_tokens": 0, "completion_tokens": 0,
-              "cache_hit_tokens": 0, "cache_miss_tokens": 0},
-    "pro": {"requests": 0, "prompt_tokens": 0, "completion_tokens": 0,
-            "cache_hit_tokens": 0, "cache_miss_tokens": 0},
-}
+# 持久化路径：agent/stats/api_stats.json
+_STATS_FILE = Path(__file__).resolve().parent.parent / "stats" / "api_stats.json"
 
-# 上一次请求的 messages 签名（当 API 未返回 usage 时的后备估算）
+# 空统计模板
+_EMPTY_STATS = {"requests": 0, "prompt_tokens": 0, "completion_tokens": 0,
+                 "cache_hit_tokens": 0, "cache_miss_tokens": 0}
+
+
+def _load_cache_stats() -> dict[str, dict]:
+    """从文件加载持久化的统计，文件不存在则返回空统计。"""
+    try:
+        if _STATS_FILE.exists():
+            data = json.loads(_STATS_FILE.read_text(encoding="utf-8"))
+            for model in ("flash", "pro"):
+                if model not in data:
+                    data[model] = dict(_EMPTY_STATS)
+            return data
+    except Exception:
+        pass
+    return {
+        "flash": dict(_EMPTY_STATS),
+        "pro": dict(_EMPTY_STATS),
+    }
+
+
+def _save_cache_stats() -> None:
+    """将当前统计写入文件。"""
+    try:
+        _STATS_FILE.parent.mkdir(parents=True, exist_ok=True)
+        _STATS_FILE.write_text(json.dumps(_CACHE_STATS, ensure_ascii=False, indent=2),
+                                encoding="utf-8")
+    except Exception:
+        pass  # 写入失败不阻塞
+
+
+# 持久化的统计（启动自动加载，每次更新后自动保存）
+_CACHE_STATS: dict[str, dict] = _load_cache_stats()
+
+# 上一次请求的 messages 签名（运行时数据，不持久化）
 _cache_last_sig: dict[str, str] = {"flash": "", "pro": ""}
 
-# API 返回的真实 usage（由 chat_non_stream / chat_stream 写入）
+# API 返回的真实 usage（运行时数据，不持久化）
 _last_api_usage: dict[str, dict | None] = {"flash": None, "pro": None}
 
 
@@ -445,17 +476,14 @@ def _set_api_usage(model_key: str, usage: object | None) -> None:
 
 
 def _update_cache_stats(model_key: str, messages: list[dict]) -> None:
-    """每次 API 请求后更新缓存统计。
+    """每次 API 请求后更新缓存统计，并持久化。
 
     优先使用 API 返回的真实 cache_hit/cache_miss 数据，
-    API 未返回时（如流式早期版本），用消息签名对比估算。
+    API 未返回时（如流式），用消息签名对比估算。
     """
     global _CACHE_STATS, _cache_last_sig
 
-    stats = _CACHE_STATS.setdefault(model_key, {
-        "requests": 0, "prompt_tokens": 0, "completion_tokens": 0,
-        "cache_hit_tokens": 0, "cache_miss_tokens": 0,
-    })
+    stats = _CACHE_STATS.setdefault(model_key, dict(_EMPTY_STATS))
     stats["requests"] += 1
 
     # 优先用 API 返回的真实数据
@@ -466,6 +494,7 @@ def _update_cache_stats(model_key: str, messages: list[dict]) -> None:
         stats["cache_hit_tokens"] += usage["cache_hit_tokens"]
         stats["cache_miss_tokens"] += usage["cache_miss_tokens"]
         _last_api_usage[model_key] = None  # 消费掉，防止重复计数
+        _save_cache_stats()
         return
 
     # 后备方案：通过消息签名对比估算
@@ -497,6 +526,7 @@ def _update_cache_stats(model_key: str, messages: list[dict]) -> None:
     else:
         stats["cache_miss_tokens"] += total
     _cache_last_sig[model_key] = sig
+    _save_cache_stats()
 
 
 def get_cache_stats() -> dict:
@@ -506,14 +536,12 @@ def get_cache_stats() -> dict:
       {"models": {"flash": {...}, "pro": {...}}, "total": {...}}
     """
     models = {}
-    total = {"requests": 0, "prompt_tokens": 0, "completion_tokens": 0,
-             "cache_hit_tokens": 0, "cache_miss_tokens": 0}
+    total = dict(_EMPTY_STATS)
     for key, stats in _CACHE_STATS.items():
         models[key] = dict(stats)
         for k in total:
             total[k] += stats[k]
     return {"models": models, "total": total}
-
 # ═══════════════════════════════════════════════════════════════
 # 对话循环（核心）
 # ═══════════════════════════════════════════════════════════════

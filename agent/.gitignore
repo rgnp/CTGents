@@ -88,4 +88,5 @@ temp/
 # ── 项目内部（自动生成，不提交）──
 sessions/
 plugins/
+stats/
 .agent_backups/
