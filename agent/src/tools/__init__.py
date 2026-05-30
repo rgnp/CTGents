@@ -86,6 +86,8 @@ def _register_builtin(tools: list[dict], executor):
 
 def _init_registry():
     """初始化注册表（首次启动时调用，热加载时也调用）。"""
+    global _tools_cache
+    _tools_cache = None
     _TOOL_SOURCES.clear()
     _EXECUTORS.clear()
 
@@ -109,13 +111,28 @@ _init_registry()
 # ── 工具列表构建 ──
 
 
+# ── 工具列表缓存 ──
+_tools_cache: list[dict] | None = None
+
+
 def get_tools() -> list[dict]:
-    """返回完整工具列表（内置 + 已加载插件），每次调用重建。"""
+    """返回完整工具列表（内置 + 已加载插件）。
+
+    结果缓存复用，确保每轮返回的 tools 是同一个 list 对象，
+    OpenAI SDK 序列化后字节一致，保障 DeepSeek 前缀缓存命中。
+    插件热加载后自动清空缓存。
+    """
+    global _tools_cache
+    if _tools_cache is not None:
+        return _tools_cache
+
     tools: list[dict] = []
     for src in _TOOL_SOURCES:
         tools.extend(src)
     tools.extend(get_plugin_tools())
+    _tools_cache = tools
     return tools
+
 
 
 # ── 工具执行 ──
