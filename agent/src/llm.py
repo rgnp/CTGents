@@ -260,7 +260,7 @@ class DeepSeekBackend(LLMBackend):
 
         msg = response.choices[0].message
 
-        tool_calls: list[dict] | None = None
+        tool_calls = None
         if msg.tool_calls:
             tool_calls = [
                 {
@@ -413,21 +413,40 @@ def auto_select_model(user_input: str) -> LLMBackend:
     return selected
 
 
-# ── 缓存统计（按模型区分 + 持久化到文件，重启不丢失） ──
+# ── 缓存统计（按会话隔离 + 持久化到文件，不串会话） ──
 
-# 持久化路径：agent/stats/api_stats.json
-_STATS_FILE = Path(__file__).resolve().parent.parent / "stats" / "api_stats.json"
+# 统计持久化目录：agent/stats/{session_id}.json
+_STATS_DIR = Path(__file__).resolve().parent.parent / "stats"
 
 # 空统计模板
 _EMPTY_STATS = {"requests": 0, "prompt_tokens": 0, "completion_tokens": 0,
                  "cache_hit_tokens": 0, "cache_miss_tokens": 0}
 
+# 当前会话 ID 和内存中的统计（切换会话时自动读写文件）
+_current_session_id: str = ""
+_CACHE_STATS: dict[str, dict] = {
+    "flash": dict(_EMPTY_STATS),
+    "pro": dict(_EMPTY_STATS),
+}
 
-def _load_cache_stats() -> dict[str, dict]:
-    """从文件加载持久化的统计，文件不存在则返回空统计。"""
+# 上一次请求的 messages 签名（运行时数据，不持久化）
+_cache_last_sig: dict[str, str] = {"flash": "", "pro": ""}
+
+# API 返回的真实 usage（运行时数据，不持久化）
+_last_api_usage: dict[str, dict | None] = {"flash": None, "pro": None}
+
+
+def _stats_path(session_id: str) -> Path:
+    """返回指定会话的统计文件路径。"""
+    return _STATS_DIR / f"{session_id}.json"
+
+
+def _load_cache_stats(session_id: str) -> dict[str, dict]:
+    """从文件加载指定会话的统计，文件不存在则返回空统计。"""
     try:
-        if _STATS_FILE.exists():
-            data = json.loads(_STATS_FILE.read_text(encoding="utf-8"))
+        p = _stats_path(session_id)
+        if p.exists():
+            data = json.loads(p.read_text(encoding="utf-8"))
             for model in ("flash", "pro"):
                 if model not in data:
                     data[model] = dict(_EMPTY_STATS)
@@ -440,24 +459,34 @@ def _load_cache_stats() -> dict[str, dict]:
     }
 
 
-def _save_cache_stats() -> None:
-    """将当前统计写入文件。"""
+def _save_cache_stats(session_id: str) -> None:
+    """将当前内存统计写入指定会话的文件。"""
     try:
-        _STATS_FILE.parent.mkdir(parents=True, exist_ok=True)
-        _STATS_FILE.write_text(json.dumps(_CACHE_STATS, ensure_ascii=False, indent=2),
-                                encoding="utf-8")
+        _STATS_DIR.mkdir(parents=True, exist_ok=True)
+        p = _stats_path(session_id)
+        p.write_text(json.dumps(_CACHE_STATS, ensure_ascii=False, indent=2),
+                      encoding="utf-8")
     except Exception:
         pass  # 写入失败不阻塞
 
 
-# 持久化的统计（启动自动加载，每次更新后自动保存）
-_CACHE_STATS: dict[str, dict] = _load_cache_stats()
+def _ensure_session(session_id: str) -> None:
+    """确保内存中是目标会话的统计。如果会话切换，自动保存旧会话、加载新会话。"""
+    global _current_session_id, _CACHE_STATS, _cache_last_sig
 
-# 上一次请求的 messages 签名（运行时数据，不持久化）
-_cache_last_sig: dict[str, str] = {"flash": "", "pro": ""}
+    if not session_id:
+        return
+    if session_id == _current_session_id:
+        return
 
-# API 返回的真实 usage（运行时数据，不持久化）
-_last_api_usage: dict[str, dict | None] = {"flash": None, "pro": None}
+    # 保存当前会话的统计
+    if _current_session_id:
+        _save_cache_stats(_current_session_id)
+
+    # 切换到新会话
+    _current_session_id = session_id
+    _CACHE_STATS = _load_cache_stats(session_id)
+    _cache_last_sig = {"flash": "", "pro": ""}  # 签名不跨会话
 
 
 def _set_api_usage(model_key: str, usage: object | None) -> None:
@@ -475,13 +504,15 @@ def _set_api_usage(model_key: str, usage: object | None) -> None:
         }
 
 
-def _update_cache_stats(model_key: str, messages: list[dict]) -> None:
-    """每次 API 请求后更新缓存统计，并持久化。
+def _update_cache_stats(model_key: str, messages: list[dict], session_id: str = "") -> None:
+    """每次 API 请求后更新当前会话的缓存统计，并持久化。
 
     优先使用 API 返回的真实 cache_hit/cache_miss 数据，
-    API 未返回时（如流式），用消息签名对比估算。
+    session_id 用于隔离不同会话的统计数据。
     """
     global _CACHE_STATS, _cache_last_sig
+
+    _ensure_session(session_id)
 
     stats = _CACHE_STATS.setdefault(model_key, dict(_EMPTY_STATS))
     stats["requests"] += 1
@@ -494,7 +525,7 @@ def _update_cache_stats(model_key: str, messages: list[dict]) -> None:
         stats["cache_hit_tokens"] += usage["cache_hit_tokens"]
         stats["cache_miss_tokens"] += usage["cache_miss_tokens"]
         _last_api_usage[model_key] = None  # 消费掉，防止重复计数
-        _save_cache_stats()
+        _save_cache_stats(_current_session_id)
         return
 
     # 后备方案：通过消息签名对比估算
@@ -526,23 +557,28 @@ def _update_cache_stats(model_key: str, messages: list[dict]) -> None:
     else:
         stats["cache_miss_tokens"] += total
     _cache_last_sig[model_key] = sig
-    _save_cache_stats()
+    _save_cache_stats(_current_session_id)
 
 
-def get_cache_stats() -> dict:
-    """返回各模型缓存命中统计，供 /context 使用。
+def get_cache_stats(session_id: str = "") -> dict:
+    """返回指定会话的缓存命中统计，供 /context 使用。
 
-    返回值:
-      {"models": {"flash": {...}, "pro": {...}}, "total": {...}}
+    传 session_id 查其他会话，不传则返回当前会话。
+    返回值: {"models": {"flash": {...}, "pro": {...}}, "total": {...}}
     """
-    models = {}
+    if session_id and session_id != _current_session_id:
+        data = _load_cache_stats(session_id)
+    else:
+        data = _CACHE_STATS
+
+    models: dict[str, dict] = {}
     total = dict(_EMPTY_STATS)
-    for key, stats in _CACHE_STATS.items():
-        models[key] = dict(stats)
-        for k in total:
-            total[k] += stats[k]
+    for key, stats in data.items():
+        if key in ("flash", "pro"):
+            models[key] = dict(stats)
+            for k in total:
+                total[k] += stats[k]
     return {"models": models, "total": total}
-# ═══════════════════════════════════════════════════════════════
 # 对话循环（核心）
 # ═══════════════════════════════════════════════════════════════
 
@@ -551,9 +587,11 @@ def _invoke_llm(
     backend: LLMBackend,
     messages: list[dict],
     on_token: TokenCallback,
+    session_id: str = "",
 ) -> tuple[str | None, list[dict] | None]:
     """调用 LLM，带重试机制。首次流式，失败后降级为非流式重试。"""
     model_key = backend.info.name.lower()
+    tools = get_tools() if backend.info.supports_tools else None
     tools = get_tools() if backend.info.supports_tools else None
 
     for attempt in range(1, MAX_RETRIES + 1):
@@ -563,7 +601,7 @@ def _invoke_llm(
             else:
                 logger.warning("流式失败，降级为非流式重试 (%d/%d)...", attempt, MAX_RETRIES)
                 result = backend.chat_non_stream(messages, on_token, tools)
-            _update_cache_stats(model_key, messages)
+            _update_cache_stats(model_key, messages, session_id)
             return result
         except RETRYABLE as e:
             if attempt < MAX_RETRIES:
@@ -779,7 +817,9 @@ def run_conversation(
     on_token: TokenCallback,
     on_tool: ToolCallback,
     on_progress: Callable[[], None] | None = None,
+    session_id: str = "",
 ) -> str:
+    """处理一轮对话：自动路由 + 工具调用循环。"""
     """处理一轮对话：自动路由 + 工具调用循环。"""
     copy: list[dict] = list(messages)
     copy.append({"role": "user", "content": user_input})
@@ -811,7 +851,7 @@ def run_conversation(
 
 
         try:
-            content, tool_calls = _invoke_llm(backend, _build_api_messages(copy), on_token)
+            content, tool_calls = _invoke_llm(backend, _build_api_messages(copy), on_token, session_id)
         except UserInterrupt:
             clear_interrupt()
             return "\n\n[⏹️ 已中断]"

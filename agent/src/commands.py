@@ -567,8 +567,7 @@ def _cmd_context(r: CmdResult, msgs, _args, _sid) -> None:
 
     # API 缓存命中统计（按模型区分）
     from .llm import get_cache_stats
-    cache = get_cache_stats()
-    # 向后兼容：旧版本返回扁平 dict（无 models/total 嵌套）
+    cache = get_cache_stats(_sid)
     if isinstance(cache, dict) and "total" not in cache:
         cache = {"models": {}, "total": cache}
     total = cache["total"]

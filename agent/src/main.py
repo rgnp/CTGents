@@ -362,6 +362,7 @@ def main() -> None:
                             run_conversation(
                                 messages, last_user, on_token, _on_tool,
                                 on_progress=lambda sid=sid: sid.__setitem__(0, save_session(messages, sid[0])),
+                                session_id=session_id,
                             )
                         finally:
                             _stop_esc_listener()
@@ -378,6 +379,7 @@ def main() -> None:
                     run_conversation(
                         messages, user_input, on_token, _on_tool,
                         on_progress=lambda sid=sid: sid.__setitem__(0, save_session(messages, sid[0])),
+                        session_id=session_id,
                     )
                 finally:
                     _stop_esc_listener()
@@ -399,6 +401,7 @@ def main() -> None:
                         run_conversation(
                             messages, guide, on_token, _on_tool,
                             on_progress=lambda sid=sid: sid.__setitem__(0, save_session(messages, sid[0])),
+                            session_id=session_id,
                         )
                     finally:
                         _stop_esc_listener()
