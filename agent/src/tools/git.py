@@ -359,9 +359,9 @@ def git_diff(staged: bool = False, path: str | None = None, file: str | None = N
     # 计算统计信息
     add_count = output.count("\n+")
     del_count = output.count("\n-")
-    changed_files = len(set(
+    changed_files = len({
         m.group(1) for m in re.finditer(r'^diff --git a/(.+?) b/', output, re.MULTILINE)
-    ))
+    })
 
     summary = (
         f"变更统计：{changed_files} 个文件，+{add_count}/-{del_count} 行\n"
@@ -459,7 +459,7 @@ def _generate_commit_message(repo_path: str) -> str:
             continue
         # git diff --name-status 格式: M file.py
         if line[0] in ("A", "M", "D", "R", "??"):
-            status = line[0]
+            line[0]
             filename = line[1:].strip() if len(line) > 1 else ""
             if line.startswith("??") or line.startswith("A"):
                 added.append(filename)
@@ -476,7 +476,6 @@ def _generate_commit_message(repo_path: str) -> str:
             added.append(line[1:].strip())
 
     # 构建 message
-    parts = []
 
     # 检测主要变更类型，生成 scope
     all_files = added + modified + deleted + renamed
@@ -585,10 +584,7 @@ def git_pr(title: str | None = None, body: str | None = None,
     if not base_branch:
         # 检测默认分支
         r = _git(["rev-parse", "--abbrev-ref", "origin/HEAD"], str(workdir))
-        if r["success"]:
-            base_branch = r["stdout"].strip().replace("origin/", "")
-        else:
-            base_branch = "main"  # 默认假设是 main
+        base_branch = r["stdout"].strip().replace("origin/", "") if r["success"] else "main"
 
     # 尝试用 gh CLI
     try:

@@ -6,8 +6,7 @@ import sys
 
 from openai.types.chat import ChatCompletionMessageToolCall
 
-from .plugin_mgr import get_plugin_spec, get_plugin_tools, reload_plugins
-from .tokens import count_messages_tokens, estimate_tokens, truncate_to_budget
+from .plugin_mgr import get_plugin_tools, reload_plugins
 
 # ── 内置模块清单（供热加载遍历）──
 # (模块路径, TOOLS_变量名, execute函数名)
@@ -100,7 +99,6 @@ def _init_registry():
             _register_builtin(tools_list, exec_fn)
 
     # plugin_mgr + discover 工具定义在此
-    from .discover import execute as _exec_discover
     from .plugin_mgr import execute as _exec_plugin_mgr
     _register_builtin(_PLUGIN_MGR_TOOLS, _exec_plugin_mgr)
 

@@ -88,10 +88,7 @@ def _cmd_help(r: CmdResult, _msgs, _args, _sid) -> None:
     for group in sorted(seen.values(), key=lambda g: g[0].name):
         primary = group[0]
         aliases = [c.name for c in group[1:]]
-        if aliases:
-            name_display = f"{primary.name}（{'、'.join(aliases)}）"
-        else:
-            name_display = primary.name
+        name_display = f"{primary.name}（{'、'.join(aliases)}）" if aliases else primary.name
         lines.append(f"  {name_display:<20} {primary.description}")
         if primary.usage:
             lines.append(f"  {'':<20} 用法: {primary.usage}")
@@ -358,9 +355,9 @@ def _cmd_status(r: CmdResult, msgs, _args, sid) -> None:
                 break
 
     # ── 上下文 ──
-    msg_count = len(msgs)
+    len(msgs)
     used_tokens = count_messages_tokens(msgs)
-    usage_pct = used_tokens / MAX_CONTEXT_TOKENS * 100
+    used_tokens / MAX_CONTEXT_TOKENS * 100
 
     lines = [
         "╔══════════════════════════════╗",
@@ -424,10 +421,9 @@ def _cmd_trust(r: CmdResult, _msgs, args, _sid) -> None:
 @builtin("/compact", description="手动压缩旧对话，释放 token 空间", usage="/compact [all|keep=N]")
 def _cmd_compact(r: CmdResult, msgs, args, _sid) -> None:
     """手动压缩旧对话。"""
-    from .llm import _compact_context
+    from .llm import _compact_context, _make_brief_summary
 
-    user_input = "手动压缩"
-    keep = 5  # 默认保留最近 5 轮
+    keep = 5  # 默认保留最近 5 轮对话
 
     if args:
         if args[0] == "all":
@@ -435,27 +431,65 @@ def _cmd_compact(r: CmdResult, msgs, args, _sid) -> None:
         elif args[0].startswith("keep="):
             try:
                 keep = int(args[0].split("=")[1])
+                if keep < 0:
+                    r.message = "无效参数: keep 必须 >= 0，用法: /compact [all|keep=N]"
+                    return
             except ValueError:
                 r.message = f"无效参数: {args[0]}，用法: /compact [all|keep=N]"
                 return
 
-    # 获取最后一条 user 输入作为 "用户输入" 传给 _compact_context
-    last_user = next(
+    # 获取最后一条 user 输入
+    next(
         (m["content"] for m in reversed(msgs) if m["role"] == "user"), "手动压缩"
     )
 
-    # 模拟压缩——如果 keep=0 且没有话题切换信号，先注入话题切换
-    if keep == 0:
-        user_input = "换个话题，重新开始"
-    else:
-        user_input = last_user
-
     original_len = len(msgs)
-    result = _compact_context(msgs, user_input)
+
+    if keep == 0:
+        # /compact all：全量压缩（话题切换模式）
+        user_input = "换个话题，重新开始"
+        result = _compact_context(msgs, user_input)
+    else:
+        # /compact 或 /compact keep=N：按轮数保留
+        # 找到第一个非 system 消息
+        first_non_system = 0
+        for i, m in enumerate(msgs):
+            if m.get("role") != "system":
+                first_non_system = i
+                break
+        else:
+            first_non_system = len(msgs)
+
+        # 从后往前数 keep 个 user 消息
+        user_found = 0
+        retain_start = len(msgs)  # 保留的起始位置
+        for i in range(len(msgs) - 1, first_non_system - 1, -1):
+            if msgs[i].get("role") == "user":
+                user_found += 1
+                if user_found == keep:
+                    retain_start = i
+                    break
+
+        if retain_start <= first_non_system or user_found < keep:
+            # 情况 1：保留起点回退到了 system 消息区 → 全部保留不压缩
+            # 情况 2：总轮数不够 keep → 不压缩
+            result = msgs
+        else:
+            # 前半部分压缩为摘要
+            to_archive = msgs[first_non_system:retain_start]
+            brief = _make_brief_summary(to_archive)
+            result = msgs[:first_non_system]
+            if brief:
+                result.append({
+                    "role": "system",
+                    "content": f"⏪ 对话摘要：{brief}",
+                })
+            result.extend(msgs[retain_start:])
+
     msgs[:] = result
 
     from .config import MAX_CONTEXT_TOKENS
-    from .tools import count_messages_tokens
+    from .tools.tokens import count_messages_tokens
     used = count_messages_tokens(msgs)
 
     r.message = (
@@ -472,7 +506,7 @@ def _cmd_compact(r: CmdResult, msgs, args, _sid) -> None:
 @builtin("/context", description="查看上下文用量、token 分布、压缩状态")
 def _cmd_context(r: CmdResult, msgs, _args, _sid) -> None:
     from .config import MAX_CONTEXT_TOKENS
-    from .tools import count_messages_tokens
+    from .tools.tokens import count_messages_tokens
 
     msg_count = len(msgs)
     used_tokens = count_messages_tokens(msgs)
@@ -525,11 +559,35 @@ def _cmd_context(r: CmdResult, msgs, _args, _sid) -> None:
                 content = m["content"]
                 if len(content) > 120:
                     content = content[:120] + "…"
-                lines.append(f"  ✅ 已压缩")
+                lines.append("  ✅ 已压缩")
                 lines.append(f"  {content}")
                 break
     else:
-        lines.append(f"  ❌ 未压缩（70% 触发自动压缩）")
+        lines.append("  ❌ 未压缩（70% 触发自动压缩）")
+
+    # API 缓存命中统计
+    from .llm import get_cache_stats
+    stats = get_cache_stats()
+    reqs = stats["requests"]
+    if reqs > 0:
+        hit = stats["cache_hit_tokens"]
+        miss = stats["cache_miss_tokens"]
+        total_prompt = stats["prompt_tokens"]
+        hit_ratio = hit / (hit + miss) * 100 if (hit + miss) > 0 else 0
+        lines.append("")
+        lines.append("── API 缓存命中 ──")
+        lines.append(f"  请求次数:   {reqs}")
+        lines.append(f"  输入 token: {total_prompt:,}")
+        if hit + miss > 0:
+            lines.append(f"  缓存命中:   {hit:,} ({hit_ratio:.1f}%)")
+            lines.append(f"  缓存未命中: {miss:,} ({100 - hit_ratio:.1f}%)")
+            # 柱状图
+            bar_len = 20
+            hit_bars = int(bar_len * hit_ratio / 100)
+            bar = "█" * hit_bars + "░" * (bar_len - hit_bars)
+            lines.append(f"  [{bar}]")
+        else:
+            lines.append("  缓存数据:   暂无（等待 API 返回）")
 
     # 最近 token 占比
     non_system_msgs = [m for m in msgs if m["role"] != "system"]

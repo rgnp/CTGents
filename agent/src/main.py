@@ -98,7 +98,8 @@ def _make_memory_context() -> dict | None:
         if f == "MEMORY.md" or not f.endswith(".md"):
             continue
         try:
-            text = open(os.path.join(d, f), encoding="utf-8").read()
+            with open(os.path.join(d, f), encoding="utf-8") as _f:
+                text = _f.read()
             name, desc = f[:-3], ""
             if text.startswith("---"):
                 fm = text[3:text.find("---", 3)]
@@ -303,10 +304,7 @@ def main() -> None:
     try:
         while True:
             try:
-                if _use_rich_input:
-                    user_input = prompt("You: ", key_bindings=kb).strip()
-                else:
-                    user_input = input("You: ").strip()
+                user_input = prompt("You: ", key_bindings=kb).strip() if _use_rich_input else input("You: ").strip()
             except (EOFError, KeyboardInterrupt):
                 break
 
@@ -361,9 +359,9 @@ def main() -> None:
                         sid = [session_id]
                         _start_esc_listener()
                         try:
-                            reply = run_conversation(
+                            run_conversation(
                                 messages, last_user, on_token, _on_tool,
-                                on_progress=lambda: sid.__setitem__(0, save_session(messages, sid[0])),
+                                on_progress=lambda sid=sid: sid.__setitem__(0, save_session(messages, sid[0])),
                             )
                         finally:
                             _stop_esc_listener()
@@ -377,9 +375,9 @@ def main() -> None:
                 sid = [session_id]
                 _start_esc_listener()
                 try:
-                    reply = run_conversation(
+                    run_conversation(
                         messages, user_input, on_token, _on_tool,
-                        on_progress=lambda: sid.__setitem__(0, save_session(messages, sid[0])),
+                        on_progress=lambda sid=sid: sid.__setitem__(0, save_session(messages, sid[0])),
                     )
                 finally:
                     _stop_esc_listener()
@@ -398,9 +396,9 @@ def main() -> None:
                     sid = [session_id]
                     _start_esc_listener()
                     try:
-                        reply = run_conversation(
+                        run_conversation(
                             messages, guide, on_token, _on_tool,
-                            on_progress=lambda: sid.__setitem__(0, save_session(messages, sid[0])),
+                            on_progress=lambda sid=sid: sid.__setitem__(0, save_session(messages, sid[0])),
                         )
                     finally:
                         _stop_esc_listener()

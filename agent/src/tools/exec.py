@@ -178,7 +178,7 @@ def run_command(command: str, timeout: int = 30, workdir: str | None = None) -> 
         return f"路径不是目录: {cwd}"
 
     # ── 确定 Shell ──
-    shell = "cmd" if platform.system() == "Windows" else "bash"
+    "cmd" if platform.system() == "Windows" else "bash"
 
     # ── 执行 ──
     try:

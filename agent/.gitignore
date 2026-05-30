@@ -55,6 +55,11 @@ htmlcov/
 .mypy_cache/
 .ruff_cache/
 *.cover
+
+# ── 调试临时文件 ──
+_debug*.txt
+_a.txt
+_c.txt
 !.coveragerc
 
 # ── Jupyter ──

@@ -23,7 +23,8 @@ from .config import (
     RETRY_BASE_DELAY,
     TOOL_LOOP_THRESHOLD,
 )
-from .tools import count_messages_tokens, execute_tool, get_tools, truncate_to_budget
+from .tools import execute_tool, get_tools
+from .tools.tokens import count_messages_tokens, truncate_to_budget
 
 # 工具显示标签（用于安全确认提示，避免循环导入 main.py）
 _TOOL_LABEL_MAP: dict[str, str] = {
@@ -322,7 +323,7 @@ def switch_model(name: str) -> tuple[bool, str]:
         return True, f"已切换到 {info.name}（{info.id}）"
 
     # 按完整模型 ID 查找
-    for key, backend in AVAILABLE_MODELS.items():
+    for _key, backend in AVAILABLE_MODELS.items():
         if backend.info.id == name:
             global _current_backend2
             _current_backend = backend
@@ -401,6 +402,65 @@ def auto_select_model(user_input: str) -> LLMBackend:
     return selected
 
 
+# ── 缓存统计 ──
+
+_cache_stats: dict[str, int] = {
+    "requests": 0,
+    "prompt_tokens": 0,
+    "cache_hit_tokens": 0,
+    "cache_miss_tokens": 0,
+}
+# 上一次请求的 messages 签名（用于估算缓存命中）
+_cache_last_sig: str = ""
+
+
+def _update_cache_stats(messages: list[dict]) -> None:
+    """每次 API 请求后更新缓存统计。
+
+    DeepSeek 前缀缓存：如果连续两次请求的前缀相同（工具定义 + 系统消息 +
+    前面几轮对话），则前缀部分从缓存读取，不计费。
+    这里用简化策略估算：对比相邻两次请求的消息签名。
+    """
+    global _cache_stats, _cache_last_sig
+    from .tools.tokens import count_messages_tokens
+
+    sig_parts: list[str] = []
+    for m in messages:
+        sig_parts.append(m.get("role", "") + ":" + str(len(m.get("content", "") or "")))
+    sig = "\n".join(sig_parts)
+
+    total = count_messages_tokens(messages)
+    _cache_stats["requests"] += 1
+    _cache_stats["prompt_tokens"] += total
+
+    if _cache_last_sig:
+        # 找相同前缀长度
+        prev_lines = _cache_last_sig.split("\n")
+        curr_lines = sig.split("\n")
+        match_count = 0
+        for pl, cl in zip(prev_lines, curr_lines, strict=False):
+            if pl == cl:
+                match_count += 1
+            else:
+                break
+        if match_count > 0:
+            # 估算命中缓存的 token（系统消息 + 前几轮匹配的对话）
+            hit = int(total * match_count / max(len(curr_lines), 1))
+            _cache_stats["cache_hit_tokens"] += hit
+            _cache_stats["cache_miss_tokens"] += total - hit
+        else:
+            _cache_stats["cache_miss_tokens"] += total
+    else:
+        _cache_stats["cache_miss_tokens"] += total
+
+    _cache_last_sig = sig
+
+
+def get_cache_stats() -> dict[str, int]:
+    """返回缓存命中统计，供 /context 使用。"""
+    return dict(_cache_stats)
+
+
 # ═══════════════════════════════════════════════════════════════
 # 对话循环（核心）
 # ═══════════════════════════════════════════════════════════════
@@ -417,10 +477,12 @@ def _invoke_llm(
     for attempt in range(1, MAX_RETRIES + 1):
         try:
             if attempt == 1:
-                return backend.chat_stream(messages, on_token, tools)
+                result = backend.chat_stream(messages, on_token, tools)
             else:
                 logger.warning("流式失败，降级为非流式重试 (%d/%d)...", attempt, MAX_RETRIES)
-                return backend.chat_non_stream(messages, on_token, tools)
+                result = backend.chat_non_stream(messages, on_token, tools)
+            _update_cache_stats(messages)
+            return result
         except RETRYABLE as e:
             if attempt < MAX_RETRIES:
                 delay = RETRY_BASE_DELAY * (2 ** (attempt - 1))
@@ -506,10 +568,7 @@ _TOPIC_SWITCH_KEYWORDS = [
 def _is_topic_switch(user_input: str) -> bool:
     """检测用户输入是否包含换话题信号。"""
     text = user_input.lower().strip()
-    for kw in _TOPIC_SWITCH_KEYWORDS:
-        if kw.lower() in text:
-            return True
-    return False
+    return any(kw.lower() in text for kw in _TOPIC_SWITCH_KEYWORDS)
 
 
 def _compact_context(copy: list[dict], user_input: str) -> list[dict]:
@@ -695,7 +754,7 @@ def run_conversation(
                 # ═══════════════════════════════════════════════
                 # Auto Mode 安全检查
                 # ═══════════════════════════════════════════════
-                from .safety import check_tool, trust_tool, get_mode, get_safety_level
+                from .safety import check_tool, get_mode, get_safety_level, trust_tool
 
                 safety = check_tool(tool_name)
                 if safety == "confirm":

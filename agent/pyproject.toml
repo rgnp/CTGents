@@ -35,7 +35,9 @@ ignore = [
     "D104",   # 不强制包级 docstring
     "D107",   # 不强制 __init__ 的 docstring
     "D205",   # 中文 docstring 摘要与正文之间无空行
+    "D400",   # 中文 docstring 以"。"结尾，不强制英文句号
     "D413",   # Returns 段落后缺少空行（中文风格）
+    "D415",   # 中文 docstring 以"。"结尾，不强制英文句号
     "RUF001", # 中文项目允许全角标点在字符串中
     "RUF002", # 中文项目允许全角标点在 docstring 中
     "RUF003", # 中文项目允许全角标点在注释中

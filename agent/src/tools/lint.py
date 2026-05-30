@@ -961,7 +961,6 @@ _DOC_SYNC_MAP: dict[str, list[str]] = {
     "src/main.py":         ["README.md", "docs/architecture.md"],
     "src/config.py":       [".env.example", "README.md"],
     "src/session.py":      ["AGENTS.md", "docs/architecture.md"],
-    "src/main.py":         ["README.md", "docs/architecture.md"],
 
     # 工具模块变更 → 必须更新对应文档
     "src/tools/lint.py":       ["AGENTS.md", "docs/features.md", "docs/roadmap.md"],
@@ -990,7 +989,6 @@ _DOC_SYNC_MAP: dict[str, list[str]] = {
     "docs/roadmap.md":         ["README.md"],
     "docs/features.md":        ["docs/changelog.md"],
     "docs/cache-design.md":    ["AGENTS.md", "docs/architecture.md"],
-    "docs/features.md":         ["docs/changelog.md"],
 }
 
 # 白名单：修改以下文件 / 目录不需要同步文档
@@ -1026,7 +1024,7 @@ def _classify_changed_file(changed: str) -> str:
 
 def docs_sync_check(path: str | None = None) -> str:
     """检查当前变更是否违反了文档同步规范。
-    
+
     遍历所有修改/新增/删除的文件，检查是否应该更新对应的文档。
     如果违反（改了代码但没改文档），给出明确提醒。
     """
@@ -1127,7 +1125,8 @@ def docs_sync_check(path: str | None = None) -> str:
 
 
 # ── 调度 ──
-
+def execute(name: str, args: dict) -> str | None:
+    """根据工具名分发到对应的检查函数。"""
     if name == "check_project":
         return check_project(
             path=args.get("path"),

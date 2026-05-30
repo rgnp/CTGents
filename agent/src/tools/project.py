@@ -272,12 +272,10 @@ def _detect_language_and_framework(root: Path) -> dict:
                 if any(kw in target.lower() for kw in _TEST_KEYWORDS):
                     if full_cmd not in result["test_commands"]:
                         result["test_commands"].append(full_cmd)
-                elif any(kw in target.lower() for kw in _BUILD_KEYWORDS):
-                    if full_cmd not in result["build_commands"]:
-                        result["build_commands"].append(full_cmd)
-                elif any(kw in target.lower() for kw in _RUN_KEYWORDS):
-                    if full_cmd not in result["run_commands"]:
-                        result["run_commands"].append(full_cmd)
+                elif any(kw in target.lower() for kw in _BUILD_KEYWORDS) and full_cmd not in result["build_commands"]:
+                    result["build_commands"].append(full_cmd)
+                elif any(kw in target.lower() for kw in _RUN_KEYWORDS) and full_cmd not in result["run_commands"]:
+                    result["run_commands"].append(full_cmd)
         except Exception:
             pass
 

@@ -90,7 +90,7 @@ def _get_changed_files() -> list[str]:
 
 def _find_affected_files(changed_file: str) -> list[str]:
     """在项目所有文档/配置文件中搜索提到变更文件名的文件。
-    
+
     不依赖硬编码清单，全项目自动发现，绝对不漏。
     返回匹配的文件路径列表（相对路径）。
     """
@@ -147,10 +147,10 @@ def _find_affected_files(changed_file: str) -> list[str]:
 
 def _track_changes(just_modified: str) -> str:
     """变更追踪：分析刚刚修改的文件，找出项目中还需要同步更新的文件。
-    
+
     核心逻辑：
       改文件 → git diff 拿变更列表 → 全项目 grep 搜哪些文件提到了这些变更 → 汇总提醒
-    
+
     优点：不维护依赖清单、不记"谁依赖谁"、每次实时分析、绝对不漏。
     """
     changed_all = _get_changed_files()
