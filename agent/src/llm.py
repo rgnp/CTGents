@@ -182,7 +182,6 @@ class DeepSeekBackend(LLMBackend):
             "model": self.info.id,
             "messages": messages,
             "stream": True,
-            "stream_options": {"include_usage": True},  # 末 chunk 返回 usage
             "max_tokens": self.info.max_tokens,
         }
         if tools and self.info.supports_tools:
@@ -198,13 +197,13 @@ class DeepSeekBackend(LLMBackend):
                     clear_interrupt()
                     raise UserInterrupt("用户按 Esc 中断")
 
-                # 末 chunk 携带 usage（choices 为空）
-                if hasattr(chunk, "usage") and chunk.usage:
-                    _set_api_usage(self.info.name.lower(), chunk.usage)
-                    continue  # 末 chunk 无内容
+                # 有的 API 在末 chunk 携带 usage（choices 为空），防御性处理
+                if not chunk.choices:
+                    if hasattr(chunk, "usage") and chunk.usage:
+                        _set_api_usage(self.info.name.lower(), chunk.usage)
+                    continue
 
                 delta = chunk.choices[0].delta
-
                 if delta.content:
                     on_token(delta.content)
                     content_parts.append(delta.content)
