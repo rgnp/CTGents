@@ -1,4 +1,7 @@
 # ── Python ──
+# ── 旧 agent 目录（已迁移到根目录）──
+agent/
+
 __pycache__/
 *.py[cod]
 *.pyo
