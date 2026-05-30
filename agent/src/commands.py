@@ -565,29 +565,47 @@ def _cmd_context(r: CmdResult, msgs, _args, _sid) -> None:
     else:
         lines.append("  ❌ 未压缩（70% 触发自动压缩）")
 
-    # API 缓存命中统计
+    # API 缓存命中统计（按模型区分）
     from .llm import get_cache_stats
-    stats = get_cache_stats()
-    reqs = stats["requests"]
-    if reqs > 0:
-        hit = stats["cache_hit_tokens"]
-        miss = stats["cache_miss_tokens"]
-        total_prompt = stats["prompt_tokens"]
-        hit_ratio = hit / (hit + miss) * 100 if (hit + miss) > 0 else 0
+    cache = get_cache_stats()
+    total = cache["total"]
+    if total["requests"] > 0:
         lines.append("")
-        lines.append("── API 缓存命中 ──")
-        lines.append(f"  请求次数:   {reqs}")
-        lines.append(f"  输入 token: {total_prompt:,}")
-        if hit + miss > 0:
-            lines.append(f"  缓存命中:   {hit:,} ({hit_ratio:.1f}%)")
-            lines.append(f"  缓存未命中: {miss:,} ({100 - hit_ratio:.1f}%)")
-            # 柱状图
-            bar_len = 20
-            hit_bars = int(bar_len * hit_ratio / 100)
-            bar = "█" * hit_bars + "░" * (bar_len - hit_bars)
-            lines.append(f"  [{bar}]")
-        else:
-            lines.append("  缓存数据:   暂无（等待 API 返回）")
+        lines.append("── API 统计（按模型） ──")
+
+        for model_key in ["flash", "pro"]:
+            s = cache["models"].get(model_key)
+            if not s or s["requests"] == 0:
+                continue
+            reqs = s["requests"]
+            prompt = s["prompt_tokens"]
+            completion = s["completion_tokens"]
+            hit = s["cache_hit_tokens"]
+            miss = s["cache_miss_tokens"]
+            hit_ratio = hit / (hit + miss) * 100 if (hit + miss) > 0 else 0
+            total_tokens = prompt + completion
+
+            model_emoji = "⚡" if model_key == "flash" else "🧠"
+            lines.append(f"  {model_emoji} {model_key.title()}")
+            lines.append(f"    请求: {reqs}次  |  输出: {completion:,} tok")
+            lines.append(f"    输入: {prompt:,} tok  |  总计: {total_tokens:,} tok")
+
+            if hit + miss > 0:
+                bar_len = 16
+                hit_bars = int(bar_len * hit_ratio / 100)
+                bar = "█" * hit_bars + "░" * (bar_len - hit_bars)
+                lines.append(f"    缓存: {bar}  {hit_ratio:.0f}%")
+            else:
+                lines.append("    缓存: 暂无数据")
+
+        # 总计行
+        lines.append("")
+        t = total
+        t_hit_ratio = t["cache_hit_tokens"] / (t["cache_hit_tokens"] + t["cache_miss_tokens"]) * 100 \
+            if (t["cache_hit_tokens"] + t["cache_miss_tokens"]) > 0 else 0
+        lines.append(f"  📊 总计: {t['requests']}次请求  "
+                      f"{t['prompt_tokens']+t['completion_tokens']:,} token  "
+                      f"缓存 {t_hit_ratio:.0f}%")
 
     # 最近 token 占比
     non_system_msgs = [m for m in msgs if m["role"] != "system"]

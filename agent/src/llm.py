@@ -182,6 +182,7 @@ class DeepSeekBackend(LLMBackend):
             "model": self.info.id,
             "messages": messages,
             "stream": True,
+            "stream_options": {"include_usage": True},  # 末 chunk 返回 usage
             "max_tokens": self.info.max_tokens,
         }
         if tools and self.info.supports_tools:
@@ -196,6 +197,11 @@ class DeepSeekBackend(LLMBackend):
                     stream.close()
                     clear_interrupt()
                     raise UserInterrupt("用户按 Esc 中断")
+
+                # 末 chunk 携带 usage（choices 为空）
+                if hasattr(chunk, "usage") and chunk.usage:
+                    _set_api_usage(self.info.name.lower(), chunk.usage)
+                    continue  # 末 chunk 无内容
 
                 delta = chunk.choices[0].delta
 
@@ -247,6 +253,11 @@ class DeepSeekBackend(LLMBackend):
             kwargs["tools"] = tools
 
         response = self.client.chat.completions.create(**kwargs)
+
+        # 捕获 API 返回的真实 usage（含 cache hit/miss）
+        if hasattr(response, "usage") and response.usage:
+            _set_api_usage(self.info.name.lower(), response.usage)
+
         msg = response.choices[0].message
 
         tool_calls: list[dict] | None = None
@@ -402,40 +413,75 @@ def auto_select_model(user_input: str) -> LLMBackend:
     return selected
 
 
-# ── 缓存统计 ──
+# ── 缓存统计（按模型区分 + 从 API 响应获取真实数据） ──
 
-_cache_stats: dict[str, int] = {
-    "requests": 0,
-    "prompt_tokens": 0,
-    "cache_hit_tokens": 0,
-    "cache_miss_tokens": 0,
+# 每模型独立统计
+_CACHE_STATS: dict[str, dict] = {
+    "flash": {"requests": 0, "prompt_tokens": 0, "completion_tokens": 0,
+              "cache_hit_tokens": 0, "cache_miss_tokens": 0},
+    "pro": {"requests": 0, "prompt_tokens": 0, "completion_tokens": 0,
+            "cache_hit_tokens": 0, "cache_miss_tokens": 0},
 }
-# 上一次请求的 messages 签名（用于估算缓存命中）
-_cache_last_sig: str = ""
+
+# 上一次请求的 messages 签名（当 API 未返回 usage 时的后备估算）
+_cache_last_sig: dict[str, str] = {"flash": "", "pro": ""}
+
+# API 返回的真实 usage（由 chat_non_stream / chat_stream 写入）
+_last_api_usage: dict[str, dict | None] = {"flash": None, "pro": None}
 
 
-def _update_cache_stats(messages: list[dict]) -> None:
+def _set_api_usage(model_key: str, usage: object | None) -> None:
+    """记录本次 API 返回的 usage 数据（非流式响应或流式末 chunk）。"""
+    global _last_api_usage
+    if usage is None:
+        return
+    import contextlib
+    with contextlib.suppress(Exception):
+        _last_api_usage[model_key] = {
+            "prompt_tokens": getattr(usage, "prompt_tokens", 0) or 0,
+            "completion_tokens": getattr(usage, "completion_tokens", 0) or 0,
+            "cache_hit_tokens": getattr(usage, "prompt_cache_hit_tokens", 0) or 0,
+            "cache_miss_tokens": getattr(usage, "prompt_cache_miss_tokens", 0) or 0,
+        }
+
+
+def _update_cache_stats(model_key: str, messages: list[dict]) -> None:
     """每次 API 请求后更新缓存统计。
 
-    DeepSeek 前缀缓存：如果连续两次请求的前缀相同（工具定义 + 系统消息 +
-    前面几轮对话），则前缀部分从缓存读取，不计费。
-    这里用简化策略估算：对比相邻两次请求的消息签名。
+    优先使用 API 返回的真实 cache_hit/cache_miss 数据，
+    API 未返回时（如流式早期版本），用消息签名对比估算。
     """
-    global _cache_stats, _cache_last_sig
+    global _CACHE_STATS, _cache_last_sig
+
+    stats = _CACHE_STATS.setdefault(model_key, {
+        "requests": 0, "prompt_tokens": 0, "completion_tokens": 0,
+        "cache_hit_tokens": 0, "cache_miss_tokens": 0,
+    })
+    stats["requests"] += 1
+
+    # 优先用 API 返回的真实数据
+    usage = _last_api_usage.get(model_key)
+    if usage and usage.get("prompt_tokens", 0) > 0:
+        stats["prompt_tokens"] += usage["prompt_tokens"]
+        stats["completion_tokens"] += usage["completion_tokens"]
+        stats["cache_hit_tokens"] += usage["cache_hit_tokens"]
+        stats["cache_miss_tokens"] += usage["cache_miss_tokens"]
+        _last_api_usage[model_key] = None  # 消费掉，防止重复计数
+        return
+
+    # 后备方案：通过消息签名对比估算
     from .tools.tokens import count_messages_tokens
+    total = count_messages_tokens(messages)
+    stats["prompt_tokens"] += total
 
     sig_parts: list[str] = []
     for m in messages:
         sig_parts.append(m.get("role", "") + ":" + str(len(m.get("content", "") or "")))
     sig = "\n".join(sig_parts)
+    last_sig = _cache_last_sig.get(model_key, "")
 
-    total = count_messages_tokens(messages)
-    _cache_stats["requests"] += 1
-    _cache_stats["prompt_tokens"] += total
-
-    if _cache_last_sig:
-        # 找相同前缀长度
-        prev_lines = _cache_last_sig.split("\n")
+    if last_sig:
+        prev_lines = last_sig.split("\n")
         curr_lines = sig.split("\n")
         match_count = 0
         for pl, cl in zip(prev_lines, curr_lines, strict=False):
@@ -444,22 +490,30 @@ def _update_cache_stats(messages: list[dict]) -> None:
             else:
                 break
         if match_count > 0:
-            # 估算命中缓存的 token（系统消息 + 前几轮匹配的对话）
             hit = int(total * match_count / max(len(curr_lines), 1))
-            _cache_stats["cache_hit_tokens"] += hit
-            _cache_stats["cache_miss_tokens"] += total - hit
+            stats["cache_hit_tokens"] += hit
+            stats["cache_miss_tokens"] += total - hit
         else:
-            _cache_stats["cache_miss_tokens"] += total
+            stats["cache_miss_tokens"] += total
     else:
-        _cache_stats["cache_miss_tokens"] += total
+        stats["cache_miss_tokens"] += total
+    _cache_last_sig[model_key] = sig
 
-    _cache_last_sig = sig
 
+def get_cache_stats() -> dict:
+    """返回各模型缓存命中统计，供 /context 使用。
 
-def get_cache_stats() -> dict[str, int]:
-    """返回缓存命中统计，供 /context 使用。"""
-    return dict(_cache_stats)
-
+    返回值:
+      {"models": {"flash": {...}, "pro": {...}}, "total": {...}}
+    """
+    models = {}
+    total = {"requests": 0, "prompt_tokens": 0, "completion_tokens": 0,
+             "cache_hit_tokens": 0, "cache_miss_tokens": 0}
+    for key, stats in _CACHE_STATS.items():
+        models[key] = dict(stats)
+        for k in total:
+            total[k] += stats[k]
+    return {"models": models, "total": total}
 
 # ═══════════════════════════════════════════════════════════════
 # 对话循环（核心）
@@ -472,6 +526,7 @@ def _invoke_llm(
     on_token: TokenCallback,
 ) -> tuple[str | None, list[dict] | None]:
     """调用 LLM，带重试机制。首次流式，失败后降级为非流式重试。"""
+    model_key = backend.info.name.lower()
     tools = get_tools() if backend.info.supports_tools else None
 
     for attempt in range(1, MAX_RETRIES + 1):
@@ -481,7 +536,7 @@ def _invoke_llm(
             else:
                 logger.warning("流式失败，降级为非流式重试 (%d/%d)...", attempt, MAX_RETRIES)
                 result = backend.chat_non_stream(messages, on_token, tools)
-            _update_cache_stats(messages)
+            _update_cache_stats(model_key, messages)
             return result
         except RETRYABLE as e:
             if attempt < MAX_RETRIES:
