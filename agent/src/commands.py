@@ -420,6 +420,95 @@ def _cmd_trust(r: CmdResult, _msgs, args, _sid) -> None:
     else:
         r.message = trust_tool(args[0])
 
+
+# ═══════════════════════════════════════════════════════════════
+# 上下文诊断指令
+# ═══════════════════════════════════════════════════════════════
+
+@builtin("/context", description="查看上下文用量、token 分布、压缩状态")
+def _cmd_context(r: CmdResult, msgs, _args, _sid) -> None:
+    from .config import MAX_CONTEXT_TOKENS
+    from .tools import count_messages_tokens
+
+    msg_count = len(msgs)
+    used_tokens = count_messages_tokens(msgs)
+    usage_pct = used_tokens / MAX_CONTEXT_TOKENS * 100
+
+    # 按角色统计
+    roles: dict[str, int] = {}
+    volatile_count = 0
+    for m in msgs:
+        role = m["role"]
+        roles[role] = roles.get(role, 0) + 1
+        if m.get("_volatile"):
+            volatile_count += 1
+
+    # 系统消息中是否有压缩标记
+    compacted = any("⏪" in (m.get("content") or "") for m in msgs if m["role"] == "system")
+
+    # token 预警状态
+    warn_70 = int(MAX_CONTEXT_TOKENS * 0.70)
+    warn_85 = int(MAX_CONTEXT_TOKENS * 0.85)
+    if used_tokens >= warn_85:
+        status_tag = "🔴 紧急"
+    elif used_tokens >= warn_70:
+        status_tag = "⚠️ 过载"
+    else:
+        status_tag = "✅ 正常"
+
+    lines = [
+        "╔══════════════════════════════╗",
+        "║      对话上下文诊断          ║",
+        "╚══════════════════════════════╝",
+        "",
+        f"  状态:      {status_tag}",
+        f"  Token:     {used_tokens:,} / {MAX_CONTEXT_TOKENS:,} ({usage_pct:.1f}%)",
+        f"  消息数:    {msg_count} 条",
+        "",
+        "── 消息分布 ──",
+        f"  system:   {roles.get('system', 0)} 条",
+        f"  user:     {roles.get('user', 0)} 条",
+        f"  assistant: {roles.get('assistant', 0)} 条",
+        f"  tool:     {roles.get('tool', 0)} 条",
+        f"  其中 _volatile: {volatile_count} 条（已过滤不发给 API）",
+        "",
+        "── 压缩状态 ──",
+    ]
+
+    if compacted:
+        for m in msgs:
+            if m["role"] == "system" and "⏪" in (m.get("content") or ""):
+                content = m["content"]
+                if len(content) > 120:
+                    content = content[:120] + "…"
+                lines.append(f"  ✅ 已压缩")
+                lines.append(f"  {content}")
+                break
+    else:
+        lines.append(f"  ❌ 未压缩（70% 触发自动压缩）")
+
+    # 最近 token 占比
+    non_system_msgs = [m for m in msgs if m["role"] != "system"]
+    recent_tokens = 0
+    for m in non_system_msgs[-6:]:
+        content = m.get("content") or ""
+        recent_tokens += len(content) * 0.35
+    recent_pct = recent_tokens / MAX_CONTEXT_TOKENS * 100 if recent_tokens > 0 else 0
+
+    all_non_system = sum(len(m.get("content") or "") * 0.35 for m in non_system_msgs)
+    all_pct = all_non_system / MAX_CONTEXT_TOKENS * 100 if all_non_system > 0 else 0
+
+    lines.append("")
+    lines.append("── Token 分布 ──")
+    lines.append(f"  旧对话:     {all_pct - recent_pct:.1f}%（可压缩）")
+    lines.append(f"  最近对话:   {recent_pct:.1f}%")
+    lines.append("")
+    lines.append("── 预警阈值 ──")
+    lines.append(f"  自动压缩 (70%):  {warn_70:,}")
+    lines.append(f"  紧急停止 (85%):  {warn_85:,}")
+
+    r.message = "\n".join(lines)
+
 # ═══════════════════════════════════════════════════════════════
 # 分发
 # ═══════════════════════════════════════════════════════════════
