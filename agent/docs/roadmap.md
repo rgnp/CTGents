@@ -12,15 +12,12 @@
 > 目标：将会话上下文改为三段式结构（Immutable Prefix / Append-Only Log / Volatile Scratch），
 > 把 DeepSeek 前缀缓存命中率从 ~0% 提升到 90%+，大幅降低长期会话的 token 费用。
 
-- [ ] 三段式上下文：`prefix`（固定）+ `log`（只追加）+ `scratch`（不发给 API）
-- [ ] 修复 `main.py` 的 `insert(0, ...)` 缓存毒药问题
-- [ ] 工具结果超过 3000 token 自动压缩为摘要
+- [x] 三段式上下文：`prefix`（固定）+ `log`（只追加）+ `scratch`（不发给 API）
+- [x] 修复 `main.py` 的 `insert(0, ...)` 缓存毒药问题
+- [x] 工具结果超过 3000 token 自动压缩为摘要
 - [ ] SAFE 工具并行分发（read_file、git_status 等）
 - [ ] Flatten：深度嵌套工具 schema 自动扁平化
 - [ ] Storm：相同 tool+args 滑动窗口去重
-
-**设计文档：** `docs/cache-design.md`
-
 ---
 
 

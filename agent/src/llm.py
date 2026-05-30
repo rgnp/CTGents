@@ -438,6 +438,55 @@ def _invoke_llm(
 # API 消息构建（前缀缓存友好版）
 # ═══════════════════════════════════════════════════════════════
 
+
+# ═══════════════════════════════════════════════════════════════
+# 工具结果压缩（Phase 2：缓存优化）
+# ═══════════════════════════════════════════════════════════════
+
+# 压缩阈值（字符数，约等于 token 数）
+_TOOL_RESULT_COMPRESS_THRESHOLD = 3000
+
+# 不压缩的工具（这些工具的结果通常短小或结构重要）
+_TOOL_RESULT_NO_COMPRESS = {
+    "git_status", "git_diff", "git_log", "git_branch",
+    "check_project", "docs_sync_check", "count_lines",
+}
+
+
+def _compress_tool_result(tool_name: str, result: str) -> str:
+    """压缩过大的工具结果，减少后续轮次的 token 消耗。
+
+    策略：
+    - 小于阈值 → 不压缩
+    - 大于阈值 → 保留前 N 字符 + 截断提示
+    - 特定工具（read_file 等）→ 额外提示可重新读取
+    """
+    if len(result) <= _TOOL_RESULT_COMPRESS_THRESHOLD:
+        return result
+    if tool_name in _TOOL_RESULT_NO_COMPRESS:
+        return result
+
+    head = result[:_TOOL_RESULT_COMPRESS_THRESHOLD]
+    total = len(result)
+
+    # 根据工具类型决定提示语
+    if tool_name in ("read_file", "read_file_lines"):
+        hint = (
+            f"\n\n[已压缩：原始结果 {total} 字符，仅显示前 {_TOOL_RESULT_COMPRESS_THRESHOLD} 字符。"
+            f"如需完整内容，可使用 read_file 重新读取]"
+        )
+    elif tool_name in ("search_web", "read_page"):
+        hint = (
+            f"\n\n[已压缩：搜索结果 {total} 字符，仅显示前 {_TOOL_RESULT_COMPRESS_THRESHOLD} 字符。"
+            f"如需完整内容，可重新搜索或阅读页面]"
+        )
+    else:
+        hint = (
+            f"\n\n[已压缩：原始结果 {total} 字符，仅显示前 {_TOOL_RESULT_COMPRESS_THRESHOLD} 字符]"
+        )
+
+    return head + hint
+
 def _build_api_messages(messages: list[dict]) -> list[dict]:
     """构建发给 API 的消息列表。
 
@@ -544,6 +593,8 @@ def run_conversation(
                     result = execute_tool(tc)
 
                 result = truncate_to_budget(result, copy)
+                # Phase 2: 压缩过大的工具结果
+                result = _compress_tool_result(tool_name, result)
                 copy.append({
                     "role": "tool",
                     "tool_call_id": tc_data["id"],

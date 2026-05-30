@@ -77,6 +77,22 @@ messages.insert(1, _make_project_context())  # ← 同样破坏缓存
 
 ### Phase 2：工具结果压缩
 
+### Phase 2：工具结果压缩 ✅
+
+> 目标：减少后续轮次中携带的冗余工具结果。
+
+| 任务 | 说明 | 状态 |
+|------|------|:----:|
+| `_compress_tool_result()` | 超过 3000 字符 → 截断 + 提示语（read_file/search_web 等有专属提示） | ✅ |
+| 不压缩白名单 | git_status/git_diff/check_project 等短小工具不压缩 | ✅ |
+| 接入对话循环 | 在 `run_conversation` 中 `truncate_to_budget` 之后调用 | ✅ |
+| 测试 | 18 个单元测试覆盖边界/类型/白名单 | ✅ |
+
+**验证**：`test_cache.py` 20 个测试全部通过。
+
+---
+
+
 **目标**：减少后续轮次中携带的冗余工具结果。
 
 | 任务 | 说明 |

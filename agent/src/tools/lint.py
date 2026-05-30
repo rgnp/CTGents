@@ -977,6 +977,7 @@ _DOC_SYNC_MAP: dict[str, list[str]] = {
 
     # 测试变更 → 至少更新 CHANGELOG
     "tests/":                  ["docs/changelog.md"],
+    "tests/test_cache.py":     ["docs/cache-design.md"],
 
     # 配置变更 → 影响范围大
     "pyproject.toml":          ["README.md", "AGENTS.md", "docs/changelog.md"],
