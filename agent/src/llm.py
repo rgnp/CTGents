@@ -592,7 +592,6 @@ def _invoke_llm(
     """调用 LLM，带重试机制。首次流式，失败后降级为非流式重试。"""
     model_key = backend.info.name.lower()
     tools = get_tools() if backend.info.supports_tools else None
-    tools = get_tools() if backend.info.supports_tools else None
 
     for attempt in range(1, MAX_RETRIES + 1):
         try:
@@ -819,7 +818,6 @@ def run_conversation(
     on_progress: Callable[[], None] | None = None,
     session_id: str = "",
 ) -> str:
-    """处理一轮对话：自动路由 + 工具调用循环。"""
     """处理一轮对话：自动路由 + 工具调用循环。"""
     copy: list[dict] = list(messages)
     copy.append({"role": "user", "content": user_input})
