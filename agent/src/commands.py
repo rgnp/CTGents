@@ -421,6 +421,50 @@ def _cmd_trust(r: CmdResult, _msgs, args, _sid) -> None:
         r.message = trust_tool(args[0])
 
 
+@builtin("/compact", description="手动压缩旧对话，释放 token 空间", usage="/compact [all|keep=N]")
+def _cmd_compact(r: CmdResult, msgs, args, _sid) -> None:
+    """手动压缩旧对话。"""
+    from .llm import _compact_context
+
+    user_input = "手动压缩"
+    keep = 5  # 默认保留最近 5 轮
+
+    if args:
+        if args[0] == "all":
+            keep = 0
+        elif args[0].startswith("keep="):
+            try:
+                keep = int(args[0].split("=")[1])
+            except ValueError:
+                r.message = f"无效参数: {args[0]}，用法: /compact [all|keep=N]"
+                return
+
+    # 获取最后一条 user 输入作为 "用户输入" 传给 _compact_context
+    last_user = next(
+        (m["content"] for m in reversed(msgs) if m["role"] == "user"), "手动压缩"
+    )
+
+    # 模拟压缩——如果 keep=0 且没有话题切换信号，先注入话题切换
+    if keep == 0:
+        user_input = "换个话题，重新开始"
+    else:
+        user_input = last_user
+
+    original_len = len(msgs)
+    result = _compact_context(msgs, user_input)
+    msgs[:] = result
+
+    from .config import MAX_CONTEXT_TOKENS
+    from .tools import count_messages_tokens
+    used = count_messages_tokens(msgs)
+
+    r.message = (
+        f"已压缩：{original_len} → {len(msgs)} 条消息\n"
+        f"当前 Token: {used:,} / {MAX_CONTEXT_TOKENS:,} ({used/MAX_CONTEXT_TOKENS*100:.1f}%)"
+    )
+    r.save = True
+
+
 # ═══════════════════════════════════════════════════════════════
 # 上下文诊断指令
 # ═══════════════════════════════════════════════════════════════
