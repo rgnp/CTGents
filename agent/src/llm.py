@@ -490,17 +490,12 @@ def _compress_tool_result(tool_name: str, result: str) -> str:
 def _build_api_messages(messages: list[dict]) -> list[dict]:
     """构建发给 API 的消息列表。
 
-    **内存中只追加，发 API 时重排**：
-    1. 所有系统消息（含 _volatile）排在最前面
-    2. 非系统消息（user/assistant/tool）保持追加顺序
-    3. _volatile 消息不过滤（LLM 需要它们），但它们位于系统消息区
-
-    这样内存 messages 保持 append-only 不破坏前缀缓存，
-    API 消息结构依然符合 LLM 的预期（系统提示在前）。
+    过滤 _volatile 消息（运行时上下文，仅首次需要，后续轮次不需要重复发送）。
+    非系统消息保持追加顺序，保障前缀缓存稳定性。
     """
     api: list[dict] = []
     for m in messages:
-        if m.get("role") == "system":
+        if m.get("role") == "system" and not m.get("_volatile"):
             api.append(m)
     for m in messages:
         if m.get("role") != "system":

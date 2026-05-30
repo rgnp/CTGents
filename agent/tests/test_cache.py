@@ -8,7 +8,7 @@ from src.llm import (
 
 
 class TestBuildApiMessages:
-    """测试 _build_api_messages：系统消息排前，非系统消息保持追加顺序。"""
+    """测试 _build_api_messages：系统消息排前，_volatile 过滤，非系统保持追加顺序。"""
 
     def test_system_messages_first(self):
         msgs = [
@@ -21,7 +21,25 @@ class TestBuildApiMessages:
         assert api[1]["role"] == "user"
         assert api[2]["role"] == "assistant"
 
-    def test_multiple_system_messages(self):
+    def test_volatile_is_filtered(self):
+        msgs = [
+            {"role": "user", "content": "u"},
+            {"role": "system", "content": "mode", "_volatile": True},
+        ]
+        api = _build_api_messages(msgs)
+        volatile_in_api = [m for m in api if m.get("_volatile")]
+        assert len(volatile_in_api) == 0
+
+    def test_non_volatile_system_kept(self):
+        msgs = [
+            {"role": "user", "content": "u"},
+            {"role": "system", "content": "static rule"},
+        ]
+        api = _build_api_messages(msgs)
+        assert len(api) == 2
+        assert api[0]["role"] == "system"
+
+    def test_mixed_volatile_and_normal(self):
         msgs = [
             {"role": "user", "content": "1"},
             {"role": "system", "content": "s1", "_volatile": True},
@@ -30,7 +48,7 @@ class TestBuildApiMessages:
         ]
         api = _build_api_messages(msgs)
         roles = [m["role"] for m in api]
-        assert roles == ["system", "system", "user", "assistant"]
+        assert roles == ["system", "user", "assistant"]
 
     def test_non_system_order_preserved(self):
         msgs = [
@@ -53,15 +71,6 @@ class TestBuildApiMessages:
 
     def test_empty_input(self):
         assert _build_api_messages([]) == []
-
-    def test_volatile_not_filtered(self):
-        msgs = [
-            {"role": "user", "content": "u"},
-            {"role": "system", "content": "mode", "_volatile": True},
-        ]
-        api = _build_api_messages(msgs)
-        assert len(api) == 2
-        assert api[0]["role"] == "system"
 
 
 class TestCompressToolResult:
