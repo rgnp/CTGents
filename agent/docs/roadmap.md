@@ -5,6 +5,26 @@
 
 ---
 
+## 最新更新（2026-05-30 v0.8 — 🚧 进行中）
+
+### 1.9 DeepSeek 前缀缓存优化（基于 Reasonix 调研）
+
+> 目标：将会话上下文改为三段式结构（Immutable Prefix / Append-Only Log / Volatile Scratch），
+> 把 DeepSeek 前缀缓存命中率从 ~0% 提升到 90%+，大幅降低长期会话的 token 费用。
+
+- [ ] 三段式上下文：`prefix`（固定）+ `log`（只追加）+ `scratch`（不发给 API）
+- [ ] 修复 `main.py` 的 `insert(0, ...)` 缓存毒药问题
+- [ ] 工具结果超过 3000 token 自动压缩为摘要
+- [ ] SAFE 工具并行分发（read_file、git_status 等）
+- [ ] Flatten：深度嵌套工具 schema 自动扁平化
+- [ ] Storm：相同 tool+args 滑动窗口去重
+
+**设计文档：** `docs/cache-design.md`
+
+---
+
+
+
 ## 最新更新（2026-05-29 v0.7）
 
 ### 1.7 文档同步强制机制 ✅
@@ -65,10 +85,10 @@
 | ❌ 实时输出 | run_command 无流式输出（类 Claude Code 终端效果） |
 | ❌ 后台命令 | run_command 不支持后台运行 |
 
----
-
-## 第一阶段：基础能力 ✅（已完成）
-
+| ❌ Token 缓存 | DeepSeek 前缀缓存命中率 ~0%，长期会话浪费大量费用 |
+| ❌ 长任务 | 无后台会话、无目标驱动持续执行 |
+| ❌ 多厂商 | 只有 DeepSeek，无 Claude/GPT/Qwen 后端 |
+| ❌ MCP | 无 MCP 服务器支持 |
 ### ~~1.1 通用 Shell 执行工具~~ ✅
 - [x] `run_command` + `run_python` 安全黑名单 + 超时控制
 - [ ] **待办**：实时输出流式显示（类似 Claude Code 的终端效果）
@@ -169,10 +189,9 @@
 ## 版本里程碑
 
 | 版本 | 目标 | 状态 |
-|------|------|:----:|
-| v0.1 | 基础对话 Agent | ✅ 已完成 |
-| v0.2 | 核心工具补齐（文件/Shell/插件/记忆） | ✅ 已完成 |
-| v0.3 | Git 操作 + 项目感知 | ✅ 已完成 |
+| v0.8 | DeepSeek 前缀缓存优化（三段式上下文） | 🚧 进行中 |
+| v0.9 | 目标驱动长任务 + 项目级记忆 | 🗓️ 规划中 |
+| v1.0 | MCP + 多厂商 + IDE 集成 | 🗓️ 远期 |
 | v0.4 | 多模型路由（Flash/Pro） | ✅ 已完成 |
 | v0.5 | 项目规范检查 + AGENTS.md + 测试骨架 | ✅ 已完成 |
 | v0.6 | Auto Mode 安全系统 | ✅ 已完成 |

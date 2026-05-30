@@ -986,7 +986,9 @@ _DOC_SYNC_MAP: dict[str, list[str]] = {
     # 文档互相引用
     "AGENTS.md":               ["README.md"],
     "README.md":               ["AGENTS.md"],
-    "docs/roadmap.md":          ["README.md"],
+    "docs/roadmap.md":         ["README.md"],
+    "docs/features.md":        ["docs/changelog.md"],
+    "docs/cache-design.md":    ["AGENTS.md", "docs/architecture.md"],
     "docs/features.md":         ["docs/changelog.md"],
 }
 

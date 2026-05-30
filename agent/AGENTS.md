@@ -41,13 +41,15 @@
 
 ## 项目结构
 
-```
-agent/
-├── src/                    # 核心源码
-│   ├── tools/              # 工具模块（每个文件一个工具类别）
-│   │   ├── __init__.py     #   工具注册与调度
-│   │   ├── file.py         #   文件操作（读/写/删/行级编辑）
-│   │   ├── exec.py         #   Shell 执行
+├── docs/                   # 文档
+│   ├── architecture.md     #   系统架构
+│   ├── development.md      #   开发者指南
+│   ├── skills.md           #   Skill 技能包参考
+│   ├── cache-design.md     #   DeepSeek 前缀缓存优化设计
+│   ├── features.md         #   功能列表
+│   ├── roadmap.md          #   开发路线图
+│   ├── changelog.md        #   版本变更记录
+│   └── contributing.md     #   贡献指南
 │   │   ├── code.py         #   代码搜索（grep_code）
 │   │   ├── git.py          #   Git 操作
 │   │   ├── project.py      #   项目扫描
