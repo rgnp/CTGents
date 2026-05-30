@@ -487,6 +487,135 @@ def _compress_tool_result(tool_name: str, result: str) -> str:
 
     return head + hint
 
+# ═══════════════════════════════════════════════════════════════
+# 对话历史压缩（Phase 3）
+# ═══════════════════════════════════════════════════════════════
+
+# 触发压缩的上下文比例（达到 70% 时触发）
+_COMPACT_THRESHOLD = 0.70
+# 压缩时保留最近对话的预算比例
+_COMPACT_RETAIN_RATIO = 0.20
+# 话题切换关键词（检测到后全量压缩）
+_TOPIC_SWITCH_KEYWORDS = [
+    "换个", "换一", "不谈", "不说", "跳过", "算了",
+    "下一个", "新的", "另外", "不管", "再看",
+    "topic", "switch", "next", "another", "skip",
+]
+
+
+def _is_topic_switch(user_input: str) -> bool:
+    """检测用户输入是否包含换话题信号。"""
+    text = user_input.lower().strip()
+    for kw in _TOPIC_SWITCH_KEYWORDS:
+        if kw.lower() in text:
+            return True
+    return False
+
+
+def _compact_context(copy: list[dict], user_input: str) -> list[dict]:
+    """压缩旧对话历史，保留最近 20% 预算的对话。
+
+    策略：
+    - 检测到换话题 → 全量压缩，保留全部 token 空间给新话题
+    - 正常情况 → 从后往前保留最近对话，直到占满 20% 预算
+    - 摘要用关键信息拼接，不额外调用 LLM
+    """
+    # 找到第一个非 system 消息的位置
+    first_non_system = 0
+    for i, m in enumerate(copy):
+        if m.get("role") != "system":
+            first_non_system = i
+            break
+    else:
+        return copy  # 全是系统消息，不压缩
+
+    # 检测话题切换
+    if _is_topic_switch(user_input):
+        to_archive = copy[first_non_system:]
+        # 提取最早几轮的关键词做摘要
+        brief = _make_brief_summary(to_archive)
+        archive_msg = {
+            "role": "system",
+            "content": f"⏪ 前一话题已结束，相关讨论已归档。{brief}",
+        }
+        new_copy = copy[:first_non_system]
+        new_copy.append(archive_msg)
+        logger.info("话题切换检测到，已压缩 %d 条旧对话", len(copy) - first_non_system)
+        return new_copy
+
+    # 正常压缩：从后往前累加，保留 20% 预算
+    retain_budget = int(MAX_CONTEXT_TOKENS * _COMPACT_RETAIN_RATIO)
+    accumulated = 0
+    retain_start = len(copy)  # 从末尾开始
+
+    for i in range(len(copy) - 1, first_non_system - 1, -1):
+        m = copy[i]
+        content = m.get("content", "") or ""
+        tokens = len(content) * 0.35  # 略保守估计
+        if accumulated + tokens > retain_budget:
+            break
+        accumulated += tokens
+        retain_start = i
+
+    # 确保 retain_start 指向一个 user 消息（保留完整对话对）
+    while retain_start < len(copy) and copy[retain_start].get("role") != "user":
+        retain_start += 1
+
+    if retain_start <= first_non_system:
+        return copy  # 连 20% 预算都装不下，不压缩
+
+    # 前半部分压缩
+    to_archive = copy[first_non_system:retain_start]
+    brief = _make_brief_summary(to_archive)
+
+    new_copy = copy[:first_non_system]
+    if brief:
+        new_copy.append({
+            "role": "system",
+            "content": f"⏪ 对话摘要：{brief}",
+        })
+    new_copy.extend(copy[retain_start:])
+    logger.info("上下文压缩完成：保留 %d/%d 条消息", len(copy[retain_start:]), len(copy) - first_non_system)
+    return new_copy
+
+
+def _make_brief_summary(messages: list[dict], max_len: int = 300) -> str:
+    """从对话列表中提取关键信息做摘要，不调用 LLM。
+
+    提取策略：取最初几轮的用户问题 + 关键助手回复片段。
+    """
+    parts: list[str] = []
+    user_count = 0
+
+    for m in messages:
+        content = (m.get("content") or "").strip()
+        if not content:
+            continue
+        if m.get("role") == "user":
+            user_count += 1
+            # 取用户问题的前 60 个字符作为线索
+            snippet = content[:60].replace("\n", " ")
+            if user_count <= 5 and len("".join(parts)) < max_len:
+                parts.append(snippet)
+        elif m.get("role") == "tool" and m.get("_tool_name") in ("search_web", "read_page"):
+            # 提取搜索结果的关键词
+            first_line = content.split("\n")[0][:40] if content else ""
+            if first_line and len("".join(parts)) < max_len:
+                parts.append(f"[搜索] {first_line}")
+
+    if not parts:
+        return ""
+
+    result = "、".join(parts)
+    if len(result) > max_len:
+        result = result[:max_len] + "…"
+
+    if user_count > 5:
+        result += f"（共 {user_count} 轮交互）"
+
+    return result
+
+
 def _build_api_messages(messages: list[dict]) -> list[dict]:
     """构建发给 API 的消息列表。
 
@@ -532,6 +661,13 @@ def run_conversation(
                 f"上下文用量已达上限（{used}/{MAX_CONTEXT_TOKENS} tokens）。"
                 "请开启新会话或精简问题。"
             )
+        # Phase 3：自动压缩旧对话（超过 70% 时触发）
+        compact_limit = int(MAX_CONTEXT_TOKENS * _COMPACT_THRESHOLD)
+        if used >= compact_limit:
+            logger.info("触发自动压缩：%d >= %d (70%%)", used, compact_limit)
+            copy = _compact_context(copy, user_input)
+            logger.info("压缩后消息数: %d", len(copy))
+
 
         try:
             content, tool_calls = _invoke_llm(backend, _build_api_messages(copy), on_token)
