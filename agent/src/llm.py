@@ -23,7 +23,7 @@ from .config import (
     RETRY_BASE_DELAY,
     TOOL_LOOP_THRESHOLD,
 )
-from .tools import execute_tool, get_tools, truncate_to_budget
+from .tools import count_messages_tokens, execute_tool, get_tools, truncate_to_budget
 
 # 工具显示标签（用于安全确认提示，避免循环导入 main.py）
 _TOOL_LABEL_MAP: dict[str, str] = {
@@ -56,13 +56,8 @@ _TOOL_LABEL_MAP: dict[str, str] = {
     "git_pr":        "Git PR",
     "git_branch":    "Git 分支",
     "scan_project":  "扫描项目",
-    "check_project": "规范检查",
-    "generate_agents_md": "生成规范",
     "docs_sync_check": "文档同步检查",
-    "check_project": "规范检查",
-    "generate_agents_md": "生成规范",
 }
-from .tools.tokens import count_messages_tokens
 
 logger = logging.getLogger(__name__)
 
@@ -439,6 +434,31 @@ def _invoke_llm(
     raise RuntimeError("unreachable")
 
 
+# ═══════════════════════════════════════════════════════════════
+# API 消息构建（前缀缓存友好版）
+# ═══════════════════════════════════════════════════════════════
+
+def _build_api_messages(messages: list[dict]) -> list[dict]:
+    """构建发给 API 的消息列表。
+
+    **内存中只追加，发 API 时重排**：
+    1. 所有系统消息（含 _volatile）排在最前面
+    2. 非系统消息（user/assistant/tool）保持追加顺序
+    3. _volatile 消息不过滤（LLM 需要它们），但它们位于系统消息区
+
+    这样内存 messages 保持 append-only 不破坏前缀缓存，
+    API 消息结构依然符合 LLM 的预期（系统提示在前）。
+    """
+    api: list[dict] = []
+    for m in messages:
+        if m.get("role") == "system":
+            api.append(m)
+    for m in messages:
+        if m.get("role") != "system":
+            api.append(m)
+    return api
+
+
 def run_conversation(
     messages: list[dict],
     user_input: str,
@@ -470,7 +490,7 @@ def run_conversation(
             )
 
         try:
-            content, tool_calls = _invoke_llm(backend, copy, on_token)
+            content, tool_calls = _invoke_llm(backend, _build_api_messages(copy), on_token)
         except UserInterrupt:
             clear_interrupt()
             return "\n\n[⏹️ 已中断]"

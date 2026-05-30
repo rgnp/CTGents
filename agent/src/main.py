@@ -263,32 +263,23 @@ def main() -> None:
                 session_id = sessions[idx]
                 messages, summary = load_session(session_id)
                 if summary:
-                    messages.insert(0, {"role": "system", "content": f"之前对话的摘要：{summary}"})
+                    messages.append({"role": "system", "content": f"之前对话的摘要：{summary}", "_volatile": True})
                 print(f"已加载会话 [{session_id}]，共 {len(messages)} 条消息")
                 _print_recent(messages)
                 print()
         except ValueError:
             pass
 
-    # 注入环境上下文（每次启动刷新，不持久化到磁盘）
-    messages.insert(0, _make_env_message())
-
-    # 注入项目结构感知上下文
+    # 注入环境上下文、项目感知、记忆索引、安全模式（全部 append，不 insert）
+    messages.append(_make_env_message())
     proj_ctx = _make_project_context()
     if proj_ctx:
-        messages.insert(1, proj_ctx)
-
-    # 注入已有记忆索引
+        messages.append(proj_ctx)
     mem_ctx = _make_memory_context()
     if mem_ctx:
-        # 排在环境上下文和项目上下文之后
-        insert_pos = 2 if proj_ctx else 1
-        messages.insert(insert_pos, mem_ctx)
-
-    # 注入安全模式信息
+        messages.append(mem_ctx)
     from .safety import get_mode_summary
-    mode_info = get_mode_summary()
-    messages.append({"role": "system", "content": mode_info, "_volatile": True})
+    messages.append({"role": "system", "content": get_mode_summary(), "_volatile": True})
 
     print("Agent 已启动，输入 /help 查看指令列表\n")
 
@@ -341,9 +332,7 @@ def main() -> None:
                     session_id = save_session(messages, session_id)
                     print(f"会话已保存: [{session_id}]")
                 if r.load:
-                    messages, summary = load_session(r.load)
-                    if summary:
-                        messages.insert(0, {"role": "system", "content": f"之前对话的摘要：{summary}"})
+                    messages.append({"role": "system", "content": f"之前对话的摘要：{summary}", "_volatile": True})
                     session_id = r.load
                     print(f"已加载会话 [{r.load}]，共 {len(messages)} 条消息")
                     _print_recent(messages)
@@ -351,16 +340,14 @@ def main() -> None:
                     messages.clear()
                     if r.save:   # /new: 同时重置 session
                         session_id = None
-                    # 重新注入环境上下文、项目感知和记忆索引
-                    messages.insert(0, _make_env_message())
+                    # 重新注入环境上下文、项目感知、记忆索引、安全模式（全部 append）
+                    messages.append(_make_env_message())
                     proj_ctx = _make_project_context()
                     if proj_ctx:
-                        messages.insert(1, proj_ctx)
+                        messages.append(proj_ctx)
                     mem_ctx = _make_memory_context()
                     if mem_ctx:
-                        insert_pos = 2 if proj_ctx else 1
-                        messages.insert(insert_pos, mem_ctx)
-                    # 重新注入安全模式信息
+                        messages.append(mem_ctx)
                     from .safety import get_mode_summary
                     messages.append({"role": "system", "content": get_mode_summary(), "_volatile": True})
                 if r.exit:
