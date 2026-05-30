@@ -56,9 +56,17 @@ htmlcov/
 .ruff_cache/
 *.cover
 
-# ── 调试临时文件 ──
+# ── 调试/测试临时文件 ──
 _debug*.txt
 _a.txt
+_c.txt
+_test_*.py
+test*.txt
+R.txt
+X.txt
+_cr.txt
+_cres.txt
+_check_*.txt
 _c.txt
 !.coveragerc
 
