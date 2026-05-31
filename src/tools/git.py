@@ -85,11 +85,33 @@ TOOLS_GIT = [
     {
         "type": "function",
         "function": {
+            "name": "git_review",
+            "description": (
+                "Review staged changes for issues before commit. "
+                "Run before git_commit to catch: missing type hints, bare except, "
+                "hardcoded secrets, dead code, incomplete error handling."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "path": {
+                        "type": "string",
+                        "description": "Git 仓库路径，默认当前项目目录",
+                    },
+                },
+                "required": [],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "git_commit",
             "description": (
                 "暂存所有变更并提交。"
                 "如果未提供 message，将自动分析当前变更生成 commit message。"
                 "支持 commit 前自动 stage 所有变更。"
+                "建议先调 git_review 审查变更再提交。"
             ),
             "parameters": {
                 "type": "object",
@@ -400,6 +422,93 @@ def git_log(count: int = 10, path: str | None = None) -> str:
     return "\n".join(lines)
 
 
+def git_review(path: str | None = None) -> str:
+    """审查暂存变更的问题。返回审查结果。"""
+    if not _is_git_repo(path):
+        return "当前目录不是 Git 仓库"
+
+    workdir = Path(path).resolve() if path else Path.cwd()
+    repo_path = str(workdir)
+
+    # 获取 staged diff
+    r = _git(["diff", "--cached"], repo_path)
+    if not r["success"] or not r["stdout"].strip():
+        r = _git(["diff"], repo_path)  # 没有 staged 就看工作区
+    if not r["success"] or not r["stdout"].strip():
+        return "没有变更需要审查"
+
+    diff = r["stdout"]
+    if len(diff) > 8000:
+        diff = diff[:8000] + f"\n...（共 {len(diff)} 字符，已截断）"
+
+    # 非 LLM 的静态检查（0 token）
+    static_issues: list[str] = []
+
+    # 检查 bare except / pass
+    if re.search(r"except\s*:", diff):
+        static_issues.append("裸 except（except:）缺少指定异常类型")
+    if re.search(r"except\s+\w+\s*:\s*\n\s*pass", diff):
+        static_issues.append("except 块中只有 pass")
+    if re.search(r"^\s+pass\s*$", diff, re.MULTILINE):
+        pass  # 这个太常见了，不报
+
+    # 检查硬编码 secrets
+    secret_pattern = re.compile(r'(api_key|secret|password|token|apikey)\s*[=:]\s*["\'][^"\']+["\']', re.IGNORECASE)
+    if secret_pattern.search(diff):
+        static_issues.append("可能硬编码了密钥/Token")
+
+    # 检查调试代码
+    if re.search(r"(print|pprint)\(.*\)", diff) and not re.search(r"logger\.", diff):
+        static_issues.append("包含 print 调试语句（考虑用 logger）")
+    if "import pdb;" in diff or "pdb.set_trace()" in diff:
+        static_issues.append("包含 pdb 断点（import pdb / pdb.set_trace）")
+
+    # 检查大文件提交
+    changed_files = re.findall(r'\+\+\+\s+[ab]/(.+)', diff)
+    file_count = len(set(changed_files))
+    if file_count > 15:
+        static_issues.append(f"一次提交 {file_count} 个文件，考虑拆分为更小的提交")
+
+    # 检查 TODO 残留
+    if re.search(r"#\s*TODO|#\s*FIXME|#\s*HACK", diff, re.IGNORECASE):
+        static_issues.append("包含 TODO/FIXME 标记")
+
+    static_part = ""
+    if static_issues:
+        static_part = "## 静态检查发现的问题\n" + "\n".join(f"- {s}" for s in static_issues) + "\n"
+
+    # ── LLM 审查（用快速模型，省 token） ──
+    from ..llm import _invoke_llm, auto_select_model
+
+    review_prompt = (
+        "审查以下代码 diff，只关注真正重要的问题，不要水话。\n"
+        "按严重程度输出（critical > warning > info），无事则说'无问题'。\n"
+        "检查项：\n"
+        "- 是否漏了错误处理（返回值没检查、异常没捕获）\n"
+        "- 是否改了接口但没改调用方\n"
+        "- 是否有多余代码（死代码、注释掉的代码）\n"
+        "- 性能问题（N+1 查询、不必要的大对象拷贝）\n"
+        "- 安全问题（eval、shell injection 风险）\n\n"
+        f"```diff\n{diff}\n```"
+    )
+
+    try:
+        backend = auto_select_model(review_prompt)  # 快速模型
+        llm_review, _ = _invoke_llm(backend, [
+            {"role": "system", "content": "你是一个代码审查助手。只说关键问题，不要凑字数。"},
+            {"role": "user", "content": review_prompt},
+        ], lambda _: None)
+    except Exception as e:
+        llm_review = f"（LLM 审查失败: {e}）"
+
+    # 确认有 diff 内容
+    diff_stat = f"共 {len(changed_files)} 个文件, diff 大小 {len(diff)} 字符"
+
+    result = f"## 代码审查报告\n{diff_stat}\n\n"
+    if static_part:
+        result += static_part + "\n"
+    result += f"## LLM 审查\n{llm_review or '（无结果）'}"
+    return result
 def git_commit(message: str | None = None, auto_stage: bool = True, path: str | None = None) -> str:
     """暂存变更并提交。"""
     if not _is_git_repo(path):
@@ -717,4 +826,6 @@ def execute(name: str, args: dict) -> str | None:
             all_branches=args.get("all", False),
             path=args.get("path"),
         )
+    if name == "git_review":
+        return git_review(path=args.get("path"))
     return None
