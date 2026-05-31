@@ -5,7 +5,6 @@ import sys
 import threading
 import time
 from collections.abc import Callable
-from datetime import datetime
 
 logging.basicConfig(
     level=logging.WARNING,
@@ -70,16 +69,17 @@ logger = logging.getLogger(__name__)
 
 
 def _make_env_message() -> dict:
-    """生成环境上下文系统消息，标记 _volatile 以在保存时自动过滤。"""
-    now = datetime.now()
+    """生成环境上下文系统消息，标记 _volatile 以在保存时自动过滤。
+
+    注意：不包含时间戳等动态内容，确保前缀字节一致 → DeepSeek 跨会话缓存命中。
+    """
     return {
         "role": "system",
         "content": (
-            f"当前环境：\n"
+            "当前环境：\n"
             f"- 工作目录: {os.getcwd()}\n"
-            f"- 会话开始: {now.strftime('%Y年%m月%d日 %H:%M:%S')}（星期{['一','二','三','四','五','六','日'][now.weekday()]}）\n"
             f"- 操作系统: {platform.system()} {platform.release()}\n"
-            f"\n以上为运行环境信息，不需要在回复中复述或罗列。"
+            "\n以上为运行环境信息，不需要在回复中复述或罗列。"
         ),
         "_volatile": True,
     }
@@ -286,13 +286,13 @@ def main() -> None:
     if mem_ctx:
         prefix_msgs.append(mem_ctx)
     from .safety import get_mode_summary
-    prefix_msgs.append({"role": "system", "content": get_mode_summary(), "_volatile": True})
+    ctx.log.append({"role": "system", "content": get_mode_summary(), "_volatile": True})
     # ── 失败反思 ──
     try:
         from .tools.reflect import get_summary as _reflect_summary
         ref = _reflect_summary()
         if ref:
-            prefix_msgs.append({"role": "system", "content": ref, "_volatile": True})
+            ctx.log.append({"role": "system", "content": ref, "_volatile": True})
     except Exception:
         pass
     ctx.rebuild_prefix(prefix_msgs)
@@ -378,13 +378,13 @@ def main() -> None:
                     if mem_ctx:
                         prefix.append(mem_ctx)
                     from .safety import get_mode_summary
-                    prefix.append({"role": "system", "content": get_mode_summary(), "_volatile": True})
+                    ctx.log.append({"role": "system", "content": get_mode_summary(), "_volatile": True})
                     # ── 失败反思 ──
                     try:
                         from .tools.reflect import get_summary as _reflect_summary
                         ref = _reflect_summary()
                         if ref:
-                            prefix.append({"role": "system", "content": ref, "_volatile": True})
+                            ctx.log.append({"role": "system", "content": ref, "_volatile": True})
                     except Exception:
                         pass
                     ctx.rebuild_prefix(prefix)
