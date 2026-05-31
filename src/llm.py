@@ -200,10 +200,11 @@ class DeepSeekBackend(LLMBackend):
                     clear_interrupt()
                     raise UserInterrupt("用户按 Esc 中断")
 
-                # 有的 API 在末 chunk 携带 usage（choices 为空），防御性处理
+                # 每个 chunk 都检查 usage（末 chunk 带真实缓存统计，其他 chunk 为 None）
+                if hasattr(chunk, "usage") and chunk.usage:
+                    _set_api_usage(self.info.name.lower(), chunk.usage)
+
                 if not chunk.choices:
-                    if hasattr(chunk, "usage") and chunk.usage:
-                        _set_api_usage(self.info.name.lower(), chunk.usage)
                     continue
 
                 delta = chunk.choices[0].delta
@@ -431,8 +432,6 @@ _CACHE_STATS: dict[str, dict] = {
     "pro": dict(_EMPTY_STATS),
 }
 
-# 上一次请求的 messages 签名（运行时数据，不持久化）
-_cache_last_sig: dict[str, str] = {"flash": "", "pro": ""}
 
 # API 返回的真实 usage（运行时数据，不持久化）
 _last_api_usage: dict[str, dict | None] = {"flash": None, "pro": None}
@@ -474,7 +473,7 @@ def _save_cache_stats(session_id: str) -> None:
 
 def _ensure_session(session_id: str) -> None:
     """确保内存中是目标会话的统计。如果会话切换，自动保存旧会话、加载新会话。"""
-    global _current_session_id, _CACHE_STATS, _cache_last_sig
+    global _current_session_id, _CACHE_STATS
 
     if not session_id:
         return
@@ -488,7 +487,6 @@ def _ensure_session(session_id: str) -> None:
     # 切换到新会话
     _current_session_id = session_id
     _CACHE_STATS = _load_cache_stats(session_id)
-    _cache_last_sig = {"flash": "", "pro": ""}  # 签名不跨会话
 
 
 def _set_api_usage(model_key: str, usage: object | None) -> None:
@@ -512,7 +510,7 @@ def _update_cache_stats(model_key: str, messages: list[dict], session_id: str = 
     优先使用 API 返回的真实 cache_hit/cache_miss 数据，
     session_id 用于隔离不同会话的统计数据。
     """
-    global _CACHE_STATS, _cache_last_sig
+    global _CACHE_STATS
 
     _ensure_session(session_id)
 
@@ -530,35 +528,11 @@ def _update_cache_stats(model_key: str, messages: list[dict], session_id: str = 
         _save_cache_stats(_current_session_id)
         return
 
-    # 后备方案：通过消息签名对比估算
+    # 后备：无 API 返回的 usage 数据时不估算 cache hit（不准），只记总量
     from .tools.tokens import count_messages_tokens
     total = count_messages_tokens(messages)
     stats["prompt_tokens"] += total
-
-    sig_parts: list[str] = []
-    for m in messages:
-        sig_parts.append(m.get("role", "") + ":" + str(len(m.get("content", "") or "")))
-    sig = "\n".join(sig_parts)
-    last_sig = _cache_last_sig.get(model_key, "")
-
-    if last_sig:
-        prev_lines = last_sig.split("\n")
-        curr_lines = sig.split("\n")
-        match_count = 0
-        for pl, cl in zip(prev_lines, curr_lines, strict=False):
-            if pl == cl:
-                match_count += 1
-            else:
-                break
-        if match_count > 0:
-            hit = int(total * match_count / max(len(curr_lines), 1))
-            stats["cache_hit_tokens"] += hit
-            stats["cache_miss_tokens"] += total - hit
-        else:
-            stats["cache_miss_tokens"] += total
-    else:
-        stats["cache_miss_tokens"] += total
-    _cache_last_sig[model_key] = sig
+    stats["cache_miss_tokens"] += total
     _save_cache_stats(_current_session_id)
 
 
@@ -590,6 +564,7 @@ def _invoke_llm(
     messages: list[dict],
     on_token: TokenCallback,
     session_id: str = "",
+    track_stats: bool = True,
 ) -> tuple[str | None, list[dict] | None]:
     """调用 LLM，带重试机制。首次流式，失败后降级为非流式重试。"""
     model_key = backend.info.name.lower()
@@ -602,7 +577,8 @@ def _invoke_llm(
             else:
                 logger.warning("流式失败，降级为非流式重试 (%d/%d)...", attempt, MAX_RETRIES)
                 result = backend.chat_non_stream(messages, on_token, tools)
-            _update_cache_stats(model_key, messages, session_id)
+            if track_stats:
+                _update_cache_stats(model_key, messages, session_id)
             return result
         except RETRYABLE as e:
             if attempt < MAX_RETRIES:
@@ -851,7 +827,7 @@ def _make_llm_summary(prev_summary: str | None, messages: list[dict]) -> str:
 
     try:
         backend = auto_select_model("summarize")
-        result, _ = _invoke_llm(backend, api_msgs, lambda _: None)
+        result, _ = _invoke_llm(backend, api_msgs, lambda _: None, track_stats=False)
         summary = (result or "").strip()
         if summary:
             return summary[:_BG_MAX_SUMMARY_LEN]
