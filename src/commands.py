@@ -724,35 +724,6 @@ def _cmd_context(r: CmdResult, ctx, _args, _sid) -> None:
 
     r.message = "\n".join(lines)
 
-# ═══════════════════════════════════════════════════════════════
-# 目标驱动长任务 /goal
-# ═══════════════════════════════════════════════════════════════
-
-@builtin("/goal", description="目标驱动长任务：设定目标后 Agent 自主执行直到完成",
-         usage="/goal <目标描述>")
-def _cmd_goal(r: CmdResult, _ctx, args, _sid) -> None:
-    """运行目标驱动长任务。handler 同步阻塞直到目标完成。"""
-    from .goal import GoalRunner
-
-    if not args:
-        r.message = "用法: /goal <目标描述>\n示例: /goal 给文件工具添加软链接支持并测试"
-        return
-
-    description = " ".join(args)
-
-    def _print(msg: str, end: str = "\n"):
-        print(msg, end=end, flush=True)
-
-    runner = GoalRunner(description, on_output=_print)
-    success = runner.run()
-
-    if success:
-        r.message = "\n✅ 目标已完成"
-        r.save = True
-    else:
-        r.message = "\n⚠️ 目标未完成或已中断"
-        r.save = True
-
 
 def dispatch(user_input: str, ctx: CacheContext, session_id: str | None) -> CmdResult:
     r = CmdResult()
