@@ -713,12 +713,12 @@ def _compact_cache_context(ctx, user_input: str) -> None:
 
     if _is_topic_switch(user_input):
         to_archive = list(log)
-        brief = _make_brief_summary(to_archive)
+        brief = _compactor.get_summary() or _make_brief_summary(to_archive)
         new_log: list[dict] = []
         if brief:
             new_log.append({
                 "role": "system",
-                "content": f"⏪ 前一话题已结束，相关讨论已归档。{brief}",
+                "content": f"⏪ 前一话题已结束。{brief}",
             })
         log[:] = new_log
         logger.info("话题切换检测到，已压缩 %d 条旧对话", len(to_archive))
@@ -743,7 +743,7 @@ def _compact_cache_context(ctx, user_input: str) -> None:
         return
 
     to_archive = log[:retain_start]
-    brief = _make_brief_summary(to_archive)
+    brief = _compactor.get_summary() or _make_brief_summary(to_archive)
 
     new_log = []
     if brief:
@@ -793,6 +793,96 @@ def _make_brief_summary(messages: list[dict], max_len: int = 300) -> str:
     return result
 
 
+# ═══════════════════════════════════════════════════════════════
+# 后台压缩器 — 持续生成日志摘要，压缩时瞬时完成
+# 模仿 Claude Code 的 Session Memory 后台持续更新机制
+# ═══════════════════════════════════════════════════════════════
+
+_BG_CHECK_INTERVAL = 20       # 后台检查间隔（秒）
+_BG_MIN_NEW_MSGS = 8          # 每次触发需要的最小新消息数
+_BG_RETAIN_TAIL = 12          # 保留最近 N 条不归档（留给正在进行的对话）
+_BG_MAX_SUMMARY_LEN = 1000    # 摘要总长度上限
+
+
+class BackgroundCompactor:
+    """Background context compactor with daemon thread for instant compaction."""
+
+    def __init__(self) -> None:
+        self._thread: threading.Thread | None = None
+        self._lock = threading.Lock()
+        self._summary: str | None = None
+        self._running = False
+        self._ctx: CacheContext | None = None
+        self._last_idx: int = 0
+
+    def get_summary(self) -> str | None:
+        with self._lock:
+            return self._summary
+
+    def start(self, ctx: CacheContext) -> None:
+        self._ctx = ctx
+        self._summary = None
+        self._last_idx = 0
+        if self._thread is None or not self._thread.is_alive():
+            self._running = True
+            self._thread = threading.Thread(
+                target=self._run, daemon=True, name="bg-compactor"
+            )
+            self._thread.start()
+            logger.info("bg-compactor started")
+
+    def stop(self) -> None:
+        self._running = False
+
+    def _run(self) -> None:
+        while self._running:
+            try:
+                self._tick()
+            except Exception:
+                logger.exception("bg-compactor error")
+            time.sleep(_BG_CHECK_INTERVAL)
+
+    def _tick(self) -> None:
+        ctx = self._ctx
+        if ctx is None:
+            return
+        log = ctx.log
+        if not log:
+            self._last_idx = 0
+            with self._lock:
+                self._summary = None
+            return
+
+        if len(log) < self._last_idx:
+            self._last_idx = 0
+            with self._lock:
+                self._summary = None
+            return
+
+        if len(log) < self._last_idx + _BG_MIN_NEW_MSGS:
+            return
+
+        end = len(log) - _BG_RETAIN_TAIL
+        if end <= self._last_idx:
+            self._last_idx = max(0, len(log) - _BG_RETAIN_TAIL)
+            return
+
+        to_summarize = log[self._last_idx:end]
+        self._last_idx = end
+
+        brief = _make_brief_summary(to_summarize, max_len=200)
+        if not brief:
+            return
+
+        with self._lock:
+            if self._summary:
+                self._summary = (self._summary + " | " + brief)[:_BG_MAX_SUMMARY_LEN]
+            else:
+                self._summary = brief
+
+        logger.debug("bg-summary updated: +%d msgs", len(to_summarize))
+# 模块级单例（run_conversation 中按需启动）
+_compactor = BackgroundCompactor()
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -960,6 +1050,9 @@ def run_conversation(
     # 如果选的不是当前模型，通知用户
     if backend is not _current_backend:
         on_token(f"\n[🤖 使用 {model_name} 处理此任务]\n\n")
+
+    # 确保后台压缩器已启动（幂等）
+    _compactor.start(ctx)
 
     while True:
         used = count_messages_tokens(ctx.all)
