@@ -591,6 +591,8 @@ def _cmd_context(r: CmdResult, msgs, _args, _sid) -> None:
             if key in content:
                 label = tag
                 break
+        size = len(content)
+        first_line = content.split("\n")[0][:55]
         lines.append(f"    {label}  ({size} 字符)  {first_line}")
 
     # ── Storm 去重统计 ──
