@@ -86,43 +86,12 @@ def _make_env_message() -> dict:
 
 
 def _make_memory_context() -> dict | None:
-    """读取记忆文件的 frontmatter，生成简洁的记忆索引。"""
-    from .config import MEMORY_DIR
-    mem_dir = os.path.join(MEMORY_DIR, "MEMORY.md")
-    if not os.path.exists(mem_dir):
+    """读取记忆索引，生成简洁的记忆上下文（缓存版，不反复读文件）。"""
+    from .tools.memory import get_context
+    ctx_str = get_context()
+    if not ctx_str:
         return None
-
-    # 从各 .md 文件 frontmatter 提取 name + description 首句
-    entries: list[str] = []
-    d = os.path.dirname(mem_dir)
-    for f in sorted(os.listdir(d)):
-        if f == "MEMORY.md" or not f.endswith(".md"):
-            continue
-        try:
-            with open(os.path.join(d, f), encoding="utf-8") as _f:
-                text = _f.read()
-            name, desc = f[:-3], ""
-            if text.startswith("---"):
-                fm = text[3:text.find("---", 3)]
-                for line in fm.split("\n"):
-                    line = line.strip()
-                    if line.startswith("name:"):
-                        name = line.split(":", 1)[1].strip()
-                    elif line.startswith("description:"):
-                        desc = line.split(":", 1)[1].strip().rstrip(".")
-            # 只取 description 第一句（到第一个句号或 30 字）
-            short = desc.split("。")[0].split("，")[0][:30] if desc else ""
-            entries.append((name, short))
-        except Exception:
-            continue
-
-    if not entries:
-        return None
-
-    lines = ["你拥有以下记忆（需要时用 recall 搜索详情，不要在回复中逐字复述）："]
-    for name, short in entries:
-        lines.append(f"  {name}: {short}")
-    return {"role": "system", "content": "\n".join(lines), "_volatile": True}
+    return {"role": "system", "content": ctx_str, "_volatile": True}
 
 
 # ── UI 辅助 ──
@@ -282,9 +251,11 @@ def main() -> None:
     proj_ctx = _make_project_context()
     if proj_ctx:
         prefix_msgs.append(proj_ctx)
+    ctx.rebuild_prefix(prefix_msgs)
+    # ── 动态上下文（log 区，不影响前缀缓存） ──
     mem_ctx = _make_memory_context()
     if mem_ctx:
-        prefix_msgs.append(mem_ctx)
+        ctx.log.append(mem_ctx)
     from .safety import get_mode_summary
     ctx.log.append({"role": "system", "content": get_mode_summary(), "_volatile": True})
     # ── 失败反思 ──
@@ -295,7 +266,6 @@ def main() -> None:
             ctx.log.append({"role": "system", "content": ref, "_volatile": True})
     except Exception:
         pass
-    ctx.rebuild_prefix(prefix_msgs)
 
     print("Agent 已启动，输入 /help 查看指令列表\n")
 
@@ -374,9 +344,11 @@ def main() -> None:
                     proj_ctx = _make_project_context()
                     if proj_ctx:
                         prefix.append(proj_ctx)
+                    ctx.rebuild_prefix(prefix)
+                    # ── 动态上下文（log 区，不影响前缀缓存） ──
                     mem_ctx = _make_memory_context()
                     if mem_ctx:
-                        prefix.append(mem_ctx)
+                        ctx.log.append(mem_ctx)
                     from .safety import get_mode_summary
                     ctx.log.append({"role": "system", "content": get_mode_summary(), "_volatile": True})
                     # ── 失败反思 ──
@@ -387,7 +359,6 @@ def main() -> None:
                             ctx.log.append({"role": "system", "content": ref, "_volatile": True})
                     except Exception:
                         pass
-                    ctx.rebuild_prefix(prefix)
                 if r.exit:
                     break
                 if r.retry:

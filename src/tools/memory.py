@@ -5,6 +5,71 @@ from pathlib import Path
 
 from ..config import MEMORY_DIR
 
+# ── 记忆索引缓存（避免每次请求重复读文件） ──
+_context_cache: str | None = None
+_context_dirty: bool = True
+
+
+def _build_context() -> str | None:
+    """从文件构建记忆索引字符串。"""
+    mem_dir = Path(MEMORY_DIR)
+    index_file = mem_dir / "MEMORY.md"
+    if not index_file.exists():
+        return None
+    d = mem_dir
+    entries: list[str] = []
+    for f in sorted(d.iterdir()):
+        if f.name == "MEMORY.md" or not f.suffix == ".md":
+            continue
+        try:
+            text = f.read_text(encoding="utf-8")
+            name, desc = f.stem, ""
+            if text.startswith("---"):
+                end = text.find("---", 3)
+                if end != -1:
+                    for line in text[3:end].split("\n"):
+                        line = line.strip()
+                        if line.startswith("name:"):
+                            name = line.split(":", 1)[1].strip()
+                        elif line.startswith("description:"):
+                            desc = line.split(":", 1)[1].strip().rstrip(".")
+            short = desc.split("。")[0].split("，")[0][:30] if desc else ""
+            entries.append((name, short))
+        except Exception:
+            continue
+    if not entries:
+        return None
+    lines = ["你拥有以下记忆（需要时用 recall 搜索详情，不要在回复中逐字复述）："]
+    for name, short in entries:
+        lines.append(f"  {name}: {short}")
+    return "\n".join(lines)
+
+
+def get_context() -> str | None:
+    """返回缓存的记忆索引，变化后自动重建（缓存保前缀稳定）。"""
+    global _context_cache, _context_dirty
+    if _context_dirty or _context_cache is None:
+        _context_cache = _build_context()
+        _context_dirty = False
+    return _context_cache
+
+
+def mark_dirty() -> None:
+    """记忆变更后调用，下次 get_context 自动重建。"""
+    global _context_dirty
+    _context_dirty = True
+
+
+def clear_dirty() -> None:
+    """重建后清除脏标记。"""
+    global _context_dirty
+    _context_dirty = False
+
+
+def is_dirty() -> bool:
+    """检查记忆索引是否需要重建。"""
+    return _context_dirty
+
 TOOLS_MEMORY = [
     {
         "type": "function",
@@ -131,6 +196,7 @@ def _remember(name: str, content: str, mem_type: str) -> str:
     )
     _mem_path(name).write_text(text, encoding="utf-8")
     _rebuild_index()
+    mark_dirty()
     return f"已记住: {name}"
 
 
@@ -184,6 +250,7 @@ def _forget(name: str) -> str:
         return f"记忆不存在: {name}"
     fp.unlink()
     _rebuild_index()
+    mark_dirty()
     return f"已忘记: {name}"
 
 

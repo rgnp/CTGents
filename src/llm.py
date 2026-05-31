@@ -1191,6 +1191,17 @@ def run_conversation(
                     "tool_call_id": tc_data["id"],
                     "content": result,
                 })
+            # 记忆变更后更新 ctx.log 中的记忆索引
+            from .tools.memory import get_context, is_dirty, clear_dirty
+            if is_dirty():
+                old_idx = next((i for i, m in enumerate(ctx.log)
+                                if m.get("role") == "system" and "你拥有以下记忆" in m.get("content","")), -1)
+                new_ctx = get_context()
+                if new_ctx and old_idx >= 0:
+                    ctx.log[old_idx] = {"role": "system", "content": new_ctx, "_volatile": True}
+                elif new_ctx and old_idx < 0:
+                    ctx.log.append({"role": "system", "content": new_ctx, "_volatile": True})
+                clear_dirty()
             if on_progress:
                 on_progress()
         else:
