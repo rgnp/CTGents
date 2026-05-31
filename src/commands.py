@@ -725,6 +725,144 @@ def _cmd_context(r: CmdResult, ctx, _args, _sid) -> None:
     r.message = "\n".join(lines)
 
 
+# ═══════════════════════════════════════════════════════════════
+# 自省 /self — Agent 查看自己的架构、工具、命令、插件
+# ═══════════════════════════════════════════════════════════════
+
+@builtin("/self", description="自省：查看自己的架构、工具、命令、插件全景")
+def _cmd_self(r: CmdResult, _ctx, _args, _sid) -> None:
+    """生成 Agent 自省全景（供 AI 读取，非人类 UI）。"""
+    from .tools import get_tools
+    from .tools.plugin_mgr import _plugins
+    from .tools.mcp import get_connection_summary
+
+    parts: list[str] = []
+
+    # ── 1. 架构概览 ──
+    parts.append("## 架构")
+    parts.append("src/")
+    parts.append("  main.py           — 主循环：接收输入 → dispatch → LLM → 输出")
+    parts.append("  commands.py       — 指令系统：/help /save /load /self 等 + dispatch")
+    parts.append("  llm.py            — LLM 调用：模型选择、前缀缓存、流式输出")
+    parts.append("  config.py         — 配置加载（session 目录、模型配置）")
+    parts.append("  cache_context.py  — 三段式上下文 CacheContext（prefix/log/scratch）")
+    parts.append("  session.py        — 会话持久化（保存/加载/列表）")
+    parts.append("  safety.py         — 安全模式（MANUAL/SAFE/AUTO）+ 拦截规则")
+    parts.append("  tools/")
+    parts.append("    __init__.py     — 工具注册表、execute_tool() 调度、热加载")
+    parts.append("    file.py         — 文件类：read_file/write_file/edit_file_lines...")
+    parts.append("    web.py          — 网络类：search_web/read_page")
+    parts.append("    exec.py         — 执行类：run_command/run_python")
+    parts.append("    code.py         — 代码搜索：grep_code")
+    parts.append("    git.py          — Git 类：git_status/git_diff/git_commit/git_push...")
+    parts.append("    project.py      — 项目类：scan_project/check_project/generate_agents_md...")
+    parts.append("    think.py        — 思考工具：think（策略规划）")
+    parts.append("    memory.py       — 记忆工具：remember/recall/forget")
+    parts.append("    mcp.py          — MCP 客户端：mcp_connect/mcp_disconnect/mcp_list")
+    parts.append("    rag.py          — RAG 索引：rag_index/rag_query/rag_status")
+    parts.append("    storm.py        — 去重引擎：同轮工具调用滑动窗口去重")
+    parts.append("    lint.py         — 检查引擎：check_project（六维军规检查）")
+    parts.append("    discover.py     — 能力发现：discover（扫描所有可用能力）")
+    parts.append("    plugin_mgr.py   — 插件管理器：install_plugin/plugin_spec/list_plugins")
+    parts.append("  plugins/          — 用户安装的插件目录（热加载）")
+    parts.append("docs/")
+    parts.append("  roadmap.md        — 路线图")
+    parts.append("  AGENTS.md         — AI 操作手册")
+    parts.append("tests/              — pytest 测试")
+    parts.append("")
+
+    # ── 2. 工具清单（按模块分组） ──
+    all_tools = get_tools()
+    parts.append(f"## 工具（共 {len(all_tools)} 个）")
+    # 按模块分组：从工具名推测分组
+    groups: dict[str, list[str]] = {}
+    name_to_desc: dict[str, str] = {}
+    for t in all_tools:
+        fn = t.get("function", {})
+        n = fn.get("name", "?")
+        desc = fn.get("description", "")[:80]
+        name_to_desc[n] = desc
+        # 猜测分组名
+        if n.startswith("git_"):
+            g = "git"
+        elif n.startswith("mcp_"):
+            g = "mcp"
+        elif n.startswith("rag_"):
+            g = "rag"
+        elif n in ("remember", "recall", "forget"):
+            g = "memory"
+        elif n in ("search_web", "read_page"):
+            g = "web"
+        elif n in ("read_file", "read_file_lines", "write_file", "edit_file_lines",
+                    "delete_file", "list_files", "count_lines"):
+            g = "file"
+        elif n in ("run_command", "run_python"):
+            g = "exec"
+        elif n == "grep_code":
+            g = "code"
+        elif n in ("scan_project", "check_project", "generate_agents_md", "docs_sync_check"):
+            g = "project"
+        elif n in ("install_plugin", "plugin_spec", "list_plugins"):
+            g = "plugin"
+        elif n == "discover":
+            g = "discover"
+        elif n == "think":
+            g = "think"
+        else:
+            g = "other"
+        groups.setdefault(g, []).append(n)
+
+    for gname in sorted(groups.keys()):
+        tools_in_group = groups[gname]
+        parts.append(f"  [{gname}]")
+        for tn in sorted(tools_in_group):
+            d = name_to_desc.get(tn, "")
+            parts.append(f"    {tn}  — {d}")
+
+    parts.append("")
+
+    # ── 3. 指令清单 ──
+    seen: dict[int, list[Command]] = {}
+    for cmd in _registry:
+        hid = id(cmd.handler)
+        seen.setdefault(hid, []).append(cmd)
+
+    parts.append(f"## 指令（共 {len(seen)} 个）")
+    for group in sorted(seen.values(), key=lambda g: g[0].name):
+        primary = group[0]
+        aliases = [c.name for c in group[1:]]
+        name_display = f"{primary.name}（{'、'.join(aliases)}）" if aliases else primary.name
+        parts.append(f"  {name_display:<24} {primary.description}")
+
+    parts.append("")
+
+    # ── 4. 插件状态 ──
+    if _plugins:
+        parts.append(f"## 插件（已安装 {len(_plugins)} 个）")
+        for pname, pmod in _plugins.items():
+            ptools = getattr(pmod, "TOOLS", [])
+            pdesc = getattr(pmod, "DESCRIPTION", "")
+            parts.append(f"  {pname} — {pdesc} ({len(ptools)} 个工具)")
+            for pt in ptools:
+                parts.append(f"    {pt.get('name', '?')}")
+    else:
+        parts.append("## 插件\n  （无）")
+
+    parts.append("")
+
+    # ── 5. MCP 连接 ──
+    try:
+        connections = get_connection_summary()
+        if connections:
+            parts.append(f"## MCP 连接（{len(connections)} 个）")
+            for cname, ctype in connections.items():
+                parts.append(f"  {cname} — {ctype}")
+        else:
+            parts.append("## MCP 连接\n  （无）")
+    except Exception:
+        parts.append("## MCP 连接\n  （获取失败）")
+
+    r.message = "\n".join(parts)
 def dispatch(user_input: str, ctx: CacheContext, session_id: str | None) -> CmdResult:
     r = CmdResult()
     parts = user_input.split()

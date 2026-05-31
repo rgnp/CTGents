@@ -413,3 +413,12 @@ def load_saved_configs() -> int:
         return count
     except Exception:
         return 0
+
+
+def get_connection_summary() -> dict[str, str]:
+    """返回 MCP 连接摘要：{name: transport_type}，供 /self 使用。"""
+    result: dict[str, str] = {}
+    for name, info in _connections.items():
+        transport = info.get("transport", "?")
+        result[name] = transport
+    return result
