@@ -5,13 +5,14 @@
   2. rag_query — 语义搜索代码库，返回最相关的代码片段
   3. rag_status — 查看索引状态
 
-自动注入：
-  - main.py 启动时加载索引摘要注入 system prompt
-  - 对话中检测到代码相关问题自动检索上下文
+使用方式（Agentic RAG）：
+  AI 在对话中自主判断是否需要检索代码，主动调用 rag_query() 进行搜索。
+  不自动注入到 system prompt，避免破坏 DeepSeek 前缀缓存。
 
 设计原则：
   - 零额外依赖（纯 Python + 标准库）
   - TF-IDF + 代码语义关键词加权，无需 embedding API
+  - BM25 评分 + 驼峰/蛇形自动拆词
   - 按文件类型智能分块（函数/类/行数）
   - 增量更新：只重新索引变更的文件
 """
@@ -52,8 +53,6 @@ WEIGHT_CODE = 1.0           # 代码正文
 WEIGHT_IDENTIFIER = 1.5     # 标识符（变量名等）
 
 # 自动注入配置
-AUTO_RETRIEVE_TOP_K = 3     # 自动检索时返回的块数
-AUTO_RETRIEVE_MAX_CHARS = 1500  # 自动注入的最大字符数
 
 # 增量更新：缓存文件 hash，跳过未变更的文件
 HASH_CACHE_FILE = "hashes.json"
@@ -1123,67 +1122,6 @@ def get_index_status(path: str | None = None) -> str:
     )
 
 
-# ═══════════════════════════════════════════════════════════════
-# 自动检索（供 llm.py / main.py 注入使用）
-# ═══════════════════════════════════════════════════════════════
-
-
-def auto_retrieve(query: str, path: str | None = None) -> str | None:
-    """自动检索相关代码上下文。供对话系统注入 system prompt 使用。
-
-    Args:
-        query: 用户输入或当前对话上下文
-        path: 项目路径
-
-    Returns:
-        格式化的代码上下文文本，供注入到 system prompt；无匹配则返回 None
-    """
-    project_root = _find_project_root(path)
-    index = _load_index(project_root)
-
-    if index is None:
-        return None
-
-    keywords = _extract_keywords_from_query(query)
-    if not keywords:
-        keywords = [w.lower() for w in re.findall(r'\b\w+\b', query) if len(w) >= 2]
-    if not keywords:
-        return None
-
-    results = index.search(keywords, top_k=AUTO_RETRIEVE_TOP_K)
-    if not results:
-        return None
-
-    # 构建注入文本（不超过 AUTO_RETRIEVE_MAX_CHARS）
-    parts: list[str] = [
-        "📖 以下是项目中与当前问题相关的代码上下文（自动检索）：",
-        "",
-    ]
-    total_chars = len(parts[0])
-
-    for doc_id, score in results:
-        chunk = index.documents[doc_id]
-        header = f"📁 {chunk.file_path}:{chunk.start_line} ({chunk.chunk_type}: {chunk.name})"
-
-        # 截断内容
-        content = chunk.content
-        max_content = AUTO_RETRIEVE_MAX_CHARS // max(len(results), 1) - len(header) - 20
-        if max_content < 100:
-            max_content = 100
-        if len(content) > max_content:
-            content = content[:max_content] + "\n    ...（截断）"
-
-        entry = f"\n{header}\n{content}\n"
-        if total_chars + len(entry) > AUTO_RETRIEVE_MAX_CHARS + 200:
-            break
-
-        parts.append(entry)
-        total_chars += len(entry)
-
-    if len(parts) <= 1:
-        return None
-
-    return "\n".join(parts)
 
 
 # ═══════════════════════════════════════════════════════════════

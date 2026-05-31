@@ -279,18 +279,6 @@ def main() -> None:
     mem_ctx = _make_memory_context()
     if mem_ctx:
         messages.append(mem_ctx)
-    # RAG 索引状态注入（如果有索引则告知 LLM 可用）
-    try:
-        from .tools.rag import get_index_status
-        rag_info = get_index_status()
-        if "未建立" not in rag_info:
-            messages.append({
-                "role": "system",
-                "content": f"📚 RAG 代码索引已就绪，可用 rag_query 进行语义搜索。\n{rag_info.split('📊')[0] if '📊' in rag_info else rag_info}",
-                "_volatile": True,
-            })
-    except Exception:
-        pass  # RAG 模块加载失败不影响启动
     from .safety import get_mode_summary
     messages.append({"role": "system", "content": get_mode_summary(), "_volatile": True})
 
