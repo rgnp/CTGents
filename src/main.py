@@ -391,6 +391,14 @@ def main() -> None:
                         session_id = sid[0]
                         if has_output():
                             print()
+                        # ── 主动建议 ──
+                        try:
+                            from .suggest import check as _suggest_check
+                            tip = _suggest_check()
+                            if tip:
+                                print(f"\n💡 {tip}\n")
+                        except Exception:
+                            pass
                 continue
 
             try:
@@ -408,6 +416,14 @@ def main() -> None:
                 session_id = sid[0]
                 if has_output():
                     print()
+                # ── 主动建议 ──
+                try:
+                    from .suggest import check as _suggest_check
+                    tip = _suggest_check()
+                    if tip:
+                        print(f"\n💡 {tip}\n")
+                except Exception:
+                    pass
             except KeyboardInterrupt:
                 _stop_esc_listener()
                 print("\n[中断]")
