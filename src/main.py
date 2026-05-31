@@ -391,12 +391,27 @@ def main() -> None:
                         session_id = sid[0]
                         if has_output():
                             print()
-                        # ── 主动建议 ──
+                        # ── 主动建议 + 修复闭环 ──
                         try:
                             from .suggest import check as _suggest_check
-                            tip = _suggest_check()
+                            tip, repair = _suggest_check()
                             if tip:
-                                print(f"\n💡 {tip}\n")
+                                print(f"\n💡 {tip}")
+                                ans = input("  要修吗？(Y/n) ").strip().lower()
+                                if ans != "n":
+                                    on_token, has_output = _make_display()
+                                    _start_esc_listener()
+                                    try:
+                                        run_conversation(
+                                            ctx, repair, on_token, _on_tool,
+                                            on_progress=lambda sid=sid: sid.__setitem__(0, save_session(ctx.all, sid[0])),
+                                            session_id=session_id,
+                                        )
+                                    finally:
+                                        _stop_esc_listener()
+                                    session_id = sid[0]
+                                    if has_output():
+                                        print()
                         except Exception:
                             pass
                 continue
@@ -416,13 +431,29 @@ def main() -> None:
                 session_id = sid[0]
                 if has_output():
                     print()
-                # ── 主动建议 ──
+                # ── 主动建议 + 修复闭环 ──
                 try:
                     from .suggest import check as _suggest_check
-                    tip = _suggest_check()
+                    tip, repair = _suggest_check()
                     if tip:
-                        print(f"\n💡 {tip}\n")
+                        print(f"\n💡 {tip}")
+                        ans = input("  要修吗？(Y/n) ").strip().lower()
+                        if ans != "n":
+                            on_token, has_output = _make_display()
+                            _start_esc_listener()
+                            try:
+                                run_conversation(
+                                    ctx, repair, on_token, _on_tool,
+                                    on_progress=lambda sid=sid: sid.__setitem__(0, save_session(ctx.all, sid[0])),
+                                    session_id=session_id,
+                                )
+                            finally:
+                                _stop_esc_listener()
+                            session_id = sid[0]
+                            if has_output():
+                                print()
                 except Exception:
+                    pass
                     pass
             except KeyboardInterrupt:
                 _stop_esc_listener()
