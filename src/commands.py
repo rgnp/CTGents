@@ -548,7 +548,7 @@ def _cmd_context(r: CmdResult, msgs, _args, _sid) -> None:
         f"  user:     {roles.get('user', 0)} 条",
         f"  assistant: {roles.get('assistant', 0)} 条",
         f"  tool:     {roles.get('tool', 0)} 条",
-        f"  其中 _volatile: {volatile_count} 条（已过滤不发给 API）",
+        f"  其中 _volatile: {volatile_count} 条（运行时注入，纳入了前缀缓存）",
         "",
         "── 压缩状态 ──",
     ]
@@ -630,6 +630,79 @@ def _cmd_context(r: CmdResult, msgs, _args, _sid) -> None:
     lines.append(f"  紧急停止 (85%):  {warn_85:,}")
 
     r.message = "\n".join(lines)
+
+
+@builtin_multi(["/cache", "/prefix"], description="查看前缀缓存诊断（SHA-256 哈希 + 命中率）")
+def _cmd_cache(r: CmdResult, msgs, args, _sid) -> None:
+    """前缀缓存诊断命令。
+
+    子命令：
+      /cache          — 完整诊断：前缀结构 + 缓存统计
+      /cache hash     — 仅显示前缀哈希
+      /cache stats    — 仅显示缓存命中统计
+    """
+    from .llm import get_cache_stats, get_prefix_diagnostics
+
+    if args and args[0] in ("stats", "stat"):
+        # 仅显示缓存统计
+        cache = get_cache_stats(_sid)
+        total = cache.get("total", {})
+        if total.get("requests", 0) == 0:
+            r.message = "📭 暂无 API 请求统计数据。先进行一次对话吧。"
+            return
+
+        lines = ["📊 缓存命中统计", ""]
+        for mk in ["flash", "pro"]:
+            s = cache["models"].get(mk)
+            if not s or s["requests"] == 0:
+                continue
+            hit = s["cache_hit_tokens"]
+            miss = s["cache_miss_tokens"]
+            total_tok = hit + miss
+            rate = hit / total_tok * 100 if total_tok > 0 else 0
+            emoji = "⚡" if mk == "flash" else "🧠"
+            bar_len = 20
+            hits = int(bar_len * rate / 100)
+            bar = "█" * hits + "░" * (bar_len - hits)
+            lines.append(f"  {emoji} {mk.title():6s}  {bar}  {rate:.0f}%")
+            lines.append(f"       请求: {s['requests']}次  "
+                          f"命中: {hit:,} tok  "
+                          f"未中: {miss:,} tok")
+        lines.append("")
+        lines.append(f"  📊 总计: {total['requests']}次请求  "
+                      f"缓存命中 {total.get('cache_hit_tokens', 0) + total.get('cache_miss_tokens', 0):,} "
+                      f"输入 token")
+        r.message = "\n".join(lines)
+        return
+
+    if args and args[0] in ("hash", "prefix"):
+        # 仅显示前缀哈希
+        from .llm import _compute_prefix_hash
+        h, chars, tokens = _compute_prefix_hash(msgs)
+        r.message = f"前缀哈希: {h}\n前缀大小: {tokens} tokens ({chars} 字符)"
+        return
+
+    # 完整诊断
+    diag = get_prefix_diagnostics(msgs)
+
+    # 追加缓存统计
+    from .llm import get_cache_stats
+    cache = get_cache_stats(_sid)
+    total = cache.get("total", {})
+    if total.get("requests", 0) > 0:
+        diag += "\n\n📈 会话缓存统计:\n"
+        for mk in ["flash", "pro"]:
+            s = cache["models"].get(mk)
+            if not s or s["requests"] == 0:
+                continue
+            hit = s["cache_hit_tokens"]
+            miss = s["cache_miss_tokens"]
+            total_tok = hit + miss
+            rate = hit / total_tok * 100 if total_tok > 0 else 0
+            diag += f"  {'⚡' if mk == 'flash' else '🧠'} {mk}: {rate:.0f}% 命中 ({hit:,}/{total_tok:,} tok)\n"
+
+    r.message = diag
+
 
 # ═══════════════════════════════════════════════════════════════
 # 分发

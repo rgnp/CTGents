@@ -76,7 +76,7 @@ def _make_env_message() -> dict:
         "content": (
             f"当前环境：\n"
             f"- 工作目录: {os.getcwd()}\n"
-            f"- 当前时间: {now.strftime('%Y年%m月%d日 %H:%M:%S')}（星期{['一','二','三','四','五','六','日'][now.weekday()]}）\n"
+            f"- 会话开始: {now.strftime('%Y年%m月%d日 %H:%M:%S')}（星期{['一','二','三','四','五','六','日'][now.weekday()]}）\n"
             f"- 操作系统: {platform.system()} {platform.release()}\n"
             f"\n以上为运行环境信息，不需要在回复中复述或罗列。"
         ),

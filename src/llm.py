@@ -797,17 +797,125 @@ def _make_brief_summary(messages: list[dict], max_len: int = 300) -> str:
 def _build_api_messages(messages: list[dict]) -> list[dict]:
     """构建发给 API 的消息列表。
 
-    过滤 _volatile 消息（运行时上下文，仅首次需要，后续轮次不需要重复发送）。
-    非系统消息保持追加顺序，保障前缀缓存稳定性。
+    策略（保障 DeepSeek 前缀缓存）：
+      1. 所有 system 消息（含 volatile）排在 payload 最前面 → 不可变前缀
+      2. 所有非 system 消息按追加顺序排后面 → 只会追加不会修改 → 前缀持续命中
+      3. 剥离 _volatile / _tool_name 等内部字段，保证输出字节级稳定
+
+    为什么要包含 volatile 系统消息？
+      - env/project/memory/safety 在会话期间内容不变（时间在启动时冻结）
+      - 它们天然适合作为 immutable prefix 的一部分
+      - 过滤掉会导致 LLM 在全新会话首轮收不到任何系统上下文
     """
     api: list[dict] = []
-    for m in messages:
-        if m.get("role") == "system" and not m.get("_volatile"):
-            api.append(m)
+
+    # 第一遍：所有 system 消息（含 volatile）→ immutable prefix
     for m in messages:
         if m.get("role") != "system":
-            api.append(m)
+            continue
+        content = m.get("content", "")
+        api.append({"role": "system", "content": content})
+
+    # 第二遍：所有非 system 消息 → append-only log
+    for m in messages:
+        if m.get("role") == "system":
+            continue
+        clean: dict = {"role": m["role"]}
+        content = m.get("content")
+        if content is not None:
+            clean["content"] = content
+        if m.get("tool_calls"):
+            clean["tool_calls"] = m["tool_calls"]
+        if m.get("tool_call_id"):
+            clean["tool_call_id"] = m["tool_call_id"]
+        api.append(clean)
+
     return api
+
+
+# ═══════════════════════════════════════════════════════════════
+# 前缀缓存诊断
+# ═══════════════════════════════════════════════════════════════
+
+
+def _compute_prefix_hash(messages: list[dict]) -> tuple[str, int, int]:
+    """计算系统消息前缀的 SHA-256 哈希。
+
+    返回 (hex_hash, 字符数, token 估算数)。
+    前缀 = 所有 system 消息序列化后的 JSON 字符串。
+    这个哈希用于诊断缓存命中/丢失。
+
+    如果前缀哈希改变，DeepSeek 缓存必然 miss。
+    """
+    import hashlib as _hashlib
+    system_msgs = [{"role": "system", "content": m.get("content", "")}
+                   for m in messages if m.get("role") == "system"]
+    prefix_json = json.dumps(system_msgs, ensure_ascii=False, sort_keys=True)
+    h = _hashlib.sha256(prefix_json.encode()).hexdigest()[:16]
+    tokens = len(prefix_json) // 4
+    return h, len(prefix_json), tokens
+
+
+def get_prefix_diagnostics(messages: list[dict]) -> str:
+    """生成前缀缓存诊断报告，供 /cache 命令使用。
+
+    返回内容包括：
+      - 前缀哈希（用于验证是否改变）
+      - 每条系统消息的概览（角色、大小）
+      - 每轮的 token 估算
+      - 如果前缀中有时间类消息，提示已冻结
+    """
+    prefix_hash, prefix_chars, prefix_tokens = _compute_prefix_hash(messages)
+
+    # 分类系统消息
+    sys_lines: list[str] = []
+    tag_map = {
+        "当前环境": "🌐 环境",
+        "当前项目": "📁 项目",
+        "你拥有以下记忆": "🧠 记忆",
+        "安全模式": "🛡️ 安全",
+        "之前对话的摘要": "📝 摘要",
+        "对话摘要": "📝 压缩",
+        "前一话题": "📝 归档",
+    }
+
+    for m in messages:
+        if m.get("role") != "system":
+            continue
+        content = m.get("content", "")
+        label = "⚙️ 其他"
+        for key, tag in tag_map.items():
+            if key in content:
+                label = tag
+                break
+        size = len(content)
+        first_line = content.split("\n")[0][:60]
+        sys_lines.append(f"    {label}  ({size} 字符)  {first_line}")
+
+    non_sys_count = sum(1 for m in messages if m.get("role") != "system")
+    api_msgs = _build_api_messages(messages)
+    from .tools.tokens import count_messages_tokens as _cnt
+
+    lines = [
+        "📊 前缀缓存诊断",
+        "",
+        f"  前缀哈希 (SHA-256):  {prefix_hash}",
+        f"  前缀大小:            {prefix_tokens} tokens ({prefix_chars} 字符)",
+        f"  前缀消息数:          {len([m for m in api_msgs if m.get('role') == 'system'])} 条系统消息",
+        "",
+        "  前缀结构:",
+    ]
+    lines.extend(sys_lines)
+    lines.extend([
+        "",
+        f"  内存消息总数:        {len(messages)} 条",
+        f"  本轮 API payload:    约 {_cnt(api_msgs)} tokens",
+        "",
+        "💡 提示：只要前缀哈希不变，DeepSeek 就能缓存命中。",
+        "   如果哈希变了 → 下次请求 cache miss → 首字节缓存重建。",
+        "   常见导致前缀改变的操作：/trust、/clear、会话加载(时间不同)。",
+    ])
+    return "\n".join(lines)
 
 
 def run_conversation(

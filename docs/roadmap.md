@@ -24,24 +24,28 @@
 ### 2.1 DeepSeek 前缀缓存优化（基于 Reasonix 调研）
 
 > 目标：将会话上下文改为三段式结构（Immutable Prefix / Append-Only Log / Volatile Scratch），
-> 把 DeepSeek 前缀缓存命中率从 ~0% 提升到 90%+，大幅降低长期会话的 token 费用。
+### 2.1 DeepSeek 前缀缓存优化（基于 Reasonix 调研）🚧
 
-- [x] 三段式上下文：`prefix`（固定）+ `log`（只追加）+ `scratch`（不发给 API）
-- [x] 修复 `main.py` 的 `insert(0, ...)` 缓存毒药问题
-- [x] 工具结果超过 3000 token 自动压缩为摘要
-- [ ] SAFE 工具并行分发（read_file、git_status 等）
-- [ ] Flatten：深度嵌套工具 schema 自动扁平化
-- [ ] Storm：相同 tool+args 滑动窗口去重
+> 目标：通过 Immutable Prefix + Append-Only Log 架构，把缓存命中率拉到 90%+。
 
----
+- [x] Phase 0：修复 `insert(0, ...)` 缓存毒药，改为 `append()` ✅
+- [x] Phase 0：三段式消息流（prefix/log/scratch）概念 ✅
+- [x] Phase 0：工具结果 >3000 token 自动压缩 ✅
+- [x] Phase 1：修复 `_build_api_messages()` — volatile 系统消息纳入前缀 ✅
+- [x] Phase 1：`/cache` 命令 — 前缀哈希、结构诊断、命中率 ✅
+- [ ] Phase 2：Flatten — 深层嵌套工具 schema 扁平化，消除字节级抖动
+- [ ] Phase 3：Storm — 相同 tool+args 滑动窗口去重
+- [ ] Phase 4：SAFE 工具并行分发（read_file、git_status 等无依赖调用并行执行）
+- [ ] Phase 5：`CacheContext` 类 — 三段式上下文显式管理（prefix hash 校验 + log/scratch 分离）
 
----
+**缓存效率目标：**
+| 场景 | 修复前 | Phase 1 | Phase 2+3 | Phase 4+5 |
+|------|:------:|:-------:|:---------:|:---------:|
+| 全新会话首轮 | 0%（无系统上下文） | ~60% | ~70% | ~80% |
+| 工具循环内 | ~65% | ~99% | ~99.5% | ~99.8% |
+| 长会话（20轮+） | ~99% | ~99.9% | ~99.9% | ~99.9% |
 
-## v1.0 规划 — 智能 + 平台化
-
-### 3.1 MCP 协议支持
-
-> [Model Context Protocol](https://modelcontextprotocol.io) 是 AI Agent 的标准化工具协议。
+**涉及文件：** `src/llm.py`、`src/main.py`、`src/commands.py`
 > 接入后 CTGents 可连接任何 MCP 服务器——数据库、文件系统、浏览器、第三方 API。
 
 - [ ] MCP Client 实现（支持 stdio / HTTP / SSE 传输）
