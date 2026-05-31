@@ -503,7 +503,7 @@ def _cmd_compact(r: CmdResult, msgs, args, _sid) -> None:
 # 上下文诊断指令
 # ═══════════════════════════════════════════════════════════════
 
-@builtin("/context", description="查看上下文用量、token 分布、压缩状态")
+@builtin("/context", description="查看上下文：token 分布、前缀缓存诊断、API 命中率、压缩状态")
 def _cmd_context(r: CmdResult, msgs, _args, _sid) -> None:
     from .config import MAX_CONTEXT_TOKENS
     from .tools.tokens import count_messages_tokens
@@ -564,6 +564,36 @@ def _cmd_context(r: CmdResult, msgs, _args, _sid) -> None:
                 break
     else:
         lines.append("  ❌ 未压缩（70% 触发自动压缩）")
+
+    # ── 前缀缓存诊断（前缀哈希 + 结构分析） ──
+    from .llm import _compute_prefix_hash
+    h, chars, tokens = _compute_prefix_hash(msgs)
+    lines.append("")
+    lines.append("── 前缀缓存 ──")
+    lines.append(f"  前缀哈希: {h}")
+    lines.append(f"  前缀大小: {tokens} tokens ({chars} 字符)")
+
+    tag_map = {
+        "当前环境": "🌐 环境",
+        "当前项目": "📁 项目",
+        "你拥有以下记忆": "🧠 记忆",
+        "安全模式": "🛡️ 安全",
+        "之前对话的摘要": "📝 摘要",
+        "对话摘要": "📝 压缩",
+        "前一话题": "📝 归档",
+    }
+    for m in msgs:
+        if m.get("role") != "system":
+            continue
+        content = m.get("content", "")
+        label = "⚙️ 其他"
+        for key, tag in tag_map.items():
+            if key in content:
+                label = tag
+                break
+        size = len(content)
+        first_line = content.split("\n")[0][:55]
+        lines.append(f"    {label}  ({size} 字符)  {first_line}")
 
     # API 缓存命中统计（按模型区分）
     from .llm import get_cache_stats
@@ -631,82 +661,6 @@ def _cmd_context(r: CmdResult, msgs, _args, _sid) -> None:
 
     r.message = "\n".join(lines)
 
-
-@builtin_multi(["/cache", "/prefix"], description="查看前缀缓存诊断（SHA-256 哈希 + 命中率）")
-def _cmd_cache(r: CmdResult, msgs, args, _sid) -> None:
-    """前缀缓存诊断命令。
-
-    子命令：
-      /cache          — 完整诊断：前缀结构 + 缓存统计
-      /cache hash     — 仅显示前缀哈希
-      /cache stats    — 仅显示缓存命中统计
-    """
-    from .llm import get_cache_stats, get_prefix_diagnostics
-
-    if args and args[0] in ("stats", "stat"):
-        # 仅显示缓存统计
-        cache = get_cache_stats(_sid)
-        total = cache.get("total", {})
-        if total.get("requests", 0) == 0:
-            r.message = "📭 暂无 API 请求统计数据。先进行一次对话吧。"
-            return
-
-        lines = ["📊 缓存命中统计", ""]
-        for mk in ["flash", "pro"]:
-            s = cache["models"].get(mk)
-            if not s or s["requests"] == 0:
-                continue
-            hit = s["cache_hit_tokens"]
-            miss = s["cache_miss_tokens"]
-            total_tok = hit + miss
-            rate = hit / total_tok * 100 if total_tok > 0 else 0
-            emoji = "⚡" if mk == "flash" else "🧠"
-            bar_len = 20
-            hits = int(bar_len * rate / 100)
-            bar = "█" * hits + "░" * (bar_len - hits)
-            lines.append(f"  {emoji} {mk.title():6s}  {bar}  {rate:.0f}%")
-            lines.append(f"       请求: {s['requests']}次  "
-                          f"命中: {hit:,} tok  "
-                          f"未中: {miss:,} tok")
-        lines.append("")
-        lines.append(f"  📊 总计: {total['requests']}次请求  "
-                      f"缓存命中 {total.get('cache_hit_tokens', 0) + total.get('cache_miss_tokens', 0):,} "
-                      f"输入 token")
-        r.message = "\n".join(lines)
-        return
-
-    if args and args[0] in ("hash", "prefix"):
-        # 仅显示前缀哈希
-        from .llm import _compute_prefix_hash
-        h, chars, tokens = _compute_prefix_hash(msgs)
-        r.message = f"前缀哈希: {h}\n前缀大小: {tokens} tokens ({chars} 字符)"
-        return
-
-    # 完整诊断
-    diag = get_prefix_diagnostics(msgs)
-
-    # 追加缓存统计
-    from .llm import get_cache_stats
-    cache = get_cache_stats(_sid)
-    total = cache.get("total", {})
-    if total.get("requests", 0) > 0:
-        diag += "\n\n📈 会话缓存统计:\n"
-        for mk in ["flash", "pro"]:
-            s = cache["models"].get(mk)
-            if not s or s["requests"] == 0:
-                continue
-            hit = s["cache_hit_tokens"]
-            miss = s["cache_miss_tokens"]
-            total_tok = hit + miss
-            rate = hit / total_tok * 100 if total_tok > 0 else 0
-            diag += f"  {'⚡' if mk == 'flash' else '🧠'} {mk}: {rate:.0f}% 命中 ({hit:,}/{total_tok:,} tok)\n"
-
-    r.message = diag
-
-
-# ═══════════════════════════════════════════════════════════════
-# 分发
-# ═══════════════════════════════════════════════════════════════
 
 def dispatch(user_input: str, messages: list[dict], session_id: str | None) -> CmdResult:
     r = CmdResult()

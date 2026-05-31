@@ -856,66 +856,6 @@ def _compute_prefix_hash(messages: list[dict]) -> tuple[str, int, int]:
     return h, len(prefix_json), tokens
 
 
-def get_prefix_diagnostics(messages: list[dict]) -> str:
-    """生成前缀缓存诊断报告，供 /cache 命令使用。
-
-    返回内容包括：
-      - 前缀哈希（用于验证是否改变）
-      - 每条系统消息的概览（角色、大小）
-      - 每轮的 token 估算
-      - 如果前缀中有时间类消息，提示已冻结
-    """
-    prefix_hash, prefix_chars, prefix_tokens = _compute_prefix_hash(messages)
-
-    # 分类系统消息
-    sys_lines: list[str] = []
-    tag_map = {
-        "当前环境": "🌐 环境",
-        "当前项目": "📁 项目",
-        "你拥有以下记忆": "🧠 记忆",
-        "安全模式": "🛡️ 安全",
-        "之前对话的摘要": "📝 摘要",
-        "对话摘要": "📝 压缩",
-        "前一话题": "📝 归档",
-    }
-
-    for m in messages:
-        if m.get("role") != "system":
-            continue
-        content = m.get("content", "")
-        label = "⚙️ 其他"
-        for key, tag in tag_map.items():
-            if key in content:
-                label = tag
-                break
-        size = len(content)
-        first_line = content.split("\n")[0][:60]
-        sys_lines.append(f"    {label}  ({size} 字符)  {first_line}")
-
-    non_sys_count = sum(1 for m in messages if m.get("role") != "system")
-    api_msgs = _build_api_messages(messages)
-    from .tools.tokens import count_messages_tokens as _cnt
-
-    lines = [
-        "📊 前缀缓存诊断",
-        "",
-        f"  前缀哈希 (SHA-256):  {prefix_hash}",
-        f"  前缀大小:            {prefix_tokens} tokens ({prefix_chars} 字符)",
-        f"  前缀消息数:          {len([m for m in api_msgs if m.get('role') == 'system'])} 条系统消息",
-        "",
-        "  前缀结构:",
-    ]
-    lines.extend(sys_lines)
-    lines.extend([
-        "",
-        f"  内存消息总数:        {len(messages)} 条",
-        f"  本轮 API payload:    约 {_cnt(api_msgs)} tokens",
-        "",
-        "💡 提示：只要前缀哈希不变，DeepSeek 就能缓存命中。",
-        "   如果哈希变了 → 下次请求 cache miss → 首字节缓存重建。",
-        "   常见导致前缀改变的操作：/trust、/clear、会话加载(时间不同)。",
-    ])
-    return "\n".join(lines)
 
 
 def run_conversation(
