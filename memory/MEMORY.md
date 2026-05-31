@@ -3,6 +3,7 @@
 - [user-grade](user-grade.md) — 用户是2025年入学的研究生，当前为研一（硕士一年级）学生
 - [user-major-direction](user-major-direction.md) — 用户的专业是计算机技术，研究生大方向是自动驾驶，目前还在寻找
 - [user-nickname](user-nickname.md) — 用户叫"冲塔怪"，英文名 CTG，希望被称呼为"塔哥"
+- [user-prefers-adaptive-verbosity](user-prefers-adaptive-verbosity.md) — 用户要求根据问题自适应回答长度：只问结果就直接说结果，不问细
 - [user-prefers-efficient-execution](user-prefers-efficient-execution.md) — 用户的核心要求：分析清楚问题 → 明确目标 → 做好规划 →
 - [user-prefers-flexible-judgment](user-prefers-flexible-judgment.md) — 按信息重要性灵活决策：1) 工具调用结果符合预期 → 不记录
 - [user-prefers-minimal-output](user-prefers-minimal-output.md) — 用户要求：命令输出和工具调用的结果不要全量展示在对话中

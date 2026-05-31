@@ -885,6 +885,16 @@ def _update_safe_stats(n_parallel: int, n_serial: int) -> None:
         _safe_stats["serial_tools"] += n_serial
 
 
+def _compute_prefix_hash(messages: list[dict]) -> tuple[str, int, int]:
+    """计算系统消息前缀的 SHA-256 哈希。返回 (hex_hash, 字符数, token估算数)。"""
+    import hashlib as _hashlib
+    system_msgs = [{"role": "system", "content": m.get("content", "")}
+                   for m in messages if m.get("role") == "system"]
+    prefix_json = json.dumps(system_msgs, ensure_ascii=False, sort_keys=True)
+    h = _hashlib.sha256(prefix_json.encode()).hexdigest()[:16]
+    return h, len(prefix_json), len(prefix_json) // 4
+
+
 def _execute_tool_batch(approved: list[tuple]) -> list[str]:
     """执行一批已批准的工具调用，并行分发只读工具。
 
