@@ -627,13 +627,10 @@ def _invoke_llm(
 # ═══════════════════════════════════════════════════════════════
 
 # 压缩阈值（字符数，约等于 token 数）
-_TOOL_RESULT_COMPRESS_THRESHOLD = 3000
+_TOOL_RESULT_COMPRESS_THRESHOLD = 1200
 
 # 不压缩的工具（这些工具的结果通常短小或结构重要）
-_TOOL_RESULT_NO_COMPRESS = {
-    "git_status", "git_diff", "git_log", "git_branch",
-    "check_project", "docs_sync_check", "count_lines",
-}
+# 全部工具都压缩，无例外
 
 
 def _compress_tool_result(tool_name: str, result: str) -> str:
@@ -645,8 +642,6 @@ def _compress_tool_result(tool_name: str, result: str) -> str:
     - 特定工具（read_file 等）→ 额外提示可重新读取
     """
     if len(result) <= _TOOL_RESULT_COMPRESS_THRESHOLD:
-        return result
-    if tool_name in _TOOL_RESULT_NO_COMPRESS:
         return result
 
     head = result[:_TOOL_RESULT_COMPRESS_THRESHOLD]
@@ -674,10 +669,10 @@ def _compress_tool_result(tool_name: str, result: str) -> str:
 # 对话历史压缩（Phase 3）
 # ═══════════════════════════════════════════════════════════════
 
-# 触发压缩的上下文比例（达到 70% 时触发）
-_COMPACT_THRESHOLD = 0.70
+# 触发压缩的上下文比例（达到 25% 时触发，保持上下文紧凑）
+_COMPACT_THRESHOLD = 0.25
 # 压缩时保留最近对话的预算比例
-_COMPACT_RETAIN_RATIO = 0.20
+_COMPACT_RETAIN_RATIO = 0.08
 # 话题切换关键词（检测到后全量压缩）
 _TOPIC_SWITCH_KEYWORDS = [
     "换个", "换一", "不谈", "不说", "跳过", "算了",

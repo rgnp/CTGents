@@ -142,7 +142,7 @@ class TestCompressToolResult:
         text = "y" * (_TOOL_RESULT_COMPRESS_THRESHOLD + 1)
         compressed = _compress_tool_result("read_file", text)
         assert "已压缩" in compressed
-        assert "3001" in compressed
+        assert "1201" in compressed
 
     def test_large_result_truncated(self):
         text = "z" * 5000
@@ -176,21 +176,11 @@ class TestCompressToolResult:
         assert "已压缩" in compressed
         assert "read_file" not in compressed
 
-    def test_git_status_not_compressed(self):
-        text = "e" * 5000
-        assert _compress_tool_result("git_status", text) == text
-
-    def test_git_diff_not_compressed(self):
-        text = "f" * 5000
-        assert _compress_tool_result("git_diff", text) == text
-
-    def test_check_project_not_compressed(self):
-        text = "g" * 5000
-        assert _compress_tool_result("check_project", text) == text
-
-    def test_docs_sync_check_not_compressed(self):
-        text = "h" * 5000
-        assert _compress_tool_result("docs_sync_check", text) == text
+    def test_generic_tool_hint(self):
+        text = "d" * 5000
+        compressed = _compress_tool_result("other_tool", text)
+        assert "已压缩" in compressed
+        assert "read_file" not in compressed
 
     def test_compress_shows_size_info(self):
         text = "i" * 10000

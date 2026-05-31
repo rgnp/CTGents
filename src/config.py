@@ -37,6 +37,7 @@ TOOL_LOOP_THRESHOLD: float = 0.85
 MAX_RETRIES: int = 3
 RETRY_BASE_DELAY: float = 1.0
 MAX_EXEC_TIMEOUT: int = 5
+TOOL_RESULT_BUDGET: float = 0.15
 
 # ── 路径 ──
 SESSION_DIR: str = str(Path(__file__).parent.parent / "sessions")
@@ -45,7 +46,6 @@ MEMORY_DIR: str = str(Path(__file__).parent.parent / "memory")
 
 # ── Token 预算 ──
 MAX_CONTEXT_TOKENS: int = 960_000
-TOOL_RESULT_BUDGET: float = 0.3
 TOKEN_PER_CHAR: float = 0.5
 
 # 客户端（模块级单例，惰性初始化）
