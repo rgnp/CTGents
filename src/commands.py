@@ -591,9 +591,26 @@ def _cmd_context(r: CmdResult, msgs, _args, _sid) -> None:
             if key in content:
                 label = tag
                 break
-        size = len(content)
-        first_line = content.split("\n")[0][:55]
         lines.append(f"    {label}  ({size} 字符)  {first_line}")
+
+    # ── Storm 去重统计 ──
+    from .tools.storm import get_storm_stats
+    storm = get_storm_stats()
+    if storm["hits"] > 0:
+        lines.append("")
+        lines.append("── Storm 去重 ──")
+        lines.append(f"  🔁 拦截重复调用: {storm['hits']} 次")
+        lines.append(f"  📐 去重窗口: {storm['window_size']}/8")
+
+    # ── SAFE 并行统计 ──
+    from .llm import get_safe_stats
+    safe = get_safe_stats()
+    if safe["batches"] > 0:
+        lines.append("")
+        lines.append("── SAFE 并行 ──")
+        lines.append(f"  ⚡ 并行批次数: {safe['batches']}")
+        lines.append(f"  🔧 并行执行工具数: {safe['parallel_tools']}")
+        lines.append(f"  🐌 串行执行工具数: {safe['serial_tools']}")
 
     # API 缓存命中统计（按模型区分）
     from .llm import get_cache_stats

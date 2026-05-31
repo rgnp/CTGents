@@ -6,7 +6,7 @@
 线程安全：使用 threading.Lock 保护窗口，支持 SAFE 并行分发。
 
 用法：
-  from .storm import storm_check, reset_storm
+  from .storm import storm_check, reset_storm, get_storm_stats
 
   reset_storm()           # 新轮次开始时调用
   result = storm_check("read_file", {"path": "main.py"})
@@ -43,9 +43,10 @@ _DEDUP_BLACKLIST: frozenset[str] = frozenset({
 # 窗口大小
 _WINDOW_SIZE = 8
 
-# 滑动窗口 + 锁
+# 滑动窗口 + 锁 + 统计
 _window: list[int] = []
 _lock = threading.Lock()
+_dedup_hits: int = 0
 
 
 def _hash_call(name: str, args: dict) -> int:
@@ -60,10 +61,11 @@ def _hash_call(name: str, args: dict) -> int:
 
 
 def reset_storm() -> None:
-    """重置滑动窗口。每轮对话开始前调用一次。"""
-    global _window
+    """重置滑动窗口和拦截计数。每轮对话开始前调用一次。"""
+    global _window, _dedup_hits
     with _lock:
         _window = []
+        _dedup_hits = 0
 
 
 def _is_blacklisted(name: str) -> bool:
@@ -74,6 +76,8 @@ def _is_blacklisted(name: str) -> bool:
 def storm_check(name: str, args: dict) -> str | None:
     """检查工具调用是否重复。线程安全。
 
+    命中时在终端打印可视标记，同时更新拦截计数。
+
     Args:
         name: 工具名
         args: 参数字典
@@ -82,13 +86,18 @@ def storm_check(name: str, args: dict) -> str | None:
         str  — 重复标记（直接返回给 LLM，跳过执行）
         None — 不是重复，正常执行
     """
+    global _dedup_hits
     if _is_blacklisted(name):
         return None
 
+    clean = {k: v for k, v in args.items() if v is not None}
     h = _hash_call(name, args)
 
     with _lock:
         if h in _window:
+            _dedup_hits += 1
+            arg_str = json.dumps(clean, ensure_ascii=False)
+            print(f"  🔁 [Storm] 去重拦截: {name}({arg_str})")
             return f"[⚡重复调用] [{name}] 相同参数已在上文返回，结果可用。如需刷新请用不同参数。"
 
         _window.append(h)
@@ -98,10 +107,14 @@ def storm_check(name: str, args: dict) -> str | None:
     return None
 
 
-def get_window_size() -> int:
-    """返回当前窗口大小（线程安全）。"""
+def get_storm_stats() -> dict:
+    """返回 Storm 去重统计。
+
+    Returns:
+        dict: {"hits": int, "window_size": int}
+    """
     with _lock:
-        return len(_window)
+        return {"hits": _dedup_hits, "window_size": len(_window)}
 
 
 def get_blacklist() -> frozenset[str]:

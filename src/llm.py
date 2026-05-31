@@ -857,8 +857,32 @@ _PARALLEL_SAFE: frozenset[str] = frozenset({
     # 插件/能力
     "discover", "plugin_spec", "list_plugins",
     # MCP 列表
-    "mcp_list",
 })
+
+# SAFE 运行统计（用于 /context 展示）
+_safe_stats: dict = {"batches": 0, "parallel_tools": 0, "serial_tools": 0}
+_safe_stats_lock = threading.Lock()
+
+
+def reset_safe_stats() -> None:
+    """重置 SAFE 统计。"""
+    global _safe_stats
+    with _safe_stats_lock:
+        _safe_stats = {"batches": 0, "parallel_tools": 0, "serial_tools": 0}
+
+
+def get_safe_stats() -> dict:
+    """返回 SAFE 并行分发统计（线程安全）。"""
+    with _safe_stats_lock:
+        return dict(_safe_stats)
+
+
+def _update_safe_stats(n_parallel: int, n_serial: int) -> None:
+    """更新 SAFE 统计。"""
+    with _safe_stats_lock:
+        _safe_stats["batches"] += 1
+        _safe_stats["parallel_tools"] += n_parallel
+        _safe_stats["serial_tools"] += n_serial
 
 
 def _execute_tool_batch(approved: list[tuple]) -> list[str]:
@@ -887,6 +911,8 @@ def _execute_tool_batch(approved: list[tuple]) -> list[str]:
 
     # ── 并行执行只读工具 ──
     if parallel_idxs:
+        names = [approved[i][1] for i in parallel_idxs]
+        print(f"  ⚡ [SAFE] 并行执行 {len(parallel_idxs)} 个工具: {', '.join(names)}")
         with ThreadPoolExecutor(max_workers=min(len(parallel_idxs), 8)) as pool:
             fut_map: dict = {}
             for i in parallel_idxs:
@@ -908,6 +934,7 @@ def _execute_tool_batch(approved: list[tuple]) -> list[str]:
         except Exception as e:
             results[i] = json.dumps({"error": f"执行失败: {e}"}, ensure_ascii=False)
 
+    _update_safe_stats(len(parallel_idxs), len(serial_idxs))
     return results
 
 def run_conversation(
@@ -922,9 +949,10 @@ def run_conversation(
     copy: list[dict] = list(messages)
     copy.append({"role": "user", "content": user_input})
     messages[:] = copy
-    # 重设 Storm 去重窗口（同轮工具循环内去重）
+    # 重设 Storm 去重窗口 + SAFE 并行统计（同轮工具循环内）
     from .tools.storm import reset_storm
     reset_storm()
+    reset_safe_stats()
 
     # 自动选择模型
     backend = auto_select_model(user_input)

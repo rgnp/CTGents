@@ -2,7 +2,7 @@
 
 import json
 import pytest
-from src.tools.storm import storm_check, reset_storm, get_window_size, get_blacklist
+from src.tools.storm import storm_check, reset_storm, get_storm_stats, get_blacklist
 
 
 class TestStormDedup:
@@ -53,7 +53,7 @@ class TestStormDedup:
         storm_check("write_file", {"path": "b.txt"})
         storm_check("write_file", {"path": "c.txt"})
         # 窗口应该还是空的
-        assert get_window_size() == 0
+        assert get_storm_stats()["window_size"] == 0
 
     def test_window_size_limit(self):
         """窗口超过限制时自动淘汰旧记录。"""
@@ -63,7 +63,7 @@ class TestStormDedup:
             r = storm_check("read_file", {"path": f"file_{i}.py"})
             assert r is None, f"第 {i+1} 次调用不应重复"
 
-        assert get_window_size() == 8, "窗口应保持最多 8 条"
+        assert get_storm_stats()["window_size"] == 8, "窗口应保持最多 8 条"
 
         # 此时 file_0.py 已被淘汰，可以再次调用
         r = storm_check("read_file", {"path": "file_0.py"})
@@ -100,7 +100,7 @@ class TestStormDedup:
         storm_check("read_file", {"path": "main.py"})
 
         reset_storm()
-        assert get_window_size() == 0
+        assert get_storm_stats()["window_size"] == 0
 
         r = storm_check("read_file", {"path": "main.py"})
         assert r is None, "reset 后相同调用不应视为重复"
