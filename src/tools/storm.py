@@ -3,6 +3,8 @@
 同轮工具循环中，相同 tool + 相同参数连续调用时，跳过执行并标记重复。
 只对纯读取工具生效（有副作用的工具不进窗口）。
 
+线程安全：使用 threading.Lock 保护窗口，支持 SAFE 并行分发。
+
 用法：
   from .storm import storm_check, reset_storm
 
@@ -14,6 +16,7 @@
 """
 
 import json
+import threading
 
 # ── 黑名单：有副作用的工具，永远不去重 ──
 _DEDUP_BLACKLIST: frozenset[str] = frozenset({
@@ -40,8 +43,9 @@ _DEDUP_BLACKLIST: frozenset[str] = frozenset({
 # 窗口大小
 _WINDOW_SIZE = 8
 
-# 滑动窗口：存储 (tool_name, args_json) 的哈希值
+# 滑动窗口 + 锁
 _window: list[int] = []
+_lock = threading.Lock()
 
 
 def _hash_call(name: str, args: dict) -> int:
@@ -58,7 +62,8 @@ def _hash_call(name: str, args: dict) -> int:
 def reset_storm() -> None:
     """重置滑动窗口。每轮对话开始前调用一次。"""
     global _window
-    _window = []
+    with _lock:
+        _window = []
 
 
 def _is_blacklisted(name: str) -> bool:
@@ -67,7 +72,7 @@ def _is_blacklisted(name: str) -> bool:
 
 
 def storm_check(name: str, args: dict) -> str | None:
-    """检查工具调用是否重复。
+    """检查工具调用是否重复。线程安全。
 
     Args:
         name: 工具名
@@ -77,29 +82,26 @@ def storm_check(name: str, args: dict) -> str | None:
         str  — 重复标记（直接返回给 LLM，跳过执行）
         None — 不是重复，正常执行
     """
-    # 黑名单工具：不进窗口，不检查
     if _is_blacklisted(name):
         return None
 
     h = _hash_call(name, args)
 
-    # 在窗口里找到了 → 重复
-    if h in _window:
-        # 返回告诉 LLM 这是重复，以及原结果在上下文哪
-        return f"[⚡重复调用] [{name}] 相同参数已在上文返回，结果可用。如需刷新请用不同参数。"
+    with _lock:
+        if h in _window:
+            return f"[⚡重复调用] [{name}] 相同参数已在上文返回，结果可用。如需刷新请用不同参数。"
 
-    # 没找到 → 记录到窗口
-    _window.append(h)
-    # 窗口溢出 → 移除最早的一个
-    if len(_window) > _WINDOW_SIZE:
-        _window.pop(0)
+        _window.append(h)
+        if len(_window) > _WINDOW_SIZE:
+            _window.pop(0)
 
     return None
 
 
 def get_window_size() -> int:
-    """返回当前窗口大小（用于调试/诊断）。"""
-    return len(_window)
+    """返回当前窗口大小（线程安全）。"""
+    with _lock:
+        return len(_window)
 
 
 def get_blacklist() -> frozenset[str]:

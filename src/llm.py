@@ -833,30 +833,82 @@ def _build_api_messages(messages: list[dict]) -> list[dict]:
     return api
 
 
+
 # ═══════════════════════════════════════════════════════════════
-# 前缀缓存诊断
+# SAFE — 工具并行分发
 # ═══════════════════════════════════════════════════════════════
 
+# 并行安全白名单：纯读取工具，无副作用，可在同批次内同时执行
+_PARALLEL_SAFE: frozenset[str] = frozenset({
+    # 文件读取
+    "read_file", "read_file_lines", "list_files", "count_lines",
+    # 代码搜索
+    "grep_code",
+    # 网络查询
+    "search_web", "read_page",
+    # Git 读取（状态/日志/差异/分支）
+    "git_status", "git_diff", "git_log", "git_branch",
+    # RAG 查询
+    "rag_query", "rag_status",
+    # 记忆查询
+    "recall",
+    # 项目扫描/检查
+    "scan_project", "check_project", "docs_sync_check", "generate_agents_md",
+    # 插件/能力
+    "discover", "plugin_spec", "list_plugins",
+    # MCP 列表
+    "mcp_list",
+})
 
-def _compute_prefix_hash(messages: list[dict]) -> tuple[str, int, int]:
-    """计算系统消息前缀的 SHA-256 哈希。
 
-    返回 (hex_hash, 字符数, token 估算数)。
-    前缀 = 所有 system 消息序列化后的 JSON 字符串。
-    这个哈希用于诊断缓存命中/丢失。
+def _execute_tool_batch(approved: list[tuple]) -> list[str]:
+    """执行一批已批准的工具调用，并行分发只读工具。
 
-    如果前缀哈希改变，DeepSeek 缓存必然 miss。
+    Args:
+        approved: [(tc_data, tool_name, args, tc), ...] 已批准按原始顺序
+
+    Returns:
+        list[str] 与 approved 一一对应的执行结果
     """
-    import hashlib as _hashlib
-    system_msgs = [{"role": "system", "content": m.get("content", "")}
-                   for m in messages if m.get("role") == "system"]
-    prefix_json = json.dumps(system_msgs, ensure_ascii=False, sort_keys=True)
-    h = _hashlib.sha256(prefix_json.encode()).hexdigest()[:16]
-    tokens = len(prefix_json) // 4
-    return h, len(prefix_json), tokens
+    from concurrent.futures import ThreadPoolExecutor, as_completed
 
+    n = len(approved)
+    results: list[str] = [""] * n
 
+    # 先处理有预置结果（跳过）的工具
+    for i in range(n):
+        pre = approved[i][4]  # pre_result
+        if pre is not None:
+            results[i] = pre
 
+    # 剩余需要实际执行的，拆分为并行组和串行组
+    parallel_idxs = [i for i in range(n) if approved[i][4] is None and approved[i][1] in _PARALLEL_SAFE]
+    serial_idxs = [i for i in range(n) if approved[i][4] is None and approved[i][1] not in _PARALLEL_SAFE]
+
+    # ── 并行执行只读工具 ──
+    if parallel_idxs:
+        with ThreadPoolExecutor(max_workers=min(len(parallel_idxs), 8)) as pool:
+            fut_map: dict = {}
+            for i in parallel_idxs:
+                tc = approved[i][3]  # (tc_data, tool_name, args, tc, pre_result)[3]
+                fut = pool.submit(execute_tool, tc)
+                fut_map[fut] = i
+            for fut in as_completed(fut_map):
+                idx = fut_map[fut]
+                try:
+                    results[idx] = fut.result()
+                except Exception as e:
+                    results[idx] = json.dumps({"error": f"并行执行失败: {e}"}, ensure_ascii=False)
+
+    # ── 串行执行有副作用的工具 ──
+    for i in serial_idxs:
+        tc = approved[i][3]  # (tc_data, tool_name, args, tc, pre_result)[3]
+        try:
+            results[i] = execute_tool(tc)
+        except Exception as e:
+            results[i] = json.dumps({"error": f"执行失败: {e}"}, ensure_ascii=False)
+
+    return results
 
 def run_conversation(
     messages: list[dict],
@@ -911,6 +963,13 @@ def run_conversation(
                 "content": content,
                 "tool_calls": tool_calls,
             })
+            # ═══════════════════════════════════════════════════════════
+            # SAFE Phase 1：安全确认（顺序执行，含用户交互）
+            # ═══════════════════════════════════════════════════════════
+            from .safety import check_tool, get_mode, get_safety_level, trust_tool
+
+            approved: list[tuple] = []  # (tc_data, tool_name, args, tc, pre_result_or_None)
+
             for tc_data in tool_calls:
                 tc = SimpleNamespace(
                     function=SimpleNamespace(
@@ -921,11 +980,6 @@ def run_conversation(
                 args = json.loads(tc_data["function"]["arguments"])
                 tool_name = tc_data["function"]["name"]
                 on_tool(tool_name, args)
-
-                # ═══════════════════════════════════════════════
-                # Auto Mode 安全检查
-                # ═══════════════════════════════════════════════
-                from .safety import check_tool, get_mode, get_safety_level, trust_tool
 
                 safety = check_tool(tool_name)
                 if safety == "confirm":
@@ -944,17 +998,39 @@ def run_conversation(
                     if choice in ("a", "always"):
                         trust_tool(tool_name)
                         print(f"     ✅ 已信任 {tool_name}，本次会话自动放行\n")
-                        result = execute_tool(tc)
+                        approved.append((tc_data, tool_name, args, tc, None))
                     elif choice in ("y", "yes", ""):
-                        result = execute_tool(tc)
+                        approved.append((tc_data, tool_name, args, tc, None))
                     else:
-                        result = f"⛔ [{tool_name}] 已跳过（用户未批准）"
                         print("     ⛔ 已跳过\n")
+                        approved.append((tc_data, tool_name, args, tc,
+                                         f"⛔ [{tool_name}] 已跳过（用户未批准）"))
                 else:
-                    result = execute_tool(tc)
+                    approved.append((tc_data, tool_name, args, tc, None))
 
+            # ═══════════════════════════════════════════════════════════
+            # SAFE Phase 2：批量执行（只读并行 + 有副作用串行）
+            # ═══════════════════════════════════════════════════════════
+            # 收集需要实际执行的工具（pre_result 为 None 的）
+            exec_indices: list[int] = []
+            exec_items: list[tuple] = []
+            for i, item in enumerate(approved):
+                if item[4] is None:  # pre_result is None → 需要执行
+                    exec_indices.append(i)
+                    exec_items.append(item)
+
+            if exec_items:
+                exec_results = _execute_tool_batch(exec_items)
+                for idx, result in zip(exec_indices, exec_results):
+                    # 回填结果到 approved
+                    tc_data, tool_name, args, tc, _ = approved[idx]
+                    approved[idx] = (tc_data, tool_name, args, tc, result)
+
+            # ═══════════════════════════════════════════════════════════
+            # SAFE Phase 3：处理后追加到上下文（顺序执行）
+            # ═══════════════════════════════════════════════════════════
+            for tc_data, tool_name, args, tc, result in approved:
                 result = truncate_to_budget(result, copy)
-                # Phase 2: 压缩过大的工具结果
                 result = _compress_tool_result(tool_name, result)
                 copy.append({
                     "role": "tool",
