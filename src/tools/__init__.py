@@ -146,6 +146,12 @@ def execute_tool(tool_call: ChatCompletionMessageToolCall) -> str:
     name = tool_call.function.name
     args = json.loads(tool_call.function.arguments)
 
+    # ── Storm 去重检查 ──
+    from .storm import storm_check
+    dup = storm_check(name, args)
+    if dup is not None:
+        return dup
+
     # 插件优先
     from .plugin_mgr import execute_plugin
     result = execute_plugin(name, args)

@@ -870,6 +870,9 @@ def run_conversation(
     copy: list[dict] = list(messages)
     copy.append({"role": "user", "content": user_input})
     messages[:] = copy
+    # 重设 Storm 去重窗口（同轮工具循环内去重）
+    from .tools.storm import reset_storm
+    reset_storm()
 
     # 自动选择模型
     backend = auto_select_model(user_input)
