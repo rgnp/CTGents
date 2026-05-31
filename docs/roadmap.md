@@ -46,11 +46,10 @@
 | 长会话（20轮+） | ~99% | ~99.9% | ~99.9% | ~99.9% |
 
 **涉及文件：** `src/llm.py`、`src/main.py`、`src/commands.py`
-**涉及文件：** `src/tools/mcp.py`（新模块）
-
-### 3.2 项目级 RAG 检索 ✅
-
-> 当前记忆系统是手动 `remember`/`recall`。加上自动索引——启动时扫描项目文件，
+- [ ] ~~Phase 2：Flatten~~ — 已跳过。当前工具 schema 无嵌套 object，扁平化零收益
+- [x] Phase 2：Storm — 同轮工具调用滑动窗口去重 ✅
+- [x] Phase 3：SAFE — 无依赖工具并行分发（read_file、git_status 等） ✅
+- [x] Phase 4：`CacheContext` 类 — 三段式上下文显式管理（prefix hash 校验 + log/scratch 分离） ✅
 > 分块并建立 TF-IDF 加权索引，对话中用 rag_query 语义搜索代码上下文。
 
 - [x] 项目文件自动索引（支持 30+ 种编程语言）
@@ -58,8 +57,8 @@
 - [x] 智能分块：按函数/类自动分割（Python），通用文件按行切割
 - [x] 代码语义关键词加权（函数名×3、注释×2、标识符×1.5）
 - [x] BM25 评分算法 + 驼峰/蛇形自动拆词
-- [x] 增量更新：文件哈希缓存，只重新索引变更的文件
-- [x] 启动时自动注入 RAG 索引状态
+**涉及文件：** `src/llm.py`、`src/main.py`、`src/commands.py`、`src/cache_context.py`（新模块）
+**涉及文件：** `src/tools/mcp.py`（新模块）
 - [x] 三个工具：`rag_index` / `rag_query` / `rag_status`
 
 **涉及文件：** `src/tools/rag.py`（新模块）

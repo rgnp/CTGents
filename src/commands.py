@@ -1,16 +1,22 @@
 """指令系统。结构化注册：提供 name/description/usage/handler 即可。"""
 
+from __future__ import annotations
+
 import json
 import os
 import re
-from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 from types import SimpleNamespace
+from typing import TYPE_CHECKING
 
 from .config import SESSION_DIR
+from .cache_context import CacheContext, compute_prefix_hash
 from .session import get_session_name, list_sessions, rename_session
 from .tools import execute_tool
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
 
 # ═══════════════════════════════════════════════════════════════
 # 数据结构
@@ -33,7 +39,7 @@ class Command:
     name: str
     description: str = ""
     usage: str = ""
-    handler: Callable[["CmdResult", list[dict], list[str], str | None], None] | None = None
+    handler: Callable[[CmdResult, CacheContext, list[str], str | None], None] | None = None
 
 
 # 内部注册表
@@ -45,7 +51,6 @@ def _add_cmd(cmd: Command) -> None:
     _registry.append(cmd)
     if cmd.handler:
         _handlers[cmd.name] = cmd.handler
-        # / 前缀别名：/xxx 也能通过 xxx 调用
         if cmd.name.startswith("/") and len(cmd.name) > 1:
             _handlers.setdefault(cmd.name[1:], cmd.handler)
 
@@ -66,18 +71,17 @@ def builtin_multi(names: list[str], description: str = "", usage: str = ""):
         return fn
     return deco
 
-
 # ═══════════════════════════════════════════════════════════════
 # 内置指令
 # ═══════════════════════════════════════════════════════════════
 
 @builtin_multi(["/exit", "/quit", "/q"], description="退出程序")
-def _cmd_exit(r: CmdResult, _msgs, _args, _sid) -> None:
+def _cmd_exit(r: CmdResult, _ctx, _args, _sid) -> None:
     r.exit = True
 
 
 @builtin_multi(["/help", "/h", "/?"], description="显示指令列表")
-def _cmd_help(r: CmdResult, _msgs, _args, _sid) -> None:
+def _cmd_help(r: CmdResult, _ctx, _args, _sid) -> None:
     # 按 handler 去重，同 handler 的别名合并显示
     seen: dict[int, list[Command]] = {}
     for cmd in _registry:
@@ -96,19 +100,18 @@ def _cmd_help(r: CmdResult, _msgs, _args, _sid) -> None:
 
 
 @builtin_multi(["/clear", "/c"], description="清除对话上下文")
-def _cmd_clear(r: CmdResult, msgs, _args, _sid) -> None:
-    msgs.clear()
+def _cmd_clear(r: CmdResult, ctx, _args, _sid) -> None:
+    ctx.clear_log()
     r.save = True
     r.message = "上下文已清除"
 
 
 @builtin("/save", description="强制保存当前会话")
-def _cmd_save(r: CmdResult, _msgs, _args, _sid) -> None:
+def _cmd_save(r: CmdResult, _ctx, _args, _sid) -> None:
     r.save = True
-
-
+    r.save = True
 @builtin("/rename", description="重命名当前会话", usage="/rename <名称>")
-def _cmd_rename(r: CmdResult, _msgs, args, sid) -> None:
+def _cmd_rename(r: CmdResult, _ctx, args, sid) -> None:
     if not args:
         r.message = "用法: /rename <名称>"
         return
@@ -121,8 +124,8 @@ def _cmd_rename(r: CmdResult, _msgs, args, sid) -> None:
 
 
 @builtin_multi(["/sessions", "/ls"], description="列出历史会话")
-def _cmd_sessions(r: CmdResult, _msgs, _args, _sid) -> None:
-    sessions = list_sessions()
+@builtin_multi(["/sessions", "/ls"], description="列出历史会话")
+def _cmd_sessions(r: CmdResult, _ctx, _args, _sid) -> None:
     if not sessions:
         r.message = "没有历史会话"
         return
@@ -144,7 +147,7 @@ def _cmd_sessions(r: CmdResult, _msgs, _args, _sid) -> None:
 
 
 @builtin("/load", description="切换会话", usage="/load <编号>")
-def _cmd_load(r: CmdResult, _msgs, args, _sid) -> None:
+def _cmd_load(r: CmdResult, _ctx, args, _sid) -> None:
     if not args:
         r.message = "用法: /load <编号>"
         return
@@ -162,27 +165,27 @@ def _cmd_load(r: CmdResult, _msgs, args, _sid) -> None:
 
 
 @builtin("/new", description="新建会话（自动保存当前）")
-def _cmd_new(r: CmdResult, _msgs, _args, _sid) -> None:
+def _cmd_new(r: CmdResult, _ctx, _args, _sid) -> None:
     r.save = True
     r.clear = True
 
 
 @builtin("/pop", description="撤回最后一条对话", usage="/pop [数量]")
-def _cmd_pop(r: CmdResult, msgs, args, _sid) -> None:
+def _cmd_pop(r: CmdResult, ctx, args, _sid) -> None:
     n = int(args[0]) if args else 1
     removed = 0
+    log = ctx.log
     for _ in range(n):
-        while msgs and msgs[-1]["role"] != "user":
-            msgs.pop()
-        if msgs and msgs[-1]["role"] == "user":
-            msgs.pop()
+        while log and log[-1]["role"] != "user":
+            log.pop()
+        if log and log[-1]["role"] == "user":
+            log.pop()
             removed += 1
     r.save = True
     r.message = f"已撤回 {removed} 条对话"
 
-
 @builtin("/export", description="导出对话为 Markdown", usage="/export [轮数] [文件名]")
-def _cmd_export(r: CmdResult, msgs, args, sid) -> None:
+def _cmd_export(r: CmdResult, ctx, args, sid) -> None:
     count: int | None = None
     name_parts: list[str] = []
     if args:
@@ -195,7 +198,7 @@ def _cmd_export(r: CmdResult, msgs, args, sid) -> None:
     name = " ".join(name_parts) if name_parts else (get_session_name(sid) if sid else "export")
     filename = f"{name}.md" if not name.endswith(".md") else name
 
-    messages = list(msgs)
+    messages = list(ctx.all)
     if count is not None:
         rounds, n = [], 0
         for m in reversed(messages):
@@ -229,23 +232,23 @@ def _cmd_export(r: CmdResult, msgs, args, sid) -> None:
 
 
 @builtin("/edit", description="修改最后一条对话并重发", usage="/edit <新内容>")
-def _cmd_edit(r: CmdResult, msgs, args, _sid) -> None:
+def _cmd_edit(r: CmdResult, ctx, args, _sid) -> None:
     if not args:
         r.message = "用法: /edit <新内容>"
         return
     new_text = " ".join(args)
-    while msgs and msgs[-1]["role"] != "user":
-        msgs.pop()
-    if msgs and msgs[-1]["role"] == "user":
-        msgs.pop()
-    msgs.append({"role": "user", "content": new_text})
+    log = ctx.log
+    while log and log[-1]["role"] != "user":
+        log.pop()
+    if log and log[-1]["role"] == "user":
+        log.pop()
+    log.append({"role": "user", "content": new_text})
     r.save = True
     r.retry = True
     r.message = f"已修改: {new_text}"
 
-
 @builtin("/run", description="直接调用工具", usage="/run <工具名> <参数=值...>")
-def _cmd_run(r: CmdResult, _msgs, args, _sid) -> None:
+def _cmd_run(r: CmdResult, _ctx, args, _sid) -> None:
     if not args:
         r.message = "用法: /run <工具名> <参数=值...>"
         return
@@ -260,7 +263,7 @@ def _cmd_run(r: CmdResult, _msgs, args, _sid) -> None:
 
 
 @builtin("/plugin", description="列出/调用插件", usage="/plugin [工具名] [参数=值...]")
-def _cmd_plugin(r: CmdResult, _msgs, args, _sid) -> None:
+def _cmd_plugin(r: CmdResult, _ctx, args, _sid) -> None:
     from .tools.plugin_mgr import _plugins
     if not args:
         if not _plugins:
@@ -297,7 +300,7 @@ def _cmd_plugin(r: CmdResult, _msgs, args, _sid) -> None:
 # ═══════════════════════════════════════════════════════════════
 
 @builtin("/reload", description="热加载指令系统（改 commands.py 后无需重启）")
-def _cmd_reload(r: CmdResult, _msgs, _args, _sid) -> None:
+def _cmd_reload(r: CmdResult, _ctx, _args, _sid) -> None:
     """重新加载 commands 模块自身，使新增/修改的指令立即生效。"""
     from .tools.plugin_mgr import _plugins as plugin_cache
     plugin_cache.clear()
@@ -309,7 +312,7 @@ def _cmd_reload(r: CmdResult, _msgs, _args, _sid) -> None:
 # ═══════════════════════════════════════════════════════════════
 
 @builtin("/model", description="查看/切换 LLM 模型", usage="/model [flash|pro]")
-def _cmd_model(r: CmdResult, _msgs, args, _sid) -> None:
+def _cmd_model(r: CmdResult, _ctx, args, _sid) -> None:
     from .llm import get_current_model_name, list_models, switch_model
     if not args:
         current = get_current_model_name()
@@ -326,7 +329,7 @@ def _cmd_model(r: CmdResult, _msgs, args, _sid) -> None:
 # ═══════════════════════════════════════════════════════════════
 
 @builtin("/status", description="系统状态概览：插件、会话、配置一览")
-def _cmd_status(r: CmdResult, msgs, _args, sid) -> None:
+def _cmd_status(r: CmdResult, ctx, _args, sid) -> None:
     from .config import (
         MAX_CONTEXT_TOKENS,
         MAX_RETRIES,
@@ -355,8 +358,9 @@ def _cmd_status(r: CmdResult, msgs, _args, sid) -> None:
                 break
 
     # ── 上下文 ──
-    len(msgs)
-    used_tokens = count_messages_tokens(msgs)
+    all_msgs = ctx.all
+    len(all_msgs)
+    used_tokens = count_messages_tokens(all_msgs)
     used_tokens / MAX_CONTEXT_TOKENS * 100
 
     lines = [
@@ -392,7 +396,7 @@ def _cmd_status(r: CmdResult, msgs, _args, sid) -> None:
 # ═══════════════════════════════════════════════════════════════
 
 @builtin("/mode", description="查看/切换安全模式", usage="/mode [manual|auto]")
-def _cmd_mode(r: CmdResult, _msgs, args, _sid) -> None:
+def _cmd_mode(r: CmdResult, _ctx, args, _sid) -> None:
     from .safety import get_mode_summary, set_mode
     if not args:
         r.message = get_mode_summary()
@@ -402,7 +406,7 @@ def _cmd_mode(r: CmdResult, _msgs, args, _sid) -> None:
 
 
 @builtin_multi(["/trust", "/allow"], description="信任工具（本会话自动放行）", usage="/trust <工具名>")
-def _cmd_trust(r: CmdResult, _msgs, args, _sid) -> None:
+def _cmd_trust(r: CmdResult, _ctx, args, _sid) -> None:
     from .safety import clear_trust, list_trusted, revoke_trust, trust_tool
     if not args:
         r.message = list_trusted()
@@ -419,7 +423,7 @@ def _cmd_trust(r: CmdResult, _msgs, args, _sid) -> None:
 
 
 @builtin("/compact", description="手动压缩旧对话，释放 token 空间", usage="/compact [all|keep=N]")
-def _cmd_compact(r: CmdResult, msgs, args, _sid) -> None:
+def _cmd_compact(r: CmdResult, ctx, args, _sid) -> None:
     """手动压缩旧对话。"""
     from .llm import _compact_context, _make_brief_summary
 
@@ -438,55 +442,48 @@ def _cmd_compact(r: CmdResult, msgs, args, _sid) -> None:
                 r.message = f"无效参数: {args[0]}，用法: /compact [all|keep=N]"
                 return
 
-    # 获取最后一条 user 输入
-    next(
-        (m["content"] for m in reversed(msgs) if m["role"] == "user"), "手动压缩"
-    )
-
-    original_len = len(msgs)
+    original_len = len(ctx)
 
     if keep == 0:
         # /compact all：全量压缩（话题切换模式）
+        # 临时构建扁平列表给 _compact_context
         user_input = "换个话题，重新开始"
-        result = _compact_context(msgs, user_input)
+        result = _compact_context(ctx.all, user_input)
+        # 回写：prefix 取前面的 system 消息，log 取后面的
+        prefix_end = sum(1 for m in result if m.get("role") == "system" and "⏪" not in (m.get("content") or ""))
+        pfx_count = min(prefix_end, len(ctx.prefix))
+        ctx.rebuild_prefix(result[:pfx_count])
+        ctx.log[:] = result[pfx_count:]
     else:
         # /compact 或 /compact keep=N：按轮数保留
-        # 找到第一个非 system 消息
-        first_non_system = 0
-        for i, m in enumerate(msgs):
-            if m.get("role") != "system":
-                first_non_system = i
-                break
-        else:
-            first_non_system = len(msgs)
+        log = ctx.log
 
         # 从后往前数 keep 个 user 消息
         user_found = 0
-        retain_start = len(msgs)  # 保留的起始位置
-        for i in range(len(msgs) - 1, first_non_system - 1, -1):
-            if msgs[i].get("role") == "user":
+        retain_start = len(log)
+        for i in range(len(log) - 1, -1, -1):
+            if log[i].get("role") == "user":
                 user_found += 1
                 if user_found == keep:
                     retain_start = i
                     break
 
-        if retain_start <= first_non_system or user_found < keep:
-            # 情况 1：保留起点回退到了 system 消息区 → 全部保留不压缩
-            # 情况 2：总轮数不够 keep → 不压缩
-            result = msgs
+        if retain_start <= 0 or user_found < keep:
+            # 保留起点回退到开头 或 总轮数不够 → 不压缩
+            result_log = list(log)
         else:
             # 前半部分压缩为摘要
-            to_archive = msgs[first_non_system:retain_start]
+            to_archive = log[:retain_start]
             brief = _make_brief_summary(to_archive)
-            result = msgs[:first_non_system]
+            result_log = []
             if brief:
-                result.append({
+                result_log.append({
                     "role": "system",
                     "content": f"⏪ 对话摘要：{brief}",
                 })
-            result.extend(msgs[retain_start:])
+            result_log.extend(log[retain_start:])
 
-    msgs[:] = result
+        ctx.log[:] = result_log
 
     from .config import MAX_CONTEXT_TOKENS
     from .tools.tokens import count_messages_tokens
@@ -504,25 +501,41 @@ def _cmd_compact(r: CmdResult, msgs, args, _sid) -> None:
 # ═══════════════════════════════════════════════════════════════
 
 @builtin("/context", description="查看上下文：token 分布、前缀缓存诊断、API 命中率、压缩状态")
-def _cmd_context(r: CmdResult, msgs, _args, _sid) -> None:
+def _cmd_context(r: CmdResult, ctx, _args, _sid) -> None:
+    """Context command. Accepts CacheContext (preferred) or legacy list[dict]."""
     from .config import MAX_CONTEXT_TOKENS
     from .tools.tokens import count_messages_tokens
 
-    msg_count = len(msgs)
-    used_tokens = count_messages_tokens(msgs)
+    # Support both CacheContext and legacy flat list
+    if hasattr(ctx, 'all'):
+        all_msgs = ctx.all
+        prefix_hash_val = ctx.prefix_hash
+        stats = ctx.stats()
+        prefix_msgs = ctx.prefix
+        log_msgs = ctx.log
+    else:
+        all_msgs = ctx
+        from .cache_context import compute_prefix_hash
+        h, _, _ = compute_prefix_hash(all_msgs)
+        prefix_hash_val = h
+        stats = None
+        prefix_msgs = [m for m in all_msgs if m.get("role") == "system"]
+        log_msgs = [m for m in all_msgs if m.get("role") != "system"]
+    msg_count = len(all_msgs)
+    used_tokens = count_messages_tokens(all_msgs)
     usage_pct = used_tokens / MAX_CONTEXT_TOKENS * 100
 
     # 按角色统计
     roles: dict[str, int] = {}
     volatile_count = 0
-    for m in msgs:
+    for m in all_msgs:
         role = m["role"]
         roles[role] = roles.get(role, 0) + 1
         if m.get("_volatile"):
             volatile_count += 1
 
-    # 系统消息中是否有压缩标记
-    compacted = any("⏪" in (m.get("content") or "") for m in msgs if m["role"] == "system")
+    # 系统消息中是否有压缩标记（prefix + log system 消息）
+    compacted = any("⏪" in (m.get("content") or "") for m in all_msgs if m["role"] == "system")
 
     # token 预警状态
     warn_70 = int(MAX_CONTEXT_TOKENS * 0.70)
@@ -554,7 +567,7 @@ def _cmd_context(r: CmdResult, msgs, _args, _sid) -> None:
     ]
 
     if compacted:
-        for m in msgs:
+        for m in all_msgs:
             if m["role"] == "system" and "⏪" in (m.get("content") or ""):
                 content = m["content"]
                 if len(content) > 120:
@@ -565,14 +578,25 @@ def _cmd_context(r: CmdResult, msgs, _args, _sid) -> None:
     else:
         lines.append("  ❌ 未压缩（70% 触发自动压缩）")
 
-    # ── 前缀缓存诊断（前缀哈希 + 结构分析） ──
-    from .llm import _compute_prefix_hash
-    h, chars, tokens = _compute_prefix_hash(msgs)
+    # ── 三段式结构诊断 ──
+    if stats is not None:
+        s = stats
+        lines.append("")
+        lines.append("── 三段式结构 ──")
+        lines.append(f"  Prefix: {s['prefix']['messages']} 条 ({s['prefix']['tokens']} token)")
+        lines.append(f"  Log:    {s['log']['messages']} 条 ({s['log']['tokens']} token, volatile {s['log']['volatile']})")
+        lines.append(f"  Scratch:{s['scratch']['messages']} 条 ({s['scratch']['tokens']} token)")
+
+    # ── 前缀哈希 ──
     lines.append("")
     lines.append("── 前缀缓存 ──")
-    lines.append(f"  前缀哈希: {h}")
-    lines.append(f"  前缀大小: {tokens} tokens ({chars} 字符)")
+    lines.append(f"  前缀哈希: {prefix_hash_val}")
+    if stats is not None:
+        lines.append(f"  前缀内容: {s['prefix']['tokens']} token ({s['prefix']['messages']} 条系统消息)")
+    else:
+        lines.append(f"  前缀内容: {len(prefix_msgs)} 条系统消息")
 
+    # ── 前缀结构分析 ──
     tag_map = {
         "当前环境": "🌐 环境",
         "当前项目": "📁 项目",
@@ -582,9 +606,10 @@ def _cmd_context(r: CmdResult, msgs, _args, _sid) -> None:
         "对话摘要": "📝 压缩",
         "前一话题": "📝 归档",
     }
-    for m in msgs:
-        if m.get("role") != "system":
-            continue
+    # 分析 prefix + log 中的 system 消息
+    # 分析 prefix + log 中的 system 消息
+    all_system = list(prefix_msgs) + [m for m in log_msgs if m.get("role") == "system"]
+    for m in all_system:
         content = m.get("content", "")
         label = "⚙️ 其他"
         for key, tag in tag_map.items():
@@ -658,8 +683,8 @@ def _cmd_context(r: CmdResult, msgs, _args, _sid) -> None:
                       f"{t['prompt_tokens']+t['completion_tokens']:,} token  "
                       f"缓存 {t_hit_ratio:.0f}%")
 
-    # 最近 token 占比
-    non_system_msgs = [m for m in msgs if m["role"] != "system"]
+    non_system_msgs = [m for m in log_msgs if m.get("role") != "system"]
+    non_system_msgs = [m for m in log_msgs if m.get("role") != "system"]
     recent_tokens = 0
     for m in non_system_msgs[-6:]:
         content = m.get("content") or ""
@@ -680,14 +705,16 @@ def _cmd_context(r: CmdResult, msgs, _args, _sid) -> None:
 
     r.message = "\n".join(lines)
 
-
-def dispatch(user_input: str, messages: list[dict], session_id: str | None) -> CmdResult:
+def dispatch(user_input: str, ctx: CacheContext, session_id: str | None) -> CmdResult:
     r = CmdResult()
     parts = user_input.split()
     cmd = parts[0].lower()
     args = parts[1:]
 
     handler = _handlers.get(cmd)
+    if handler:
+        handler(r, ctx, args, session_id)
+    return r
     if handler:
         handler(r, messages, args, session_id)
     return r

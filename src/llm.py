@@ -690,71 +690,76 @@ def _is_topic_switch(user_input: str) -> bool:
     return any(kw.lower() in text for kw in _TOPIC_SWITCH_KEYWORDS)
 
 
-def _compact_context(copy: list[dict], user_input: str) -> list[dict]:
-    """压缩旧对话历史，保留最近 20% 预算的对话。
+def _compact_context(ctx, user_input: str):
+    """In-place compaction. Returns None for CacheContext, list for legacy flat list.
 
-    策略：
-    - 检测到换话题 → 全量压缩，保留全部 token 空间给新话题
-    - 正常情况 → 从后往前保留最近对话，直到占满 20% 预算
-    - 摘要用关键信息拼接，不额外调用 LLM
+    Accepts CacheContext (preferred) or legacy flat list[dict].
     """
-    # 找到第一个非 system 消息的位置
-    first_non_system = 0
-    for i, m in enumerate(copy):
-        if m.get("role") != "system":
-            first_non_system = i
-            break
+    from .cache_context import CacheContext
+
+    if isinstance(ctx, CacheContext):
+        _compact_cache_context(ctx, user_input)
     else:
-        return copy  # 全是系统消息，不压缩
+        # Legacy: flat list — build temp CacheContext, compact, return result
+        prefix = [m for m in ctx if m.get("role") == "system"]
+        log = [m for m in ctx if m.get("role") != "system"]
+        tmp = CacheContext(prefix_msgs=prefix, log_msgs=log)
+        _compact_cache_context(tmp, user_input)
+        return tmp.all
+        return result
+        ctx[:] = tmp.all
+        return ctx
 
-    # 检测话题切换
+
+def _compact_cache_context(ctx, user_input: str) -> None:
+    """Internal: compact CacheContext.log in-place."""
+    log = ctx.log
+    if not log:
+        return
+
     if _is_topic_switch(user_input):
-        to_archive = copy[first_non_system:]
-        # 提取最早几轮的关键词做摘要
+        to_archive = list(log)
         brief = _make_brief_summary(to_archive)
-        archive_msg = {
-            "role": "system",
-            "content": f"⏪ 前一话题已结束，相关讨论已归档。{brief}",
-        }
-        new_copy = copy[:first_non_system]
-        new_copy.append(archive_msg)
-        logger.info("话题切换检测到，已压缩 %d 条旧对话", len(copy) - first_non_system)
-        return new_copy
+        new_log: list[dict] = []
+        if brief:
+            new_log.append({
+                "role": "system",
+                "content": f"⏪ 前一话题已结束，相关讨论已归档。{brief}",
+            })
+        log[:] = new_log
+        logger.info("话题切换检测到，已压缩 %d 条旧对话", len(to_archive))
+        return
 
-    # 正常压缩：从后往前累加，保留 20% 预算
     retain_budget = int(MAX_CONTEXT_TOKENS * _COMPACT_RETAIN_RATIO)
     accumulated = 0
-    retain_start = len(copy)  # 从末尾开始
+    retain_start = len(log)
 
-    for i in range(len(copy) - 1, first_non_system - 1, -1):
-        m = copy[i]
-        content = m.get("content", "") or ""
-        tokens = len(content) * 0.35  # 略保守估计
+    for i in range(len(log) - 1, -1, -1):
+        content = log[i].get("content", "") or ""
+        tokens = len(content) * 0.35
         if accumulated + tokens > retain_budget:
             break
         accumulated += tokens
         retain_start = i
 
-    # 确保 retain_start 指向一个 user 消息（保留完整对话对）
-    while retain_start < len(copy) and copy[retain_start].get("role") != "user":
+    while retain_start < len(log) and log[retain_start].get("role") != "user":
         retain_start += 1
 
-    if retain_start <= first_non_system:
-        return copy  # 连 20% 预算都装不下，不压缩
+    if retain_start <= 0:
+        return
 
-    # 前半部分压缩
-    to_archive = copy[first_non_system:retain_start]
+    to_archive = log[:retain_start]
     brief = _make_brief_summary(to_archive)
 
-    new_copy = copy[:first_non_system]
+    new_log = []
     if brief:
-        new_copy.append({
+        new_log.append({
             "role": "system",
             "content": f"⏪ 对话摘要：{brief}",
         })
-    new_copy.extend(copy[retain_start:])
-    logger.info("上下文压缩完成：保留 %d/%d 条消息", len(copy[retain_start:]), len(copy) - first_non_system)
-    return new_copy
+    new_log.extend(log[retain_start:])
+    log[:] = new_log
+    logger.info("上下文压缩完成：保留 %d/%d 条消息", len(log), len(log) + len(to_archive))
 
 
 def _make_brief_summary(messages: list[dict], max_len: int = 300) -> str:
@@ -794,43 +799,24 @@ def _make_brief_summary(messages: list[dict], max_len: int = 300) -> str:
     return result
 
 
+
+
+# ═══════════════════════════════════════════════════════════════
+# _build_api_messages 已由 CacheContext.send() 替代
+# 保留一个兼容包装以便渐进迁移
+# ═══════════════════════════════════════════════════════════════
+
 def _build_api_messages(messages: list[dict]) -> list[dict]:
-    """构建发给 API 的消息列表。
+    """向后兼容：从扁平 messages 构建 API 消息。
 
-    策略（保障 DeepSeek 前缀缓存）：
-      1. 所有 system 消息（含 volatile）排在 payload 最前面 → 不可变前缀
-      2. 所有非 system 消息按追加顺序排后面 → 只会追加不会修改 → 前缀持续命中
-      3. 剥离 _volatile / _tool_name 等内部字段，保证输出字节级稳定
-
-    为什么要包含 volatile 系统消息？
-      - env/project/memory/safety 在会话期间内容不变（时间在启动时冻结）
-      - 它们天然适合作为 immutable prefix 的一部分
-      - 过滤掉会导致 LLM 在全新会话首轮收不到任何系统上下文
+    ⚠️ 已废弃：新代码请使用 CacheContext.send()。
     """
-    api: list[dict] = []
-
-    # 第一遍：所有 system 消息（含 volatile）→ immutable prefix
-    for m in messages:
-        if m.get("role") != "system":
-            continue
-        content = m.get("content", "")
-        api.append({"role": "system", "content": content})
-
-    # 第二遍：所有非 system 消息 → append-only log
-    for m in messages:
-        if m.get("role") == "system":
-            continue
-        clean: dict = {"role": m["role"]}
-        content = m.get("content")
-        if content is not None:
-            clean["content"] = content
-        if m.get("tool_calls"):
-            clean["tool_calls"] = m["tool_calls"]
-        if m.get("tool_call_id"):
-            clean["tool_call_id"] = m["tool_call_id"]
-        api.append(clean)
-
-    return api
+    from .cache_context import CacheContext
+    # 临时构建 CacheContext 来复用 send() 逻辑
+    prefix = [m for m in messages if m.get("role") == "system"]
+    log = [m for m in messages if m.get("role") != "system"]
+    tmp = CacheContext(prefix_msgs=prefix, log_msgs=log)
+    return tmp.send(validate=False)
 
 
 
@@ -886,13 +872,9 @@ def _update_safe_stats(n_parallel: int, n_serial: int) -> None:
 
 
 def _compute_prefix_hash(messages: list[dict]) -> tuple[str, int, int]:
-    """计算系统消息前缀的 SHA-256 哈希。返回 (hex_hash, 字符数, token估算数)。"""
-    import hashlib as _hashlib
-    system_msgs = [{"role": "system", "content": m.get("content", "")}
-                   for m in messages if m.get("role") == "system"]
-    prefix_json = json.dumps(system_msgs, ensure_ascii=False, sort_keys=True)
-    h = _hashlib.sha256(prefix_json.encode()).hexdigest()[:16]
-    return h, len(prefix_json), len(prefix_json) // 4
+    """Calculate system message prefix hash. Delegates to cache_context module."""
+    from .cache_context import compute_prefix_hash
+    return compute_prefix_hash(messages)
 
 
 def _execute_tool_batch(approved: list[tuple]) -> list[str]:
@@ -948,17 +930,21 @@ def _execute_tool_batch(approved: list[tuple]) -> list[str]:
     return results
 
 def run_conversation(
-    messages: list[dict],
+    ctx,
     user_input: str,
     on_token: TokenCallback,
     on_tool: ToolCallback,
     on_progress: Callable[[], None] | None = None,
     session_id: str = "",
 ) -> str:
-    """处理一轮对话：自动路由 + 工具调用循环。"""
-    copy: list[dict] = list(messages)
-    copy.append({"role": "user", "content": user_input})
-    messages[:] = copy
+    """处理一轮对话：自动路由 + 工具调用循环。
+
+    Args:
+        ctx: CacheContext 实例（三段式上下文管理器）
+    """
+    # 追加用户输入到 log（prefix 不变）
+    ctx.log.append({"role": "user", "content": user_input})
+
     # 重设 Storm 去重窗口 + SAFE 并行统计（同轮工具循环内）
     from .tools.storm import reset_storm
     reset_storm()
@@ -974,7 +960,7 @@ def run_conversation(
         on_token(f"\n[🤖 使用 {model_name} 处理此任务]\n\n")
 
     while True:
-        used = count_messages_tokens(copy)
+        used = count_messages_tokens(ctx.all)
         limit = int(MAX_CONTEXT_TOKENS * TOOL_LOOP_THRESHOLD)
         if used >= limit:
             return (
@@ -985,18 +971,16 @@ def run_conversation(
         compact_limit = int(MAX_CONTEXT_TOKENS * _COMPACT_THRESHOLD)
         if used >= compact_limit:
             logger.info("触发自动压缩：%d >= %d (70%%)", used, compact_limit)
-            copy = _compact_context(copy, user_input)
-            logger.info("压缩后消息数: %d", len(copy))
-
+            _compact_context(ctx, user_input)
+            logger.info("压缩后消息数: %d", len(ctx))
 
         try:
-            content, tool_calls = _invoke_llm(backend, _build_api_messages(copy), on_token, session_id)
+            content, tool_calls = _invoke_llm(backend, ctx.send(), on_token, session_id)
         except UserInterrupt:
             clear_interrupt()
             return "\n\n[⏹️ 已中断]"
-
         if tool_calls:
-            copy.append({
+            ctx.log.append({
                 "role": "assistant",
                 "content": content,
                 "tool_calls": tool_calls,
@@ -1042,14 +1026,13 @@ def run_conversation(
                     else:
                         print("     ⛔ 已跳过\n")
                         approved.append((tc_data, tool_name, args, tc,
-                                         f"⛔ [{tool_name}] 已跳过（用户未批准）"))
+                                          f"⛔ [{tool_name}] 已跳过（用户未批准）"))
                 else:
                     approved.append((tc_data, tool_name, args, tc, None))
 
             # ═══════════════════════════════════════════════════════════
             # SAFE Phase 2：批量执行（只读并行 + 有副作用串行）
             # ═══════════════════════════════════════════════════════════
-            # 收集需要实际执行的工具（pre_result 为 None 的）
             exec_indices: list[int] = []
             exec_items: list[tuple] = []
             for i, item in enumerate(approved):
@@ -1060,27 +1043,24 @@ def run_conversation(
             if exec_items:
                 exec_results = _execute_tool_batch(exec_items)
                 for idx, result in zip(exec_indices, exec_results):
-                    # 回填结果到 approved
                     tc_data, tool_name, args, tc, _ = approved[idx]
                     approved[idx] = (tc_data, tool_name, args, tc, result)
 
             # ═══════════════════════════════════════════════════════════
-            # SAFE Phase 3：处理后追加到上下文（顺序执行）
+            # SAFE Phase 3：处理后追加到 ctx.log
             # ═══════════════════════════════════════════════════════════
             for tc_data, tool_name, args, tc, result in approved:
-                result = truncate_to_budget(result, copy)
+                result = truncate_to_budget(result, ctx.all)
                 result = _compress_tool_result(tool_name, result)
-                copy.append({
+                ctx.log.append({
                     "role": "tool",
                     "tool_call_id": tc_data["id"],
                     "content": result,
                 })
-            messages[:] = copy
             if on_progress:
                 on_progress()
         else:
-            copy.append({"role": "assistant", "content": content or ""})
-            messages[:] = copy
+            ctx.log.append({"role": "assistant", "content": content or ""})
             if on_progress:
                 on_progress()
             return content or ""

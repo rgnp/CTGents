@@ -13,6 +13,7 @@ logging.basicConfig(
     datefmt="%H:%M:%S",
 )
 
+from .cache_context import CacheContext
 from .commands import dispatch as dispatch_cmd
 from .config import SESSION_DIR
 from .llm import TokenCallback, clear_interrupt, request_interrupt, run_conversation
@@ -253,6 +254,7 @@ def main() -> None:
     sessions = list_sessions()
     session_id: str | None = None
     messages: list[dict] = []
+    ctx: CacheContext | None = None
 
     if sessions:
         _print_sessions(sessions)
@@ -263,24 +265,29 @@ def main() -> None:
             if 0 <= idx < len(sessions):
                 session_id = sessions[idx]
                 messages, summary = load_session(session_id)
+                ctx = CacheContext(log_msgs=messages)
                 if summary:
-                    messages.append({"role": "system", "content": f"之前对话的摘要：{summary}", "_volatile": True})
-                print(f"已加载会话 [{session_id}]，共 {len(messages)} 条消息")
-                _print_recent(messages)
+                    ctx.log.append({"role": "system", "content": f"之前对话的摘要：{summary}", "_volatile": True})
+                print(f"已加载会话 [{session_id}]，共 {len(ctx)} 条消息")
+                _print_recent(ctx.all)
                 print()
         except ValueError:
             pass
 
-    # 注入环境上下文、项目感知、记忆索引、安全模式（全部 append，不 insert）
-    messages.append(_make_env_message())
+    # 构建 CacheContext：不可变 prefix + 追加 log
+    if ctx is None:
+        ctx = CacheContext()
+    prefix_msgs = []
+    prefix_msgs.append(_make_env_message())
     proj_ctx = _make_project_context()
     if proj_ctx:
-        messages.append(proj_ctx)
+        prefix_msgs.append(proj_ctx)
     mem_ctx = _make_memory_context()
     if mem_ctx:
-        messages.append(mem_ctx)
+        prefix_msgs.append(mem_ctx)
     from .safety import get_mode_summary
-    messages.append({"role": "system", "content": get_mode_summary(), "_volatile": True})
+    prefix_msgs.append({"role": "system", "content": get_mode_summary(), "_volatile": True})
+    ctx.rebuild_prefix(prefix_msgs)
 
     print("Agent 已启动，输入 /help 查看指令列表\n")
 
@@ -317,54 +324,58 @@ def main() -> None:
                     ok, msg = _reload_dispatch()
                     print(msg)
                     # 注入一条系统消息，告知 LLM 工具已更新
-                    messages.append({
+                    ctx.log.append({
                         "role": "system",
                         "content": "⚠️ 系统已热加载，工具列表已更新。执行 discover 查看最新可用工具。"
                     })
                     continue
 
-                r = dispatch_cmd(user_input, messages, session_id)
+                r = dispatch_cmd(user_input, ctx, session_id)
                 if r.message:
                     print(r.message)
                 if r.save:
-                    session_id = save_session(messages, session_id)
+                    session_id = save_session(ctx.all, session_id)
                     print(f"会话已保存: [{session_id}]")
                 if r.load:
-                    messages.append({"role": "system", "content": f"之前对话的摘要：{summary}", "_volatile": True})
+                    ctx.clear_log()
+                    loaded_msgs, summary = load_session(r.load)
+                    ctx.log.extend(loaded_msgs)
+                    if summary:
+                        ctx.log.append({"role": "system", "content": f"之前对话的摘要：{summary}", "_volatile": True})
                     session_id = r.load
-                    print(f"已加载会话 [{r.load}]，共 {len(messages)} 条消息")
-                    _print_recent(messages)
+                    print(f"已加载会话 [{r.load}]，共 {len(ctx)} 条消息")
+                    _print_recent(ctx.all)
                 if r.clear:
-                    messages.clear()
+                    ctx.clear_log()
+                    # 重建 prefix（环境上下文 + 项目感知 + 记忆索引 + 安全模式）
+                    prefix = []
                     try:
                         from .tools.rag import get_index_status
                         rag_info = get_index_status()
                         if "未建立" not in rag_info:
-                            messages.append({
+                            prefix.append({
                                 "role": "system",
-                                "content": f"📚 RAG 代码索引已就绪，可用 rag_query 进行语义搜索。",
+                                "content": "📚 RAG 代码索引已就绪，可用 rag_query 进行语义搜索。",
                                 "_volatile": True,
                             })
                     except Exception:
                         pass
                     if r.save:   # /new: 同时重置 session
                         session_id = None
-                    # 重新注入环境上下文、项目感知、记忆索引、安全模式（全部 append）
-                    messages.append(_make_env_message())
+                    prefix.append(_make_env_message())
                     proj_ctx = _make_project_context()
                     if proj_ctx:
-                        messages.append(proj_ctx)
+                        prefix.append(proj_ctx)
                     mem_ctx = _make_memory_context()
                     if mem_ctx:
-                        messages.append(mem_ctx)
+                        prefix.append(mem_ctx)
                     from .safety import get_mode_summary
-                    messages.append({"role": "system", "content": get_mode_summary(), "_volatile": True})
+                    prefix.append({"role": "system", "content": get_mode_summary(), "_volatile": True})
+                    ctx.rebuild_prefix(prefix)
                 if r.exit:
                     break
                 if r.retry:
-                    last_user = next(
-                        (m["content"] for m in reversed(messages) if m["role"] == "user"), ""
-                    )
+                    last_user = ctx.last_user_content() or ""
                     if last_user:
                         on_token, has_output = _make_display()
                         sid = [session_id]
@@ -372,7 +383,7 @@ def main() -> None:
                         try:
                             run_conversation(
                                 messages, last_user, on_token, _on_tool,
-                                on_progress=lambda sid=sid: sid.__setitem__(0, save_session(messages, sid[0])),
+                                on_progress=lambda sid=sid: sid.__setitem__(0, save_session(ctx.all, sid[0])),
                                 session_id=session_id,
                             )
                         finally:
@@ -389,7 +400,7 @@ def main() -> None:
                 try:
                     run_conversation(
                         messages, user_input, on_token, _on_tool,
-                        on_progress=lambda sid=sid: sid.__setitem__(0, save_session(messages, sid[0])),
+                        on_progress=lambda sid=sid: sid.__setitem__(0, save_session(ctx.all, sid[0])),
                         session_id=session_id,
                     )
                 finally:
@@ -411,7 +422,7 @@ def main() -> None:
                     try:
                         run_conversation(
                             messages, guide, on_token, _on_tool,
-                            on_progress=lambda sid=sid: sid.__setitem__(0, save_session(messages, sid[0])),
+                            on_progress=lambda sid=sid: sid.__setitem__(0, save_session(ctx.all, sid[0])),
                             session_id=session_id,
                         )
                     finally:
@@ -426,7 +437,7 @@ def main() -> None:
         # 只有存在至少一条 assistant 回复时才保存（避免网络错误等空会话落盘）
         has_response = any(m["role"] == "assistant" for m in messages)
         if has_response:
-            session_id = save_session(messages, session_id)
+            session_id = save_session(ctx.all, session_id)
             print(f"会话已保存: [{session_id}]")
         print("退出")
 
