@@ -3,7 +3,7 @@
 import importlib
 import json
 import sys
-
+import time
 from openai.types.chat import ChatCompletionMessageToolCall
 
 from .plugin_mgr import get_plugin_tools, reload_plugins
@@ -145,6 +145,7 @@ def execute_tool(tool_call: ChatCompletionMessageToolCall) -> str:
     """执行工具调用。遍历插件和内置模块，找到匹配的 execute。"""
     name = tool_call.function.name
     args = json.loads(tool_call.function.arguments)
+    t0 = time.perf_counter()
 
     # ── Storm 去重检查 ──
     from .storm import storm_check, storm_record
@@ -153,6 +154,7 @@ def execute_tool(tool_call: ChatCompletionMessageToolCall) -> str:
         return dup
 
     result: str | None = None
+    error_msg = ""
 
     # 插件优先
     from .plugin_mgr import execute_plugin
@@ -172,9 +174,17 @@ def execute_tool(tool_call: ChatCompletionMessageToolCall) -> str:
 
     if result is None:
         result = json.dumps({"error": f"未知工具: {name}"}, ensure_ascii=False)
+        error_msg = "未知工具"
 
     # ── Storm 结果缓存 ──
     storm_record(name, args, result)
+
+    # ── 追踪记录 ──
+    from .tracker import record_call
+    duration = (time.perf_counter() - t0) * 1000
+    has_error = result.startswith('{"error":') if result else True
+    record_call(name, args, success=not has_error, error=error_msg, duration_ms=duration)
+
     return result
 
 

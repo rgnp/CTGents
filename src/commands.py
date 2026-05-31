@@ -863,6 +863,88 @@ def _cmd_self(r: CmdResult, _ctx, _args, _sid) -> None:
         parts.append("## MCP 连接\n  （获取失败）")
 
     r.message = "\n".join(parts)
+
+
+# ═══════════════════════════════════════════════════════════════
+# 自跟踪 /stats — Agent 查看自己的工具调用统计
+# ═══════════════════════════════════════════════════════════════
+
+@builtin("/stats", description="查看自己的工具调用统计（最常用、最慢、失败率等）")
+def _cmd_stats(r: CmdResult, _ctx, args, _sid) -> None:
+    """显示工具调用统计（供 AI 读取，非人类 UI）。"""
+    from .tools.tracker import get_stats, get_recent, clear_stats
+
+    if args and args[0] == "--clear":
+        deleted = clear_stats()
+        r.message = f"已清空 {deleted} 条追踪记录"
+        return
+
+    stats = get_stats()
+    if stats.get("total", 0) == 0:
+        r.message = "暂无工具调用记录"
+        return
+
+    parts: list[str] = []
+
+    # 概览
+    parts.append(f"## 概览")
+    parts.append(f"总调用: {stats['total']} | 成功: {stats['success']} | 失败: {stats['fail']} | 成功率: {stats['success_rate']}%")
+    parts.append("")
+
+    # 按分类
+    parts.append("## 按分类")
+    for cat, info in sorted(stats.get("by_category", {}).items()):
+        parts.append(f"  [{cat}] {info['calls']} 次调用, {info['fail']} 次失败")
+    parts.append("")
+
+    # 最常用工具 top 10
+    parts.append("## 最常用工具 Top 10")
+    for t in stats.get("top_tools", []):
+        pct = t["success_rate"]
+        avg = t["avg_duration_ms"]
+        parts.append(f"  {t['name']:<24} {t['calls']:>4}次  成功率{pct:>5}%  均耗时{avg:>6}ms")
+    parts.append("")
+
+    # 最慢工具 Top 5
+    slow = stats.get("slowest_tools", [])
+    if slow:
+        parts.append("## 最慢工具 Top 5（调用>=2次）")
+        for t in slow:
+            parts.append(f"  {t['name']:<24} 均耗时{t['avg_duration_ms']:>6}ms  ({t['calls']}次)")
+        parts.append("")
+
+    # 重复模式
+    repeated = stats.get("repeated_patterns", {})
+    if repeated:
+        parts.append("## 重复模式（相同参数key组合 >= 3次）")
+        for tool, patterns in sorted(repeated.items()):
+            for keys, count in sorted(patterns.items(), key=lambda x: -x[1]):
+                kstr = ", ".join(keys)
+                parts.append(f"  {tool}({kstr}) — {count}次")
+        parts.append("")
+
+    # 连续失败
+    fails = stats.get("consecutive_fails", [])
+    if fails:
+        parts.append("## 连续失败（最近）")
+        for f in fails:
+            parts.append(f"  {f}")
+        parts.append("")
+
+    # 最近 5 条
+    recent = get_recent(5)
+    if recent:
+        parts.append("## 最近调用")
+        for r_rec in reversed(recent):
+            t = r_rec.get("tool", "?")
+            ok = "✓" if r_rec.get("success", True) else "✗"
+            dur = r_rec.get("duration_ms", 0)
+            ts = r_rec.get("ts", "")[11:19]
+            parts.append(f"  [{ts}] {ok} {t}  ({dur}ms)")
+
+    r.message = "\n".join(parts)
+
+
 def dispatch(user_input: str, ctx: CacheContext, session_id: str | None) -> CmdResult:
     r = CmdResult()
     parts = user_input.split()
