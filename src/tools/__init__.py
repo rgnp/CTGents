@@ -185,6 +185,11 @@ def execute_tool(tool_call: ChatCompletionMessageToolCall) -> str:
     has_error = result.startswith('{"error":') if result else True
     record_call(name, args, success=not has_error, error=error_msg, duration_ms=duration)
 
+    # ── 失败反思 ──
+    if has_error:
+        from .reflect import record_failure
+        record_failure(name, args, error_msg or result[:200])
+
     return result
 
 

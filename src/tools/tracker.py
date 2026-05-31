@@ -144,11 +144,13 @@ def get_stats() -> dict:
     tool_counter: Counter = Counter()
     tool_fail: Counter = Counter()
     tool_dur: defaultdict[str, list] = defaultdict(list)
-    # 按分类
-    cat_stats = {}
-    for c, cnt in cat_counter.items():
-        cat_f = sum(1 for r in records if r.get("category") == c and not r.get("success", True))
-        cat_stats[c] = {"calls": cnt, "fail": cat_f}
+    cat_counter: Counter = Counter()
+    tool_args_patterns: defaultdict[str, Counter] = defaultdict(Counter)
+
+    for r in records:
+        t = r.get("tool", "?")
+        cat = r.get("category", "other")
+        ok = r.get("success", True)
         tool_counter[t] += 1
         cat_counter[cat] += 1
         if not ok:
@@ -159,6 +161,13 @@ def get_stats() -> dict:
         keys = tuple(r.get("args_keys", []))
         tool_args_patterns[t][keys] += 1
 
+    # 按分类
+    cat_stats = {}
+    for c, cnt in cat_counter.items():
+        cat_f = sum(1 for r in records if r.get("category") == c and not r.get("success", True))
+        cat_stats[c] = {"calls": cnt, "fail": cat_f}
+
+    # 按工具
     # 按工具
     tool_stats = {}
     for t, cnt in tool_counter.items():

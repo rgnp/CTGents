@@ -55,9 +55,14 @@ def check() -> tuple[str | None, str | None]:
     if fail_streak >= CONSECUTIVE_FAIL_LIMIT:
         details = " → ".join(fail_tools)
         issues.append(f"⚠️ 连续 {fail_streak} 次调用失败：{details}")
+        # 附带历史反思记录
+        from .tools.reflect import get_failures
+        hist = get_failures(fail_tools[0].split("(")[0])
+        hist_hint = f"\n  历史失败记录：\n{hist}" if hist else ""
         actions.append(
             f"- 工具连续失败 {fail_streak} 次：{fail_tools[0]}。"
-            f"请分析错误原因，检查参数、网络或依赖，然后修复。"
+            f"{hist_hint}"
+            f"\n  请分析错误原因，检查参数、网络或依赖，然后修复。"
         )
 
     # ── 重复调用 ──

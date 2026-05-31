@@ -287,6 +287,14 @@ def main() -> None:
         prefix_msgs.append(mem_ctx)
     from .safety import get_mode_summary
     prefix_msgs.append({"role": "system", "content": get_mode_summary(), "_volatile": True})
+    # ── 失败反思 ──
+    try:
+        from .tools.reflect import get_summary as _reflect_summary
+        ref = _reflect_summary()
+        if ref:
+            prefix_msgs.append({"role": "system", "content": ref, "_volatile": True})
+    except Exception:
+        pass
     ctx.rebuild_prefix(prefix_msgs)
 
     print("Agent 已启动，输入 /help 查看指令列表\n")
@@ -371,6 +379,14 @@ def main() -> None:
                         prefix.append(mem_ctx)
                     from .safety import get_mode_summary
                     prefix.append({"role": "system", "content": get_mode_summary(), "_volatile": True})
+                    # ── 失败反思 ──
+                    try:
+                        from .tools.reflect import get_summary as _reflect_summary
+                        ref = _reflect_summary()
+                        if ref:
+                            prefix.append({"role": "system", "content": ref, "_volatile": True})
+                    except Exception:
+                        pass
                     ctx.rebuild_prefix(prefix)
                 if r.exit:
                     break
