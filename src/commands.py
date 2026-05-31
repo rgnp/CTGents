@@ -299,12 +299,31 @@ def _cmd_plugin(r: CmdResult, _ctx, args, _sid) -> None:
 # 热加载指令
 # ═══════════════════════════════════════════════════════════════
 
-@builtin("/reload", description="热加载指令系统（改 commands.py 后无需重启）")
+@builtin("/reload", description="热加载所有模块 + 工具注册表（改代码后无需重启）")
 def _cmd_reload(r: CmdResult, _ctx, _args, _sid) -> None:
-    """重新加载 commands 模块自身，使新增/修改的指令立即生效。"""
-    from .tools.plugin_mgr import _plugins as plugin_cache
-    plugin_cache.clear()
-    r.message = "🔄 触发热加载，请稍后..."
+    """使用 importlib.reload 热加载所有已加载的 src.* 模块。"""
+    import importlib
+    import sys
+
+    reloaded = []
+    errors = []
+    for mod_name in sorted(k for k in sys.modules if k.startswith("src.") and sys.modules[k] is not None):
+        try:
+            importlib.reload(sys.modules[mod_name])
+            reloaded.append(mod_name)
+        except Exception as e:
+            errors.append(f"{mod_name}: {e}")
+
+    # 重新初始化工具注册表
+    try:
+        from .tools import _init_registry
+        _init_registry()
+    except Exception as e:
+        errors.append(f"tools._init_registry: {e}")
+
+    r.message = f"🔄 热加载完成：{len(reloaded)} 个模块"
+    if errors:
+        r.message += f"\n  ⚠️ {len(errors)} 个失败"
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -487,10 +506,10 @@ def _cmd_compact(r: CmdResult, ctx, args, _sid) -> None:
 
     from .config import MAX_CONTEXT_TOKENS
     from .tools.tokens import count_messages_tokens
-    used = count_messages_tokens(msgs)
+    used = count_messages_tokens(ctx.all)
 
     r.message = (
-        f"已压缩：{original_len} → {len(msgs)} 条消息\n"
+        f"已压缩：{original_len} → {len(ctx.all)} 条消息\n"
         f"当前 Token: {used:,} / {MAX_CONTEXT_TOKENS:,} ({used/MAX_CONTEXT_TOKENS*100:.1f}%)"
     )
     r.save = True
@@ -705,6 +724,36 @@ def _cmd_context(r: CmdResult, ctx, _args, _sid) -> None:
 
     r.message = "\n".join(lines)
 
+# ═══════════════════════════════════════════════════════════════
+# 目标驱动长任务 /goal
+# ═══════════════════════════════════════════════════════════════
+
+@builtin("/goal", description="目标驱动长任务：设定目标后 Agent 自主执行直到完成",
+         usage="/goal <目标描述>")
+def _cmd_goal(r: CmdResult, _ctx, args, _sid) -> None:
+    """运行目标驱动长任务。handler 同步阻塞直到目标完成。"""
+    from .goal import GoalRunner
+
+    if not args:
+        r.message = "用法: /goal <目标描述>\n示例: /goal 给文件工具添加软链接支持并测试"
+        return
+
+    description = " ".join(args)
+
+    def _print(msg: str, end: str = "\n"):
+        print(msg, end=end, flush=True)
+
+    runner = GoalRunner(description, on_output=_print)
+    success = runner.run()
+
+    if success:
+        r.message = "\n✅ 目标已完成"
+        r.save = True
+    else:
+        r.message = "\n⚠️ 目标未完成或已中断"
+        r.save = True
+
+
 def dispatch(user_input: str, ctx: CacheContext, session_id: str | None) -> CmdResult:
     r = CmdResult()
     parts = user_input.split()
@@ -714,9 +763,6 @@ def dispatch(user_input: str, ctx: CacheContext, session_id: str | None) -> CmdR
     handler = _handlers.get(cmd)
     if handler:
         handler(r, ctx, args, session_id)
-    return r
-    if handler:
-        handler(r, messages, args, session_id)
     return r
 
 

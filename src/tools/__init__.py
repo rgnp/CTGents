@@ -147,30 +147,35 @@ def execute_tool(tool_call: ChatCompletionMessageToolCall) -> str:
     args = json.loads(tool_call.function.arguments)
 
     # ── Storm 去重检查 ──
-    from .storm import storm_check
+    from .storm import storm_check, storm_record
     dup = storm_check(name, args)
     if dup is not None:
         return dup
 
+    result: str | None = None
+
     # 插件优先
     from .plugin_mgr import execute_plugin
     result = execute_plugin(name, args)
-    if result is not None:
-        return result
 
     # 内置模块
-    for executor in _EXECUTORS:
-        result = executor(name, args)
-        if result is not None:
-            return result
+    if result is None:
+        for executor in _EXECUTORS:
+            result = executor(name, args)
+            if result is not None:
+                break
 
     # MCP 工具（server_name__tool_name 格式）
-    from .mcp import execute_mcp_tool
-    result = execute_mcp_tool(name, args)
-    if result is not None:
-        return result
+    if result is None:
+        from .mcp import execute_mcp_tool
+        result = execute_mcp_tool(name, args)
 
-    return json.dumps({"error": f"未知工具: {name}"}, ensure_ascii=False)
+    if result is None:
+        result = json.dumps({"error": f"未知工具: {name}"}, ensure_ascii=False)
+
+    # ── Storm 结果缓存 ──
+    storm_record(name, args, result)
+    return result
 
 
 # ── 热加载 ──

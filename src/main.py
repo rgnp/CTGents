@@ -382,7 +382,7 @@ def main() -> None:
                         _start_esc_listener()
                         try:
                             run_conversation(
-                                messages, last_user, on_token, _on_tool,
+                                ctx, last_user, on_token, _on_tool,
                                 on_progress=lambda sid=sid: sid.__setitem__(0, save_session(ctx.all, sid[0])),
                                 session_id=session_id,
                             )
@@ -399,7 +399,7 @@ def main() -> None:
                 _start_esc_listener()
                 try:
                     run_conversation(
-                        messages, user_input, on_token, _on_tool,
+                        ctx, user_input, on_token, _on_tool,
                         on_progress=lambda sid=sid: sid.__setitem__(0, save_session(ctx.all, sid[0])),
                         session_id=session_id,
                     )
@@ -421,7 +421,7 @@ def main() -> None:
                     _start_esc_listener()
                     try:
                         run_conversation(
-                            messages, guide, on_token, _on_tool,
+                            ctx, guide, on_token, _on_tool,
                             on_progress=lambda sid=sid: sid.__setitem__(0, save_session(ctx.all, sid[0])),
                             session_id=session_id,
                         )
@@ -435,7 +435,7 @@ def main() -> None:
                 print(f"\n  请求失败: {e}\n")
     finally:
         # 只有存在至少一条 assistant 回复时才保存（避免网络错误等空会话落盘）
-        has_response = any(m["role"] == "assistant" for m in messages)
+        has_response = any(m["role"] == "assistant" for m in ctx.all)
         if has_response:
             session_id = save_session(ctx.all, session_id)
             print(f"会话已保存: [{session_id}]")

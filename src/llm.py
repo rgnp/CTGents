@@ -26,6 +26,8 @@ from .config import (
 )
 from .tools import execute_tool, get_tools
 from .tools.tokens import count_messages_tokens, truncate_to_budget
+from .cache_context import CacheContext
+
 
 # 工具显示标签（用于安全确认提示，避免循环导入 main.py）
 _TOOL_LABEL_MAP: dict[str, str] = {
@@ -706,9 +708,6 @@ def _compact_context(ctx, user_input: str):
         tmp = CacheContext(prefix_msgs=prefix, log_msgs=log)
         _compact_cache_context(tmp, user_input)
         return tmp.all
-        return result
-        ctx[:] = tmp.all
-        return ctx
 
 
 def _compact_cache_context(ctx, user_input: str) -> None:
@@ -928,9 +927,8 @@ def _execute_tool_batch(approved: list[tuple]) -> list[str]:
 
     _update_safe_stats(len(parallel_idxs), len(serial_idxs))
     return results
-
 def run_conversation(
-    ctx,
+    ctx: CacheContext,
     user_input: str,
     on_token: TokenCallback,
     on_tool: ToolCallback,
@@ -942,6 +940,15 @@ def run_conversation(
     Args:
         ctx: CacheContext 实例（三段式上下文管理器）
     """
+    # ── 运行时守卫：防止误传 list[dict] 等错误类型 ──
+    if not hasattr(ctx, "log") or not hasattr(ctx, "all"):
+        raise TypeError(
+            f"run_conversation() 的 ctx 参数必须是 CacheContext 实例，"
+            f"但收到了 {type(ctx).__name__}。"
+            f"请确认传入了 CacheContext 而非 list[dict]。"
+        )
+    # 追加用户输入到 log（prefix 不变）
+    ctx.log.append({"role": "user", "content": user_input})
     # 追加用户输入到 log（prefix 不变）
     ctx.log.append({"role": "user", "content": user_input})
 

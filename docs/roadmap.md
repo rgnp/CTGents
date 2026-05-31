@@ -6,7 +6,7 @@
 ---
 
 ## 最新更新（2026-05-30 v0.9 — 🚧 进行中）
-
+## 最新更新（2026-05-31 v0.9 — 🚧 进行中）
 ### 2.0 MCP 协议支持 ✅
 
 > [Model Context Protocol](https://modelcontextprotocol.io) 是 AI 工具的标准协议。
@@ -59,15 +59,16 @@
 - [x] BM25 评分算法 + 驼峰/蛇形自动拆词
 **涉及文件：** `src/llm.py`、`src/main.py`、`src/commands.py`、`src/cache_context.py`（新模块）
 **涉及文件：** `src/tools/mcp.py`（新模块）
-- [x] 三个工具：`rag_index` / `rag_query` / `rag_status`
+### 3.3 目标驱动长任务 ✅
 
-**涉及文件：** `src/tools/rag.py`（新模块）
+- [x] `/goal` 命令：设定完成条件，Agent 自主持续执行直到达成
+- [x] Agent 循环中自动检查目标是否达成
+- [x] 失败自动重试、变更自动 commit
+- [x] GoalState 紧凑 JSON 状态（省 token）
+- [x] 3 层错误恢复（重试 → 换方案 → 暂停）
+- [x] 代码修改后自动 importlib.reload
 
-### 3.3 目标驱动长任务
-
-- [ ] `/goal` 命令：设定完成条件，Agent 自主持续执行直到达成
-- [ ] Agent 循环中自动检查目标是否达成
-- [ ] 失败自动重试、变更自动 commit
+**涉及文件：** `src/goal.py`（新模块）、`src/commands.py`、`tests/test_goal.py`
 
 **涉及文件：** `src/commands.py`、`src/llm.py`
 
@@ -148,7 +149,7 @@
 | v0.7 | 文档同步强制 + 文档体系 + CI | ✅ |
 | v0.8 | DeepSeek 前缀缓存优化 | 🚧 进行中 |
 | v0.9 | MCP 协议支持 | 🚧 进行中 |
-| v1.0 | 多 LLM 后端 + 终端体验 + RAG + 长任务 | 🗓️ 规划中 |
+| v1.0 | 多 LLM 后端 + 终端体验 + RAG + 长任务 | 🚧 进行中 |
 | v1.x | Web UI + IDE 集成 + 自进化 | 🗓️ 远期 |
 
 ---

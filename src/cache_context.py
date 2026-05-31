@@ -28,7 +28,9 @@ def _compute_msg_hash(msgs: list[dict]) -> str:
         ensure_ascii=False,
         sort_keys=True,
     )
-    return _hashlib.sha256(payload.encode()).hexdigest()[:16]
+    # 清理 Windows 子进程管道可能产生的孤立代理字符
+    safe = payload.encode("utf-8", errors="replace").decode("utf-8")
+    return _hashlib.sha256(safe.encode()).hexdigest()[:16]
 
 
 class PrefixIntegrityError(RuntimeError):

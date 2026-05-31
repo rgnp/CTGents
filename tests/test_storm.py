@@ -2,7 +2,9 @@
 
 import json
 import pytest
-from src.tools.storm import storm_check, reset_storm, get_storm_stats, get_blacklist
+from src.tools.storm import (
+    storm_check, storm_record, reset_storm, get_storm_stats, get_blacklist,
+)
 
 
 class TestStormDedup:
@@ -175,3 +177,89 @@ class TestStormBlacklist:
         for tool in ("read_file", "search_web", "grep_code", "rag_query",
                      "git_status", "git_log", "git_diff", "git_branch"):
             assert tool not in bl, f"{tool} 不应在黑名单中"
+
+
+
+class TestStormCache:
+    """Storm 结果缓存测试。"""
+
+    def setup_method(self):
+        reset_storm()
+
+    def test_record_then_cache_hit_returns_actual_result(self):
+        """storm_record 缓存结果后，去重命中返回实际结果而非静态字符串。"""
+        storm_check("read_file", {"path": "main.py"})  # 首次，通过
+        storm_record("read_file", {"path": "main.py"}, "content of main.py")
+
+        result = storm_check("read_file", {"path": "main.py"})  # 去重命中
+        assert result is not None
+        assert "content of main.py" in result
+        assert "已缓存" in result
+
+    def test_pending_when_no_cache(self):
+        """未调用 storm_record 时，去重命中返回等待标记（非缓存结果）。"""
+        storm_check("read_file", {"path": "main.py"})  # 首次，通过（但未执行/未 record）
+
+        result = storm_check("read_file", {"path": "main.py"})  # 去重命中，无缓存
+        assert result is not None
+        assert "⚡重复调用" in result
+        assert "正在执行中" in result
+
+    def test_cache_evicted_with_window(self):
+        """窗口淘汰旧记录时同步清理缓存。"""
+        # 填充窗口到上限（8 条）
+        for i in range(8):
+            storm_check("read_file", {"path": f"file_{i}.py"})
+            storm_record("read_file", {"path": f"file_{i}.py"}, f"content_{i}")
+
+        assert get_storm_stats()["cached"] == 8
+
+        # 第 9 条挤掉 file_0
+        storm_check("read_file", {"path": "file_8.py"})
+        storm_record("read_file", {"path": "file_8.py"}, "content_8")
+
+        assert get_storm_stats()["cached"] == 8  # 仍为 8，file_0 被淘汰
+
+        # file_0 被淘汰后重新调用应通过（非重复）
+        r = storm_check("read_file", {"path": "file_0.py"})
+        assert r is None, "被淘汰后应可再次调用"
+
+    def test_record_blacklist_ignored(self):
+        """storm_record 对黑名单工具是空操作。"""
+        storm_record("write_file", {"path": "x.txt", "content": "x"}, "ok")
+        # 不应缓存，也不应报错
+        assert get_storm_stats()["cached"] == 0
+
+    def test_reset_clears_cache(self):
+        """reset_storm 清空窗口和缓存。"""
+        storm_check("read_file", {"path": "main.py"})
+        storm_record("read_file", {"path": "main.py"}, "content")
+        assert get_storm_stats()["cached"] == 1
+
+        reset_storm()
+        assert get_storm_stats()["cached"] == 0
+        assert get_storm_stats()["window_size"] == 0
+
+    def test_cache_hit_stats_count(self):
+        """缓存命中时 hits 计数正确递增。"""
+        storm_check("read_file", {"path": "main.py"})
+        storm_record("read_file", {"path": "main.py"}, "content")
+
+        storm_check("read_file", {"path": "main.py"})  # 缓存命中
+        assert get_storm_stats()["hits"] == 1
+
+    def test_different_params_different_cache(self):
+        """不同参数的调用有独立的缓存。"""
+        storm_check("read_file", {"path": "a.py"})
+        storm_record("read_file", {"path": "a.py"}, "content A")
+
+        storm_check("read_file", {"path": "b.py"})
+        storm_record("read_file", {"path": "b.py"}, "content B")
+
+        # a 的缓存命中
+        r1 = storm_check("read_file", {"path": "a.py"})
+        assert "content A" in r1
+
+        # b 的缓存命中
+        r2 = storm_check("read_file", {"path": "b.py"})
+        assert "content B" in r2

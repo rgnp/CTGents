@@ -131,7 +131,8 @@ def run_python(code: str) -> str:
         result = subprocess.run(
             ["python", "-c", code],
             capture_output=True,
-            text=True,
+            encoding="utf-8",
+            errors="replace",
             timeout=MAX_EXEC_TIMEOUT,
             cwd=Path.cwd(),
             env=env,
@@ -186,7 +187,8 @@ def run_command(command: str, timeout: int = 30, workdir: str | None = None) -> 
             command,
             shell=True,
             capture_output=True,
-            text=True,
+            encoding="utf-8",
+            errors="replace",
             timeout=timeout,
             cwd=cwd,
         )

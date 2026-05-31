@@ -59,6 +59,21 @@ def rename_session(session_id: str, name: str) -> None:
         json.dump(meta, f, ensure_ascii=False)
 
 
+def _sanitize_surrogates(obj):
+    """递归替换字符串中的孤立代理字符（U+D800-U+DFFF）。
+
+    Windows 上 subprocess 管道可能因编码不匹配产生代理字符，
+    这些字符无法被 UTF-8 编码，会导致 json.dump 失败。
+    """
+    if isinstance(obj, str):
+        return obj.encode("utf-8", errors="replace").decode("utf-8")
+    if isinstance(obj, dict):
+        return {k: _sanitize_surrogates(v) for k, v in obj.items()}
+    if isinstance(obj, list):
+        return [_sanitize_surrogates(v) for v in obj]
+    return obj
+
+
 def save_session(messages: list[dict], session_id: str | None = None) -> str:
     """保存会话。不传 session_id 则自动生成。返回 session_id。"""
     if session_id is None:
@@ -71,7 +86,7 @@ def save_session(messages: list[dict], session_id: str | None = None) -> str:
     persist = [m for m in messages if not m.get("_volatile")]
 
     with open(_messages_path(session_id), "w", encoding="utf-8") as f:
-        json.dump(persist, f, ensure_ascii=False, indent=2)
+        json.dump(_sanitize_surrogates(persist), f, ensure_ascii=False, indent=2)
 
     summary = _generate_summary(messages)
     with open(_summary_path(session_id), "w", encoding="utf-8") as f:
