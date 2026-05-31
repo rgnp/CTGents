@@ -803,6 +803,63 @@ _BG_MIN_NEW_MSGS = 8          # 每次触发需要的最小新消息数
 _BG_RETAIN_TAIL = 12          # 保留最近 N 条不归档（留给正在进行的对话）
 _BG_MAX_SUMMARY_LEN = 1000    # 摘要总长度上限
 
+# LLM 摘要系统提示词（固定 → DeepSeek 前缀缓存永久命中，0 增量 token）
+_SUMMARY_SYSTEM_PROMPT = (
+    "You are a session memory updater for a coding assistant.\n"
+    "Given previous summary and new conversation messages, "
+    "produce an updated 1-2 sentence summary.\n"
+    "Focus on: actions taken, code changes, key decisions, current status.\n"
+    "Be precise and specific. If nothing meaningful changed, say so briefly."
+)
+
+
+def _make_llm_summary(prev_summary: str | None, messages: list[dict]) -> str:
+    """LLM semantic summary using Flash model. Fixed system prompt -> prefix cache hit."""
+    # Same-module references, no circular import risk
+
+    parts: list[str] = []
+    for m in messages:
+        role = m.get("role", "")
+        content = (m.get("content") or "").strip()
+        if not content:
+            continue
+        if role == "user":
+            parts.append(f"user: {content[:200]}")
+        elif role == "assistant":
+            text = content[:200]
+            if text:
+                parts.append(f"asst: {text}")
+        elif role == "tool":
+            first_line = content.split("\n")[0][:80]
+            tid = m.get("tool_call_id", "")
+            if first_line:
+                parts.append(f"tool({tid[:8]}): {first_line}")
+
+    if not parts:
+        return ""
+
+    msgs_text = "\n".join(parts)
+
+    api_msgs = [
+        {"role": "system", "content": _SUMMARY_SYSTEM_PROMPT},
+        {"role": "user", "content": (
+            f"Previous summary: {prev_summary or '(none)'}\n\n"
+            f"New messages:\n{msgs_text}\n\n"
+            f"Updated summary (1-2 sentences):"
+        )},
+    ]
+
+    try:
+        backend = auto_select_model("summarize")
+        result, _ = _invoke_llm(backend, api_msgs, lambda _: None)
+        summary = (result or "").strip()
+        if summary:
+            return summary[:_BG_MAX_SUMMARY_LEN]
+    except Exception:
+        logger.warning("LLM summary failed, fallback to brief", exc_info=True)
+
+    return ""
+
 
 class BackgroundCompactor:
     """Background context compactor with daemon thread for instant compaction."""
@@ -870,17 +927,23 @@ class BackgroundCompactor:
         to_summarize = log[self._last_idx:end]
         self._last_idx = end
 
-        brief = _make_brief_summary(to_summarize, max_len=200)
+        # LLM 语义摘要（system prompt 固定 → 缓存命中），失败则 fallback
+        brief = _make_llm_summary(self._summary, to_summarize)
         if not brief:
-            return
-
-        with self._lock:
-            if self._summary:
-                self._summary = (self._summary + " | " + brief)[:_BG_MAX_SUMMARY_LEN]
-            else:
+            brief = _make_brief_summary(to_summarize, max_len=200)
+            if not brief:
+                return
+            # fallback 时仍需追加尾部
+            with self._lock:
+                if self._summary:
+                    self._summary = (self._summary + " | " + brief)[:_BG_MAX_SUMMARY_LEN]
+                else:
+                    self._summary = brief
+        else:
+            with self._lock:
                 self._summary = brief
 
-        logger.debug("bg-summary updated: +%d msgs", len(to_summarize))
+        logger.debug("bg-summary updated via LLM: +%d msgs", len(to_summarize))
 # 模块级单例（run_conversation 中按需启动）
 _compactor = BackgroundCompactor()
 
