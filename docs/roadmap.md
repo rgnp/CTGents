@@ -24,35 +24,28 @@
 ### 2.1 DeepSeek 前缀缓存优化（基于 Reasonix 调研）
 
 > 目标：将会话上下文改为三段式结构（Immutable Prefix / Append-Only Log / Volatile Scratch），
-### 2.1 DeepSeek 前缀缓存优化（基于 Reasonix 调研）🚧
+### 2.1 DeepSeek 前缀缓存优化🚧
 
 > 目标：通过 Immutable Prefix + Append-Only Log 架构，把缓存命中率拉到 90%+。
 
 - [x] Phase 0：修复 `insert(0, ...)` 缓存毒药，改为 `append()` ✅
-- [x] Phase 0：三段式消息流（prefix/log/scratch）概念 ✅
-- [x] Phase 0：工具结果 >3000 token 自动压缩 ✅
+- [x] Phase 0：三段式消息流（prefix/log/scratch）概念设计 ✅
+- [x] Phase 0：工具结果 >3000 字符自动压缩 ✅
 - [x] Phase 1：修复 `_build_api_messages()` — volatile 系统消息纳入前缀 ✅
-- [x] Phase 1：`/cache` 命令 — 前缀哈希、结构诊断、命中率 ✅
-- [ ] Phase 2：Flatten — 深层嵌套工具 schema 扁平化，消除字节级抖动
-- [ ] Phase 3：Storm — 相同 tool+args 滑动窗口去重
-- [ ] Phase 4：SAFE 工具并行分发（read_file、git_status 等无依赖调用并行执行）
-- [ ] Phase 5：`CacheContext` 类 — 三段式上下文显式管理（prefix hash 校验 + log/scratch 分离）
+- [x] Phase 1：`/context` 合并前缀哈希、结构诊断、缓存命中率（一站式） ✅
+- [ ] ~~Phase 2：Flatten~~ — 已跳过。当前工具 schema 无嵌套 object，扁平化零收益
+- [ ] Phase 2：Storm — 同轮工具调用滑动窗口去重
+- [ ] Phase 3：SAFE — 无依赖工具并行分发（read_file、git_status 等）
+- [ ] Phase 4：`CacheContext` 类 — 三段式上下文显式管理（prefix hash 校验 + log/scratch 分离）
 
 **缓存效率目标：**
-| 场景 | 修复前 | Phase 1 | Phase 2+3 | Phase 4+5 |
-|------|:------:|:-------:|:---------:|:---------:|
-| 全新会话首轮 | 0%（无系统上下文） | ~60% | ~70% | ~80% |
+| 场景 | 修复前 | Phase 1 | Phase 2+3 | Phase 4 |
+|------|:------:|:-------:|:---------:|:-------:|
+| 全新会话首轮 | 0%（无系统上下文） | ~60% | ~65% | ~80% |
 | 工具循环内 | ~65% | ~99% | ~99.5% | ~99.8% |
 | 长会话（20轮+） | ~99% | ~99.9% | ~99.9% | ~99.9% |
 
 **涉及文件：** `src/llm.py`、`src/main.py`、`src/commands.py`
-> 接入后 CTGents 可连接任何 MCP 服务器——数据库、文件系统、浏览器、第三方 API。
-
-- [ ] MCP Client 实现（支持 stdio / HTTP / SSE 传输）
-- [ ] MCP 工具自动注册为 Agent 可用工具
-- [ ] MCP 服务器配置管理（`~/.ctgents/mcp.json`）
-- [ ] 内置 MCP 服务器示例（文件系统 + 搜索）
-
 **涉及文件：** `src/tools/mcp.py`（新模块）
 
 ### 3.2 项目级 RAG 检索 ✅
