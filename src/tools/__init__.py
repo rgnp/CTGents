@@ -184,16 +184,75 @@ def execute_tool(tool_call: ChatCompletionMessageToolCall) -> str:
     duration = (time.perf_counter() - t0) * 1000
     has_error = result.startswith('{"error":') if result else True
     record_call(name, args, success=not has_error, error=error_msg, duration_ms=duration)
-
     # ── 失败反思 ──
     if has_error:
         from .reflect import record_failure
         record_failure(name, args, error_msg or result[:200])
 
+    # ── 自动热加载 ──
+    if not has_error and name in ("write_file", "edit_file_lines"):
+        filepath = args.get("path", "") or args.get("filepath", "")
+        if isinstance(filepath, str) and ("src/" in filepath or "src\\" in filepath) and filepath.endswith(".py"):
+            _auto_reload_module(filepath)
+
     return result
 
-
 # ── 热加载 ──
+
+
+def _filepath_to_module(filepath: str) -> str | None:
+    """将文件路径映射为 Python 模块名。"""
+    # Windows/Unix 通用：把路径标准化
+    fp = filepath.replace("\\", "/")
+    if fp.endswith(".py"):
+        fp = fp[:-3]
+    # 去掉项目根前缀
+    for prefix in ("src/", "src\\"):
+        if prefix.replace("\\", "/") in fp:
+            idx = fp.index(prefix.replace("\\", "/"))
+            fp = fp[idx + len(prefix.replace("\\", "/")):]
+            break
+    mod = "src." + fp.replace("/", ".")
+    return mod
+
+
+def _auto_reload_module(filepath: str) -> str | None:
+    """自动热加载单个 Python 模块。修改 src/*.py 后自动调用。
+
+    - 工具模块 → 重载 + 重建工具注册表
+    - 命令模块 → 重建 dispatch
+    - 其他模块 → 简单 importlib.reload
+    """
+    mod_name = _filepath_to_module(filepath)
+    if not mod_name or mod_name not in sys.modules:
+        return None  # 还未加载的模块无需 reload
+
+    import importlib
+
+    # ── 命令模块：需要重建 dispatch ──
+    if mod_name == "src.commands":
+        try:
+            del sys.modules[mod_name]
+            import src.commands  # type: ignore[no-redef]
+            # 通知 main.py 刷新 dispatch_cmd（如果可访问）
+            try:
+                from src.main import _reload_dispatch
+                _reload_dispatch()
+            except Exception:
+                pass
+            return "🔄 已热加载: commands.py"
+        except Exception as e:
+            return f"⚠️ commands.py 热加载失败: {e}"
+
+    # ── 工具模块：重载后重建注册表 ──
+    is_tool = mod_name.startswith("src.tools.")
+    try:
+        importlib.reload(sys.modules[mod_name])
+        if is_tool:
+            _init_registry()
+        return f"🔄 已热加载: {mod_name}"
+    except Exception as e:
+        return f"⚠️ {mod_name} 热加载失败: {e}"
 
 
 def reload_tools() -> list[str]:
