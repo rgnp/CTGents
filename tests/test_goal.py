@@ -191,39 +191,66 @@ class TestSmartReload:
 
 
 # ═══════════════════════════════════════════════════════════════
-# GoalRunner._tool_call_to_action
+# GoalRunner._parse_actions
 # ═══════════════════════════════════════════════════════════════
 
-class TestToolCallToAction:
-    def test_basic_tool_call(self):
+class TestParseActions:
+    def test_single_tool_call(self):
         r = GoalRunner("test")
         tc = [{"function": {"name": "read_file", "arguments": '{"path": "foo.py"}'}}]
-        result = r._tool_call_to_action(tc, "思考")
-        assert result["action"] == "tool_call"
-        assert result["tool"] == "read_file"
-        assert result["args"] == {"path": "foo.py"}
+        result = r._parse_actions(tc, "思考")
+        assert len(result) == 1
+        assert result[0]["action"] == "tool_call"
+        assert result[0]["tool"] == "read_file"
+        assert result[0]["args"] == {"path": "foo.py"}
+
+    def test_multiple_tool_calls(self):
+        r = GoalRunner("test")
+        tc = [
+            {"function": {"name": "read_file", "arguments": '{"path": "a.py"}'}},
+            {"function": {"name": "read_file", "arguments": '{"path": "b.py"}'}},
+            {"function": {"name": "write_file", "arguments": '{"path": "c.py"}'}},
+        ]
+        content = '{"reasoning":"读取两个文件后写入","plan":["读文件","写文件"]}\n开始'
+        result = r._parse_actions(tc, content)
+        assert len(result) == 3
+        assert result[0]["tool"] == "read_file"
+        assert result[1]["tool"] == "read_file"
+        assert result[2]["tool"] == "write_file"
+        # 元信息只在第一个 action
+        assert result[0]["reasoning"] == "读取两个文件后写入"
+        assert result[0]["plan"] == ["读文件", "写文件"]
+        assert "reasoning" not in result[1]
 
     def test_with_meta_json_in_content(self):
         r = GoalRunner("test")
         tc = [{"function": {"name": "write_file", "arguments": '{"path":"a.py"}'}}]
         content = '{"reasoning":"创建文件","plan":["s1"],"mark_done":"ok"}\n然后'
-        result = r._tool_call_to_action(tc, content)
-        assert result["tool"] == "write_file"
-        assert result["reasoning"] == "创建文件"
-        assert result["plan"] == ["s1"]
-        assert result["mark_done"] == "ok"
+        result = r._parse_actions(tc, content)
+        assert len(result) == 1
+        assert result[0]["tool"] == "write_file"
+        assert result[0]["reasoning"] == "创建文件"
+        assert result[0]["plan"] == ["s1"]
+        assert result[0]["mark_done"] == "ok"
 
     def test_empty_tool_calls(self):
         r = GoalRunner("test")
-        assert r._tool_call_to_action(None, "") is None
-        assert r._tool_call_to_action([], "") is None
+        assert r._parse_actions(None, "") is None
+        assert r._parse_actions([], "") is None
 
     def test_invalid_arguments_json(self):
         r = GoalRunner("test")
         tc = [{"function": {"name": "read_file", "arguments": "not-json"}}]
-        result = r._tool_call_to_action(tc, "")
-        assert result["tool"] == "read_file"
-        assert result["args"] == {}
+        result = r._parse_actions(tc, "")
+        assert len(result) == 1
+        assert result[0]["tool"] == "read_file"
+        assert result[0]["args"] == {}
+
+    def test_text_json_fallback(self):
+        r = GoalRunner("test")
+        result = r._parse_actions(None, '{"action":"done","summary":"完成"}')
+        assert len(result) == 1
+        assert result[0]["action"] == "done"
 
 
 # ═══════════════════════════════════════════════════════════════
