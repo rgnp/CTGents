@@ -1,9 +1,11 @@
 """Web 工具：search_web + read_page，带 TTL 缓存和超时控制。"""
 
 import json
+import re
 import time
-import urllib.request
 import urllib.error
+import urllib.request
+from typing import Any
 from typing import Any
 
 import trafilatura
@@ -229,6 +231,25 @@ def _error_message(url: str, status: int | None) -> str:
     return f"无法访问 {url}，可能是网站限制或网络问题。"
 
 
+def _rewrite_url(url: str) -> str:
+    """将 JS 渲染网站的 URL 重写为可读取的静态/原始版本。
+
+    许多现代网站（GitHub、知乎、arxiv HTML 版）使用 JavaScript 渲染正文，
+    直接下载 HTML 源码只有空壳和 JS 包，提取不到有效内容。
+    此函数将这些 URL 映射到纯文本/静态版本。
+    """
+    # GitHub blob → raw.githubusercontent.com（直接返回纯文本）
+    m = re.match(r'https?://github\.com/([^/]+/[^/]+)/blob/(.+?)(\?.*)?$', url)
+    if m:
+        raw_url = f'https://raw.githubusercontent.com/{m.group(1)}/{m.group(2)}'
+        return raw_url
+
+    # arxiv HTML 版（JS渲染）→ abstract 页面（静态HTML）
+    m = re.match(r'https?://arxiv\.org/html/(\d+\.\d+(?:v\d+)?)', url)
+    if m:
+        return f'https://arxiv.org/abs/{m.group(1)}'
+
+    return url
 def read_page(url: str) -> str:
     """抓取并提取网页正文（带缓存 + 超时 + 截断）。
 
@@ -242,23 +263,42 @@ def read_page(url: str) -> str:
     if cached is not None:
         return cached
 
+    # ── URL 重写：JS 渲染网站 → 可读取的静态版本 ──
+    rewritten = _rewrite_url(url)
+    target = rewritten
+
+    result, status = _do_read_page(target)
+
+    # 根据结果类型决定缓存 TTL
+    if status is not None and status in (404, 410):
+        # 永久性错误：长缓存
+        _cache_set("read_page", {"url": url}, result, ttl_override=_CACHE_TTL_NOT_FOUND)
+    elif status is None and ("无法访问" in result or "超时" in result):
+        # 网络/超时错误：短缓存
+        _cache_set("read_page", {"url": url}, result, ttl_override=_CACHE_TTL_ERROR)
+    else:
+        # 成功或未知错误：正常 TTL
+        _cache_set("read_page", {"url": url}, result)
+    return result
+def _do_read_page(url: str) -> tuple[str, int | None]:
+    """实际执行网页抓取和提取（无缓存逻辑，缓存由 read_page 处理）。
+
+    Returns:
+        (result_text, status_code_or_None)
+        status_code 为 HTTP 状态码，网络错误时为 None
+    """
+
     # 带超时下载
     html, status = _fetch_url_with_timeout(url)
 
-    # ── 下载失败：根据状态码决定缓存策略 ──
+    # 下载失败
     if html is None:
-        result = _error_message(url, status)
-        # 404/410 长缓存；其他错误短缓存
-        ttl = _CACHE_TTL_NOT_FOUND if status in (404, 410) else _CACHE_TTL_ERROR
-        _cache_set("read_page", {"url": url}, result, ttl_override=ttl)
-        return result
+        return _error_message(url, status), status
 
     # 提取正文
     text = trafilatura.extract(html, include_links=False, include_images=False)
     if not text:
-        result = f"{url} 未能提取到有效正文内容。"
-        _cache_set("read_page", {"url": url}, result)
-        return result
+        return f"{url} 未能提取到有效正文内容。", status
 
     # 截断过长内容
     if len(text) > _PAGE_MAX_CHARS:
@@ -268,7 +308,14 @@ def read_page(url: str) -> str:
             "如需完整内容，可重新搜索或阅读页面]"
         )
 
-    _cache_set("read_page", {"url": url}, text)
+    return text, status
+    if len(text) > _PAGE_MAX_CHARS:
+        text = text[:_PAGE_MAX_CHARS] + (
+            f"\n\n[已压缩：原始结果 {len(text)} 字符，"
+            f"仅显示前 {_PAGE_MAX_CHARS} 字符。"
+            "如需完整内容，可重新搜索或阅读页面]"
+        )
+
     return text
 
 

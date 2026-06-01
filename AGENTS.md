@@ -103,7 +103,7 @@
 - 类型注解: 公共函数必须有
 - 文档字符串: 模块和公共函数必须有
 - 格式化: 使用 ruff 或 black
-- Web 工具: `search_web` / `read_page` 有 TTL 缓存（搜索 5min，页面 10min，最大 200 条），带 15s 超时和 8000 字符截断
+- Web 工具: `search_web` / `read_page` 有 TTL 缓存（搜索 5min，页面 10min，最大 200 条），带 15s 超时和 8000 字符截断；`read_page` 自动重写 GitHub blob/arxiv HTML 等 JS 渲染站点的 URL
 
 ## Git 工作流
 

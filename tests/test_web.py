@@ -221,3 +221,93 @@ class TestCacheEviction:
 
         stats = get_web_cache_stats()
         assert stats["entries"] <= _CACHE_MAX_SIZE
+
+
+class TestUrlRewrite:
+    """测试 URL 重写逻辑。"""
+
+    def test_github_blob_to_raw(self):
+        """GitHub blob URL 应重写为 raw.githubusercontent.com。"""
+        from src.tools.web import _rewrite_url
+
+        url = "https://github.com/user/repo/blob/main/path/to/file.py"
+        expected = "https://raw.githubusercontent.com/user/repo/main/path/to/file.py"
+        assert _rewrite_url(url) == expected
+
+    def test_github_blob_with_query(self):
+        """带查询参数的 GitHub blob URL 应去掉查询参数。"""
+        from src.tools.web import _rewrite_url
+
+        url = "https://github.com/user/repo/blob/main/file.py?ref=main"
+        expected = "https://raw.githubusercontent.com/user/repo/main/file.py"
+        assert _rewrite_url(url) == expected
+
+    def test_github_repo_root(self):
+        """GitHub 仓库主页 URL 不应被重写。"""
+        from src.tools.web import _rewrite_url
+
+        url = "https://github.com/user/repo"
+        assert _rewrite_url(url) == url
+
+    def test_arxiv_html_to_abs(self):
+        """arxiv HTML 版 URL 应重写为 abstract 页面（保留版本号）。"""
+        from src.tools.web import _rewrite_url
+
+        url = "https://arxiv.org/html/2501.11260v3"
+        expected = "https://arxiv.org/abs/2501.11260v3"
+        assert _rewrite_url(url) == expected
+
+    def test_arxiv_abs_unchanged(self):
+        """arxiv abstract 页面 URL 不应被重写。"""
+        from src.tools.web import _rewrite_url
+
+        url = "https://arxiv.org/abs/2501.11260"
+        assert _rewrite_url(url) == url
+
+    def test_normal_url_unchanged(self):
+        """普通 URL 不应被重写。"""
+        from src.tools.web import _rewrite_url
+
+        url = "https://blog.csdn.net/CV_Autobot/article/details/155106902"
+        assert _rewrite_url(url) == url
+
+    def test_read_page_rewrites_github_blob(self, monkeypatch):
+        """read_page 遇到 GitHub blob URL 应走 raw.githubusercontent.com。"""
+        from src.tools.web import read_page, _web_cache
+
+        _web_cache.clear()
+
+        requested_urls = []
+
+        def fake_fetch(url):
+            requested_urls.append(url)
+            return ("<html><body>file content: print('hello')</body></html>", 200)
+
+        monkeypatch.setattr("src.tools.web._fetch_url_with_timeout", fake_fetch)
+
+        result = read_page("https://github.com/user/project/blob/main/code.py")
+
+        assert len(requested_urls) == 1
+        assert "raw.githubusercontent.com" in requested_urls[0]
+        assert "print('hello')" in result
+
+    def test_read_page_rewrites_arxiv_html(self, monkeypatch):
+        """read_page 遇到 arxiv HTML URL 应走 abs 页面。"""
+        from src.tools.web import read_page, _web_cache
+
+        _web_cache.clear()
+
+        requested_urls = []
+
+        def fake_fetch(url):
+            requested_urls.append(url)
+            return ("<html><body>arXiv abstract content</body></html>", 200)
+
+        monkeypatch.setattr("src.tools.web._fetch_url_with_timeout", fake_fetch)
+
+        result = read_page("https://arxiv.org/html/2402.13243v2")
+
+        assert len(requested_urls) == 1
+        assert "/abs/" in requested_urls[0]
+        assert "arXiv abstract" in result
+
