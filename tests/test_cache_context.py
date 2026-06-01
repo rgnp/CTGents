@@ -53,7 +53,7 @@ class TestSendMethod:
         assert "_volatile" not in api[0]
 
     def test_log_system_messages_in_order(self):
-        """log 中的 system 消息应跟在 prefix 后面，非 system 消息在最后。"""
+        """log 中的 system 消息应在对话之后，避免破坏前缀缓存。"""
         ctx = CacheContext(
             prefix_msgs=[{"role": "system", "content": "PREFIX"}],
             log_msgs=[
@@ -64,10 +64,10 @@ class TestSendMethod:
         )
         api = ctx.send()
         roles = [m["role"] for m in api]
-        assert roles == ["system", "system", "user", "assistant"]
+        assert roles == ["system", "user", "assistant", "system"]
         assert api[0]["content"] == "PREFIX"
-        assert api[1]["content"] == "LOG_SYS"
-        assert api[2]["content"] == "Q1"
+        assert api[1]["content"] == "Q1"
+        assert api[3]["content"] == "LOG_SYS"
 
     def test_scratch_not_in_api(self):
         """scratch 消息不应出现在 send() 输出中。"""

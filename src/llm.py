@@ -188,6 +188,9 @@ class DeepSeekBackend(LLMBackend):
             "max_tokens": self.info.max_tokens,
             "stream_options": {"include_usage": True},
         }
+        if tools and self.info.supports_tools:
+            kwargs["tools"] = tools
+
         stream = self.client.chat.completions.create(**kwargs)
 
         try:

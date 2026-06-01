@@ -135,20 +135,13 @@ class CacheContext:
                     f"前缀哈希不匹配！预期 {self._prefix_hash}，实际 {current}。"
                     f"不可变 prefix 被意外修改。"
                 )
-
         api: list[dict] = []
 
         # 2. immutable prefix（所有系统级上下文）
         for m in self.prefix:
             api.append({"role": "system", "content": m.get("content", "")})
 
-        # 3. log 中的 system 消息（compact summary / reload 通知）
-        for m in self.log:
-            if m.get("role") != "system":
-                continue
-            api.append({"role": "system", "content": m.get("content", "")})
-
-        # 4. log 中的非 system 消息（user/assistant/tool）
+        # 3. log 中的非 system 消息（user/assistant/tool）—— 紧跟 prefix，享受缓存
         for m in self.log:
             if m.get("role") == "system":
                 continue
@@ -160,6 +153,12 @@ class CacheContext:
             if m.get("tool_call_id"):
                 clean["tool_call_id"] = m["tool_call_id"]
             api.append(clean)
+
+        # 4. log 中的 system 消息（记忆/安全模式/摘要等）—— 放末尾，不影响对话缓存
+        for m in self.log:
+            if m.get("role") != "system":
+                continue
+            api.append({"role": "system", "content": m.get("content", "")})
 
         return api
 
