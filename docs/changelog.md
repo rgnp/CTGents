@@ -1,5 +1,15 @@
 # 变更日志
 
+## v0.9 — Web 工具缓存优化（2026-06-01）
+
+- ⚡ `search_web` + `read_page` 增加 TTL 缓存（搜索 5min，页面 10min），最大 200 条目
+- ⏱️ `read_page` 改用 `urllib.request` 代替 `trafilatura.fetch_url`，增加 15s 超时控制
+- ✂️ 页面内容超过 8000 字符自动截断，节省 token
+- 🗑️ 缓存超过最大容量时自动淘汰最旧 20%
+- 🛡️ 错误缓存分层：404/410 长缓存 10min，网络超时等临时错误短缓存 30s，避免"记住"临时故障
+- 📊 `_fetch_url_with_timeout` 返回 `(html, status_code)` 元组，状态码透传精确错误消息
+- 🧪 9 个测试覆盖缓存命中/过期/淘汰/截断/404长缓存/超时短缓存全部场景
+
 ## v0.8 — 前缀缓存命中率优化（2026-06-01）
 
 - 🚀 `CacheContext.send()` 严格过滤 `_volatile` 标记的前缀消息（对齐 Reasonix Volatile Scratch）
