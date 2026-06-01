@@ -65,6 +65,8 @@ def _make_project_context() -> dict | None:
         "content": context,
     }
 
+logger = logging.getLogger(__name__)
+
 
 def _make_env_message() -> dict:
     """生成环境上下文系统消息。
@@ -438,7 +440,6 @@ def main() -> None:
                             if has_output():
                                 print()
                 except Exception:
-                    pass
                     pass
             except KeyboardInterrupt:
                 _stop_esc_listener()

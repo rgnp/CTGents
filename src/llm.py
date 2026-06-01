@@ -1118,91 +1118,113 @@ def run_conversation(
                 "content": content,
                 "tool_calls": tool_calls,
             })
-            # ═══════════════════════════════════════════════════════════
-            # SAFE Phase 1：安全确认（顺序执行，含用户交互）
-            # ═══════════════════════════════════════════════════════════
-            from .safety import check_tool, get_mode, get_safety_level, trust_tool
+            try:
+                # ═══════════════════════════════════════════════════════════
+                # SAFE Phase 1：安全确认（顺序执行，含用户交互）
+                # ═══════════════════════════════════════════════════════════
+                from .safety import check_tool, get_mode, get_safety_level, trust_tool
 
-            approved: list[tuple] = []  # (tc_data, tool_name, args, tc, pre_result_or_None)
+                approved: list[tuple] = []  # (tc_data, tool_name, args, tc, pre_result_or_None)
 
-            for tc_data in tool_calls:
-                tc = SimpleNamespace(
-                    function=SimpleNamespace(
-                        name=tc_data["function"]["name"],
-                        arguments=tc_data["function"]["arguments"],
+                for tc_data in tool_calls:
+                    tool_name = tc_data["function"]["name"]
+                    try:
+                        args = json.loads(tc_data["function"]["arguments"])
+                    except json.JSONDecodeError:
+                        approved.append((tc_data, tool_name, {},
+                                         SimpleNamespace(function=SimpleNamespace(name=tool_name, arguments="{}")),
+                                         json.dumps({"error": f"JSON 解析失败: {tc_data['function']['arguments'][:100]}"},
+                                                    ensure_ascii=False)))
+                        continue
+                    tc = SimpleNamespace(
+                        function=SimpleNamespace(
+                            name=tool_name,
+                            arguments=tc_data["function"]["arguments"],
+                        )
                     )
-                )
-                args = json.loads(tc_data["function"]["arguments"])
-                tool_name = tc_data["function"]["name"]
-                on_tool(tool_name, args)
+                    on_tool(tool_name, args)
 
-                safety = check_tool(tool_name)
-                if safety == "confirm":
-                    level = get_safety_level(tool_name).value
-                    mode = get_mode()
-                    label = _TOOL_LABEL_MAP.get(tool_name, tool_name)
-                    detail = " ".join(f"{k}={v}" for k, v in args.items())
-                    if len(detail) > 120:
-                        detail = detail[:117] + "..."
+                    safety = check_tool(tool_name)
+                    if safety == "confirm":
+                        level = get_safety_level(tool_name).value
+                        mode = get_mode()
+                        label = _TOOL_LABEL_MAP.get(tool_name, tool_name)
+                        detail = " ".join(f"{k}={v}" for k, v in args.items())
+                        if len(detail) > 120:
+                            detail = detail[:117] + "..."
 
-                    print(f"\n  ⚠️ [{label}] 需要确认")
-                    print(f"     等级: {level.upper()} | 模式: {mode}")
-                    print(f"     参数: {detail}")
-                    choice = input("     执行？[y=确认/n=跳过/a=始终允许本次会话] ").strip().lower()
+                        print(f"\n  ⚠️ [{label}] 需要确认")
+                        print(f"     等级: {level.upper()} | 模式: {mode}")
+                        print(f"     参数: {detail}")
+                        choice = input("     执行？[y=确认/n=跳过/a=始终允许本次会话] ").strip().lower()
 
-                    if choice in ("a", "always"):
-                        trust_tool(tool_name)
-                        print(f"     ✅ 已信任 {tool_name}，本次会话自动放行\n")
-                        approved.append((tc_data, tool_name, args, tc, None))
-                    elif choice in ("y", "yes", ""):
-                        approved.append((tc_data, tool_name, args, tc, None))
+                        if choice in ("a", "always"):
+                            trust_tool(tool_name)
+                            print(f"     ✅ 已信任 {tool_name}，本次会话自动放行\n")
+                            approved.append((tc_data, tool_name, args, tc, None))
+                        elif choice in ("y", "yes", ""):
+                            approved.append((tc_data, tool_name, args, tc, None))
+                        else:
+                            print("     ⛔ 已跳过\n")
+                            approved.append((tc_data, tool_name, args, tc,
+                                              f"⛔ [{tool_name}] 已跳过（用户未批准）"))
                     else:
-                        print("     ⛔ 已跳过\n")
-                        approved.append((tc_data, tool_name, args, tc,
-                                          f"⛔ [{tool_name}] 已跳过（用户未批准）"))
-                else:
-                    approved.append((tc_data, tool_name, args, tc, None))
+                        approved.append((tc_data, tool_name, args, tc, None))
 
-            # ═══════════════════════════════════════════════════════════
-            # SAFE Phase 2：批量执行（只读并行 + 有副作用串行）
-            # ═══════════════════════════════════════════════════════════
-            exec_indices: list[int] = []
-            exec_items: list[tuple] = []
-            for i, item in enumerate(approved):
-                if item[4] is None:  # pre_result is None → 需要执行
-                    exec_indices.append(i)
-                    exec_items.append(item)
+                # ═══════════════════════════════════════════════════════════
+                # SAFE Phase 2：批量执行（只读并行 + 有副作用串行）
+                # ═══════════════════════════════════════════════════════════
+                exec_indices: list[int] = []
+                exec_items: list[tuple] = []
+                for i, item in enumerate(approved):
+                    if item[4] is None:  # pre_result is None → 需要执行
+                        exec_indices.append(i)
+                        exec_items.append(item)
 
-            if exec_items:
-                exec_results = _execute_tool_batch(exec_items)
-                for idx, result in zip(exec_indices, exec_results):
-                    tc_data, tool_name, args, tc, _ = approved[idx]
-                    approved[idx] = (tc_data, tool_name, args, tc, result)
+                if exec_items:
+                    exec_results = _execute_tool_batch(exec_items)
+                    for idx, result in zip(exec_indices, exec_results):
+                        tc_data, tool_name, args, tc, _ = approved[idx]
+                        approved[idx] = (tc_data, tool_name, args, tc, result)
 
-            # ═══════════════════════════════════════════════════════════
-            # SAFE Phase 3：处理后追加到 ctx.log
-            # ═══════════════════════════════════════════════════════════
-            for tc_data, tool_name, args, tc, result in approved:
-                result = truncate_to_budget(result, ctx.all)
-                result = _compress_tool_result(tool_name, result)
-                ctx.log.append({
-                    "role": "tool",
-                    "tool_call_id": tc_data["id"],
-                    "content": result,
-                })
-            # 记忆变更后更新 ctx.log 中的记忆索引
-            from .tools.memory import get_context, is_dirty, clear_dirty
-            if is_dirty():
-                old_idx = next((i for i, m in enumerate(ctx.log)
-                                if m.get("role") == "system" and "你拥有以下记忆" in m.get("content","")), -1)
-                new_ctx = get_context()
-                if new_ctx and old_idx >= 0:
-                    ctx.log[old_idx] = {"role": "system", "content": new_ctx, "_volatile": True}
-                elif new_ctx and old_idx < 0:
-                    ctx.log.append({"role": "system", "content": new_ctx, "_volatile": True})
-                clear_dirty()
-            if on_progress:
-                on_progress()
+                # ═══════════════════════════════════════════════════════════
+                # SAFE Phase 3：处理后追加到 ctx.log
+                # ═══════════════════════════════════════════════════════════
+                for tc_data, tool_name, args, tc, result in approved:
+                    result = truncate_to_budget(result, ctx.all)
+                    result = _compress_tool_result(tool_name, result)
+                    ctx.log.append({
+                        "role": "tool",
+                        "tool_call_id": tc_data["id"],
+                        "content": result,
+                    })
+                # 记忆变更后更新 ctx.log 中的记忆索引
+                from .tools.memory import get_context, is_dirty, clear_dirty
+                if is_dirty():
+                    old_idx = next((i for i, m in enumerate(ctx.log)
+                                    if m.get("role") == "system" and "你拥有以下记忆" in m.get("content","")), -1)
+                    new_ctx = get_context()
+                    if new_ctx and old_idx >= 0:
+                        ctx.log[old_idx] = {"role": "system", "content": new_ctx, "_volatile": True}
+                    elif new_ctx and old_idx < 0:
+                        ctx.log.append({"role": "system", "content": new_ctx, "_volatile": True})
+                    clear_dirty()
+                if on_progress:
+                    on_progress()
+            except Exception:
+                # 异常时补上 tool 结果消息，防止下次 API 调用因缺少 tool 消息而 400
+                for tc_data in tool_calls:
+                    already_saved = any(
+                        m.get("role") == "tool" and m.get("tool_call_id") == tc_data["id"]
+                        for m in ctx.log
+                    )
+                    if not already_saved:
+                        ctx.log.append({
+                            "role": "tool",
+                            "tool_call_id": tc_data["id"],
+                            "content": json.dumps({"error": "工具处理异常，已跳过"}, ensure_ascii=False),
+                        })
+                raise
         else:
             ctx.log.append({"role": "assistant", "content": content or ""})
             if on_progress:
