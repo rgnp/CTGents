@@ -52,29 +52,25 @@ messages.insert(1, _make_project_context())  # ← 同样破坏缓存
 
 ### 构建规则
 
-| 规则 | 说明 |
-|------|------|
-| **Prefix 不变** | 会话开始时计算一次 prefix，存储其 hash。如果 prefix 改变 → 必须重新计算 |
+| **Prefix 不变** | 会话开始时计算一次 prefix hash。prefix 中的 `_volatile` 消息被 `send()` 跳过，不发给 API |
 | **Log 只追加** | `messages` 永远只用 `.append()`，不使用 `.insert(0, ...)` 或 `.pop(0)` |
-| **Scratch 不发给 API** | 标记为 `_volatile` 的消息在 `build_api_messages()` 时过滤掉（但保留在内存日志中） |
+| **Scratch 不发给 API** | `_volatile` 标记的消息在 `send()` 中完全过滤（prefix 区跳过，log 区 system 消息放末尾不影响前缀） |
 | **工具结果压缩** | 超过 3000 token 的工具结果在追加到 Log 前压缩为摘要 |
-
+| **前缀内容不得含动态数据** | 禁止 `os.getcwd()`、时间戳等动态值出现在 prefix 中 → 跨会话缓存命中 |
 ---
 
-## 实施路线
+### Phase 1：修复缓存毒药 ✅
 
-### Phase 1：修复缓存毒药（最低成本，立即见效）
+> 已完成（2026-06-01）。三阶段全量实施。
 
-**目标**：不改变架构，只修复导致缓存失效的行为。
+| 任务 | 说明 | 状态 |
+|------|------|------|
+| `CacheContext` 三段式架构 | prefix/log/scratch 分区 + 哈希校验 | ✅ |
+| `send()` 严格过滤 volatile | `_volatile` 标记的前缀消息完全不发给 API | ✅ |
+| `_make_env_message()` 固化 | 移除 `os.getcwd()`，字节级稳定前缀 | ✅ |
+| `_build_api_messages()` 向后兼容 | 旧代码无需修改 | ✅ |
 
-| 任务 | 说明 | 预估影响 |
-|------|------|----------|
-| `main.py` 中 `insert(0, ...)` 改为 `append()` | 把环境上下文/项目上下文/记忆索引/安全模式追加到末尾，而不是插入到开头 | 缓存从 0% → 50%+ |
-| `messages.insert(1, ...)` 同改 | 所有 `insert` 统一改为追加 | — |
-| `_build_api_messages()` 新函数 | 构建发给 API 的消息时，把系统消息放在最前面，但内存中的 messages 列表保持只追加 | 兼顾缓存和 LLM 行为 |
-
-**验证**：对比修复前后两次相同会话的输入 token 消耗。
-
+**验证**：前缀哈希机制确保不可变 prefix 被意外修改时立即报错。
 ### Phase 2：工具结果压缩
 
 ### Phase 2：工具结果压缩 ✅

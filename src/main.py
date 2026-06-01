@@ -55,7 +55,7 @@ def _stop_esc_listener() -> None:
 
 
 def _make_project_context() -> dict | None:
-    """生成项目结构感知上下文，标记 _volatile 以在保存时自动过滤。"""
+    """生成项目结构感知上下文（不可变前缀成员，跨会话稳定）。"""
     from .tools.project import get_project_context
     context = get_project_context()
     if not context:
@@ -63,25 +63,23 @@ def _make_project_context() -> dict | None:
     return {
         "role": "system",
         "content": context,
-        "_volatile": True,
     }
-logger = logging.getLogger(__name__)
 
 
 def _make_env_message() -> dict:
-    """生成环境上下文系统消息，标记 _volatile 以在保存时自动过滤。
+    """生成环境上下文系统消息。
 
-    注意：不包含时间戳等动态内容，确保前缀字节一致 → DeepSeek 跨会话缓存命中。
+    重要：不包含任何动态内容（时间戳、cwd等），确保字节级一致
+    → DeepSeek 前缀缓存命中率最大化。
     """
     return {
         "role": "system",
         "content": (
             "当前环境：\n"
-            f"- 工作目录: {os.getcwd()}\n"
             f"- 操作系统: {platform.system()} {platform.release()}\n"
             "\n以上为运行环境信息，不需要在回复中复述或罗列。"
         ),
-        "_volatile": True,
+        # 注意：不设 _volatile，此消息属于不可变 prefix
     }
 
 

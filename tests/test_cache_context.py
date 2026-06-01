@@ -45,12 +45,13 @@ class TestSendMethod:
     """send() 构建 API 消息测试。"""
 
     def test_volatile_filtered(self):
-        """_volatile 字段应从 send() 输出中剥离。"""
+        """_volatile 标记的 prefix 消息不应出现在 send() 输出中。"""
         ctx = CacheContext(prefix_msgs=[
             {"role": "system", "content": "sys", "_volatile": True},
         ])
         api = ctx.send()
-        assert "_volatile" not in api[0]
+        # volatile prefix 被完全过滤，api 为空（无可发送消息）
+        assert len(api) == 0
 
     def test_log_system_messages_in_order(self):
         """log 中的 system 消息应在对话之后，避免破坏前缀缓存。"""

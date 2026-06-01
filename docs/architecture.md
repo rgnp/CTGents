@@ -28,8 +28,10 @@
 ## 核心模块说明
 
 ### main.py — 主入口
+### main.py — 主入口
 
-- 注入环境/项目/记忆/安全模式四层上下文到 system prompt
+- 使用 `CacheContext` 三段式上下文管理（prefix/log/scratch）
+- 环境信息 + 项目上下文 → immutable prefix；记忆/安全模式/反思 → log 区（volatile）
 - 处理 `/reload` 热加载、对话流式输出
 - 集成 Esc 打断监听（Windows msvcrt）
 

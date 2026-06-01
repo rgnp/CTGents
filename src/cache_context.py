@@ -113,11 +113,10 @@ class CacheContext:
         """构建发给 LLM API 的消息列表。
 
         策略（保障 DeepSeek 前缀缓存）：
-          1. 所有 prefix 系统消息排在 payload 最前面 → 不可变前缀
-          2. log 中 system 消息（compact summary / reload 通知）紧跟其后
+          1. 不可变 prefix 系统消息排在 payload 最前面 → 缓存命中核心区
+          2. _volatile 标记的 prefix 消息跳过（不应混入不可变前缀）
           3. log 中非 system 消息按追加顺序排后面 → 前缀持续命中
-          4. 剥离 _volatile / _tool_name 等内部字段
-
+          4. log 中 system 消息（记忆/安全模式/摘要）放末尾 → 不影响缓存前缀
         Args:
             validate: 是否校验 prefix 完整性，默认 True。
 
@@ -137,8 +136,10 @@ class CacheContext:
                 )
         api: list[dict] = []
 
-        # 2. immutable prefix（所有系统级上下文）
+        # 2. immutable prefix — 跳过 _volatile 标记的消息（它们属于 scratch）
         for m in self.prefix:
+            if m.get("_volatile"):
+                continue
             api.append({"role": "system", "content": m.get("content", "")})
 
         # 3. log 中的非 system 消息（user/assistant/tool）—— 紧跟 prefix，享受缓存

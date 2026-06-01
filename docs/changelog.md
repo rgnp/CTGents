@@ -1,5 +1,12 @@
 # 变更日志
 
+## v0.8 — 前缀缓存命中率优化（2026-06-01）
+
+- 🚀 `CacheContext.send()` 严格过滤 `_volatile` 标记的前缀消息（对齐 Reasonix Volatile Scratch）
+- 🔧 `_make_env_message()` 移除 `os.getcwd()` 动态内容 → 字节级稳定前缀，跨会话缓存命中
+- 🔧 `_make_project_context()` 移除 `_volatile` 标记 → 项目上下文属于不可变前缀
+- 🧪 测试更新：volatile 行为从"剥离字段"改为"完全过滤不发送"
+
 
 ## v0.7 — 目标驱动长任务（2026-05-31）
 

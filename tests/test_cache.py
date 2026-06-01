@@ -51,10 +51,9 @@ class TestBuildApiMessages:
         ]
         api = _build_api_messages(msgs)
         roles = [m["role"] for m in api]
-        # 所有 system 消息（含 volatile）排在前面，user/assistant 在后面
-        assert roles == ["system", "system", "user", "assistant"]
-        assert api[0]["content"] == "s1"  # volatile system 也纳入前缀
-        assert api[1]["content"] == "s2"
+        # volatile system 被过滤，只有 s2（非 volatile）在系统前缀中
+        assert roles == ["system", "user", "assistant"]
+        assert api[0]["content"] == "s2"  # 非 volatile 的 s2 纳入前缀
 
     def test_non_system_order_preserved(self):
         msgs = [
