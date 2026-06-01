@@ -1,7 +1,6 @@
-"""Shell 执行工具：Python 代码执行 + 通用命令执行 + 安全控制。"""
-
 import os
-import platform
+import subprocess
+from pathlib import Path
 import shlex
 import subprocess
 from pathlib import Path
@@ -177,9 +176,6 @@ def run_command(command: str, timeout: int = 30, workdir: str | None = None) -> 
         return f"工作目录不存在: {cwd}"
     if not cwd.is_dir():
         return f"路径不是目录: {cwd}"
-
-    # ── 确定 Shell ──
-    "cmd" if platform.system() == "Windows" else "bash"
 
     # ── 执行 ──
     try:
