@@ -7,7 +7,7 @@ from datetime import datetime
 from pathlib import Path
 
 # ── list_files 缓存 ──
-_LIST_CACHE_TTL = 3       # 秒
+_LIST_CACHE_TTL = 300   # 秒（同 web 工具一致，5 分钟）
 _list_cache: dict[str, tuple[float, str]] = {}
 # ── 备份目录 ──
 BACKUP_DIR = Path.home() / ".agent_backups"
