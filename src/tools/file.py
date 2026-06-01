@@ -2,9 +2,13 @@
 
 import contextlib
 import shutil
+import time
 from datetime import datetime
 from pathlib import Path
 
+# ── list_files 缓存 ──
+_LIST_CACHE_TTL = 3       # 秒
+_list_cache: dict[str, tuple[float, str]] = {}
 # ── 备份目录 ──
 BACKUP_DIR = Path.home() / ".agent_backups"
 
@@ -702,8 +706,17 @@ def count_lines(path: str) -> str:
 
 
 def list_files(path: str | None) -> str:
-    """列出目录内容。"""
+    """列出目录内容（带 3 秒 TTL 缓存，避免同轮重复 IO）。"""
     dirpath = _resolve(path) if path else Path.cwd()
+
+    # ── TTL 缓存 ──
+    now = time.time()
+    key = str(dirpath)
+    if key in _list_cache:
+        ts, cached = _list_cache[key]
+        if now - ts < _LIST_CACHE_TTL:
+            return cached
+
     if not dirpath.exists():
         return f"目录不存在: {path or '.'}"
     if not dirpath.is_dir():
@@ -730,9 +743,9 @@ def list_files(path: str | None) -> str:
 
         lines.append(f"  {entry.name}{kind}{size_str}")
 
-    return "\n".join(lines)
-
-
+    result = "\n".join(lines)
+    _list_cache[key] = (now, result)
+    return result
 def delete_file(path: str) -> str:
     """删除文件。删除前会告知用户。不可恢复。"""
     filepath = _resolve(path)
