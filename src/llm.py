@@ -1074,8 +1074,6 @@ def run_conversation(
         )
     # 追加用户输入到 log（prefix 不变）
     ctx.log.append({"role": "user", "content": user_input})
-    # 追加用户输入到 log（prefix 不变）
-    ctx.log.append({"role": "user", "content": user_input})
 
     # 重设 Storm 去重窗口 + SAFE 并行统计（同轮工具循环内）
     from .tools.storm import reset_storm
