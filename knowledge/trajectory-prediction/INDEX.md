@@ -8,29 +8,35 @@
 
 ## 子方向速览
 
-| 子方向 | 核心问题 | 代表论文 | 状态 |
-|---|---|---|---|
-| [置信度校准](topics/calibration.md) | 模型不知道自己的预测有多可靠 | CCTR (AAAI 2024) | 有工作但未饱和 |
-| [交互建模](topics/interaction.md) | 模型不感知agent之间的相互影响 | SSL-Interactions (arxiv 2024) | 有工作，反事实方向缺 |
-| [物理可行性](topics/physical-feasibility.md) | 预测轨迹违反运动学约束 | TPK (arxiv 2025) | 新方向，有空间 |
-| [规划兼容性](topics/planning-compatibility.md) | 预测指标好但规划器用不了 | 暂无专门工作 | **空白** |
-| [自监督预训练](topics/self-supervised.md) | 如何从无标签数据中学习表示 | Plan-MAE (arxiv 2025) | 正在兴起 |
-| [表示学习](topics/representation-learning.md) | 隐空间缺乏语义结构 | 无专门工作 | **空白** |
+| 子方向 | 核心问题 | 代表论文 | 卡片数 | 空白评估 |
+|---|---|---|---|---|
+| [置信度校准](topics/calibration.md) | 模型不知道自己的预测有多可靠 | CCTR (AAAI 2024) | 1 | ⭐⭐⭐ 训练期校准有空间 |
+| [交互建模](topics/interaction.md) | 模型不感知agent之间的相互影响 | SSL-Interactions (arxiv 2024) | 1 | ⭐⭐⭐ 反事实方向缺 |
+| [物理可行性](topics/physical-feasibility.md) | 预测轨迹违反运动学约束 | TPK (arxiv 2025) | 1 | ⭐⭐⭐ 规划兼容性未做 |
+| [规划兼容性](topics/planning-compatibility.md) | 预测指标好但规划器用不了 | 暂无专门工作 | 0 | ⭐⭐⭐⭐⭐ **最空白** |
+| [自监督预训练](topics/self-supervised.md) | 如何从无标签数据中学习表示 | Plan-MAE (arxiv 2025) | 2 | ⭐⭐ 已有但仍可拓展 |
+| [表示学习](topics/representation-learning.md) | 隐空间缺乏语义结构 | TrajCLIP (NeurIPS 2024), PerReg+ (CVPR 2025) | 2 | ⭐⭐⭐⭐ 对比+蒸馏可深入 |
+| 场景理解 | 场景拓扑/语义理解辅助预测 | PerReg+ (CVPR 2025) 含MR | 1 | ⭐⭐⭐ 可做但需区分 |
+| 知识蒸馏 | 压缩模型而非增强能力 | LaKD (NeurIPS 2024) | 1 | ✅ 非主要方向 |
 
 ## 论文总表
 
-| 论文 | 会议/年份 | 辅助任务类型 | 缺失能力 C | 开源 | 录入状态 |
-|---|---|---|---|---|---|
-| SSL-Interactions | arxiv 2024.01 | 预测式 | 交互理解 | ✅ | ✅ 已录入 |
-| CCTR | AAAI 2024 | 规正式（后处理） | 置信度校准 | ❌ | ✅ 已录入 |
-| UniTraj | ECCV 2024 | 框架（非辅助任务） | 跨域泛化 | ✅ | ✅ 已录入 |
-| Plan-MAE | arxiv 2025.07 | 重构式 | 场景理解 | ❓ | ✅ 已录入 |
-| TPK | arxiv 2025.05 | 可微物理损失 | 运动学可行性 | ❓ | ✅ 已录入 |
-| Progressive Pretext | ECCV 2024 | 预测式 | 行人交互 | ❓ | 📝 待读全文 |
-| PreCLN | Neurocomputing 2022 | 对比式 | 表示结构 | ❓ | 📝 待读 |
-| Contrastive MAE | RAS 2025 | 重构+对比 | 表示结构 | ❓ | 📝 待读 |
+| 论文 | 会议 | 辅助任务类型 | 缺失能力 C | 代码 | 卡片状态 | 冲塔怪审 |
+|---|---|---|---|---|---|---|
+| SSL-Interactions | arxiv 2024 | 预测式(A) | 交互理解 | ❌ | ✅ 卡片 | ⏳ |
+| CCTR | AAAI 2024 | 规正式后处理(B) | 置信度校准 | ❌ | ✅ 卡片 | ⏳ |
+| UniTraj | ECCV 2024 | 框架/评测(非辅助) | 跨域泛化(分析) | ✅ | ✅ 卡片 | ⏳ |
+| Plan-MAE | arxiv 2025.07 | 重构式(C) | 场景理解 | ❓ | ✅ 卡片(待补全文) | ⏳ |
+| TPK | arxiv 2025.05 | 可微物理(D) | 运动学可行性 | ❓ | ✅ 卡片(待补全文) | ⏳ |
+| TrajCLIP | NeurIPS 2024 | 规正式-对比(B) | 表示结构 | ❌ | ✅ 卡片 | ⏳ |
+| PerReg+ | CVPR 2025 | 重构式+规正式(C+B) | 表示+泛化 | ❓ | ✅ 卡片 | ⏳ |
+| LaKD | NeurIPS 2024 | 知识蒸馏(辅助) | 模型压缩/轻量 | ❓ | ✅ 卡片 | ⏳ |
 
-## 已知失败方向 / 被验证无效的尝试
+## 子方向覆盖矩阵
+
+详见 [TAXONOMY.md](TAXONOMY.md)
+
+## 已知失败方向
 
 详见 [meta/dead-ends.md](meta/dead-ends.md)
 
