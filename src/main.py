@@ -399,41 +399,52 @@ def main() -> None:
                 if has_output():
                     print()
                 session_id = _run_suggest_loop(ctx, session_id)
-            except KeyboardInterrupt:
-                _stop_esc_listener()
-                print("\n[中断]")
-                try:
-                    guide = input("指导: ").strip()
-                except (EOFError, KeyboardInterrupt):
-                    guide = ""
-                if guide:
-                    on_token, has_output = _make_display()
-                    sid = [session_id]
-                    _start_esc_listener()
+            except BaseException as e:
+                # ── KeyboardInterrupt：用户主动中断 ──
+                if isinstance(e, KeyboardInterrupt):
+                    _stop_esc_listener()
+                    print("\n[中断]")
                     try:
-                        run_conversation(
-                            ctx, guide, on_token, _on_tool,
-                            on_progress=lambda sid=sid: sid.__setitem__(0, save_session(ctx.all, sid[0])),
-                            session_id=session_id,
-                        )
-                    finally:
-                        _stop_esc_listener()
-                    session_id = sid[0]
-                    if has_output():
-                        print()
-            except Exception as e:
+                        guide = input("指导: ").strip()
+                    except (EOFError, KeyboardInterrupt):
+                        guide = ""
+                    if guide:
+                        on_token, has_output = _make_display()
+                        sid = [session_id]
+                        _start_esc_listener()
+                        try:
+                            run_conversation(
+                                ctx, guide, on_token, _on_tool,
+                                on_progress=lambda sid=sid: sid.__setitem__(0, save_session(ctx.all, sid[0])),
+                                session_id=session_id,
+                            )
+                        finally:
+                            _stop_esc_listener()
+                        session_id = sid[0]
+                        if has_output():
+                            print()
+                    continue
+
+                # ── SystemExit(0)：正常退出 ──
+                if isinstance(e, SystemExit) and e.code == 0:
+                    break
+
                 # ── 自愈系统：分析崩溃 → 回滚 → 重试 ──
-                analysis = analyze_crash(type(e), e, e.__traceback__)
-                if analysis["recoverable"]:
-                    restored = execute_rollback(analysis["rollback_candidates"])
-                    report = build_report(analysis, restored)
-                    ctx.log.append({"role": "system", "content": report, "_volatile": True})
-                    session_id = save_session(ctx.all, session_id)
-                    print(f"\n⚠️ 崩溃检测: 已回滚 {len(restored)} 个文件，注入诊断上下文，重试中...\n")
-                    continue  # 回到 while 循环，LLM 将看到崩溃报告
-                else:
-                    logger.error("对话出错: %s", e)
-                    print(f"\n  请求失败: {e}\n")
+                if isinstance(e, Exception):
+                    analysis = analyze_crash(type(e), e, e.__traceback__)
+                    if analysis["recoverable"]:
+                        restored = execute_rollback(analysis["rollback_candidates"])
+                        report = build_report(analysis, restored)
+                        ctx.log.append({"role": "system", "content": report, "_volatile": True})
+                        session_id = save_session(ctx.all, session_id)
+                        print(f"\n⚠️ 崩溃检测: 已回滚 {len(restored)} 个文件，注入诊断上下文，重试中...\n")
+                        continue
+
+                # ── 非 Exception 的 BaseException（SystemExit 非零等）──
+                logger.error("对话出错: %s", e)
+                print(f"\n  请求失败: {e}\n")
+                if isinstance(e, SystemExit):
+                    break
     finally:
         # 只有存在至少一条 assistant 回复时才保存（避免网络错误等空会话落盘）
         has_response = any(m["role"] == "assistant" for m in ctx.all)
