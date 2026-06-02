@@ -578,6 +578,9 @@ def read_file_lines(path: str, start_line: int | None = None, end_line: int | No
 def write_file(path: str, content: str) -> str:
     """创建或覆写文件。写入前自动备份，.py 文件自动语法校验。"""
     filepath = _resolve(path)
+    from ..guard import is_protected
+    if is_protected(filepath):
+        return f"⛔ 受保护文件，禁止修改: {path}\n该文件是系统自愈模块，修改它可能导致系统无法自动恢复。"
     backup = _backup(filepath) if filepath.exists() else None
     try:
         filepath.parent.mkdir(parents=True, exist_ok=True)
@@ -603,6 +606,9 @@ def edit_file_lines(path: str, action: str, start_line: int,
     """行级编辑文件。"""
     filepath = _resolve(path)
     _assert_file(filepath)
+    from ..guard import is_protected
+    if is_protected(filepath):
+        return f"⛔ 受保护文件，禁止修改: {path}\n该文件是系统自愈模块，修改它可能导致系统无法自动恢复。"
 
     # 读取原文件
     try:

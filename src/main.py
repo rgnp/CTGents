@@ -12,6 +12,7 @@ logging.basicConfig(
     datefmt="%H:%M:%S",
 )
 
+from .guard import analyze_crash, build_report, execute_rollback
 from .cache_context import CacheContext
 from .commands import dispatch as dispatch_cmd
 from .config import SESSION_DIR
@@ -421,8 +422,18 @@ def main() -> None:
                     if has_output():
                         print()
             except Exception as e:
-                logger.error("对话出错: %s", e)
-                print(f"\n  请求失败: {e}\n")
+                # ── 自愈系统：分析崩溃 → 回滚 → 重试 ──
+                analysis = analyze_crash(type(e), e, e.__traceback__)
+                if analysis["recoverable"]:
+                    restored = execute_rollback(analysis["rollback_candidates"])
+                    report = build_report(analysis, restored)
+                    ctx.log.append({"role": "system", "content": report, "_volatile": True})
+                    session_id = save_session(ctx.all, session_id)
+                    print(f"\n⚠️ 崩溃检测: 已回滚 {len(restored)} 个文件，注入诊断上下文，重试中...\n")
+                    continue  # 回到 while 循环，LLM 将看到崩溃报告
+                else:
+                    logger.error("对话出错: %s", e)
+                    print(f"\n  请求失败: {e}\n")
     finally:
         # 只有存在至少一条 assistant 回复时才保存（避免网络错误等空会话落盘）
         has_response = any(m["role"] == "assistant" for m in ctx.all)
