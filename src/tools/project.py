@@ -2,6 +2,7 @@
 
 import json
 import re
+import time
 from pathlib import Path
 
 # ── 工具定义 ──
@@ -459,14 +460,30 @@ def scan_project(path: str | None = None, depth: int = 2,
 # ── 项目上下文注入 ──
 
 
+
+# ── 项目上下文缓存 ──（前缀缓存保字节一致，避免每次重建前缀时重复扫描）
+_PROJECT_CONTEXT_CACHE_TTL = 300  # 5 分钟，和 list_files 缓存一致
+_project_context_cache: tuple[float, str, str] | None = None  # (ts, path, result)
+
+
 def get_project_context(path: str | None = None) -> str | None:
     """生成项目上下文摘要，用于注入 system prompt。
     返回简洁的文本描述，如果项目无有效信息则返回 None。
+    结果 5 分钟缓存（前缀缓存保字节一致，避免重建前缀时重复扫描）。
     """
     root = Path(path).resolve() if path else Path.cwd()
 
     if not root.exists() or not root.is_dir():
         return None
+
+    # ── 缓存命中 ──
+    global _project_context_cache
+    now = time.time()
+    root_str = str(root)
+    if _project_context_cache is not None:
+        ts, cached_path, result = _project_context_cache
+        if (now - ts) < _PROJECT_CONTEXT_CACHE_TTL and cached_path == root_str:
+            return result
 
     info = _detect_language_and_framework(root)
 
@@ -487,7 +504,9 @@ def get_project_context(path: str | None = None) -> str | None:
     if not parts and not commands:
         # 至少检测一下 Git
         if (root / ".git").exists():
-            return f"当前项目: {root.name}（Git 仓库）"
+            result = f"当前项目: {root.name}（Git 仓库）"
+            _project_context_cache = (now, root_str, result)
+            return result
         return None
 
     context = f"当前项目: {root.name}"
@@ -495,7 +514,7 @@ def get_project_context(path: str | None = None) -> str | None:
         context += f" | {'，'.join(parts)}"
     if commands:
         context += f" | {'，'.join(commands)}"
-
+    _project_context_cache = (now, root_str, context)
     return context
 
 

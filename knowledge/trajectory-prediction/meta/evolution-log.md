@@ -23,6 +23,14 @@
 - **收益**：纯文档提交 ~20s → ~0.5s；代码提交不受影响
 - **文件**：`src/tools/git.py`
 
+### get_project_context 无缓存 → 前缀重建重复扫描项目
+
+- **触发**：前缀每次重建（/new / /clear）都扫描项目文件系统
+- **根因**：`get_project_context()` 无缓存，`_detect_language_and_framework()` 每次做文件 I/O
+- **修复**：加 300s TTL 缓存（`_project_context_cache`），基于 path 匹配。同时保证 env + project 字节稳定 → 不破坏 DeepSeek 前缀缓存命中
+- **收益**：同一会话内多次前缀重建不做重复扫描
+- **文件**：`src/tools/project.py`
+
 ---
 
 ## 2026-06-01
