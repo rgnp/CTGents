@@ -1014,14 +1014,21 @@ def register_plugin_commands() -> None:
             continue
         if isinstance(cmds, dict):
             for cmd_name, handler in cmds.items():
-                c = Command(name=cmd_name, handler=handler)
-                _add_cmd(c)
+                if not callable(handler):
+                    logger.warning("插件命令 %s 的 handler 不可调用，跳过", cmd_name)
+                    continue
+                _add_cmd(Command(name=cmd_name, handler=handler))
         elif isinstance(cmds, list):
             for c in cmds:
                 if isinstance(c, Command):
                     _add_cmd(c)
                 elif isinstance(c, dict) and "name" in c:
+                    extra = set(c) - _cmd_fields
+                    if extra:
+                        logger.warning("插件命令 %s 包含未知字段: %s", c["name"], extra)
                     _add_cmd(Command(**{k: v for k, v in c.items() if k in _cmd_fields}))
+                else:
+                    logger.warning("插件 COMMANDS 列表项格式无效: %s", type(c).__name__)
 
 # 启动时加载插件指令
 register_plugin_commands()

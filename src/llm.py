@@ -445,11 +445,14 @@ def _stats_path(session_id: str) -> Path:
 
 
 def _load_cache_stats(session_id: str) -> dict[str, dict]:
-    """从文件加载指定会话的统计，文件不存在则返回空统计。"""
+    """从文件加载指定会话的统计，文件不存在或损坏则返回空统计。"""
     try:
         p = _stats_path(session_id)
         if p.exists():
             data = json.loads(p.read_text(encoding="utf-8"))
+            if not isinstance(data, dict):
+                logger.warning("stats file corrupted (not a dict), resetting")
+                return {"flash": dict(_EMPTY_STATS), "pro": dict(_EMPTY_STATS)}
             for model in ("flash", "pro"):
                 if model not in data:
                     data[model] = dict(_EMPTY_STATS)
@@ -539,23 +542,22 @@ def _update_cache_stats(model_key: str, messages: list[dict], session_id: str = 
 
 
 def get_cache_stats(session_id: str = "") -> dict:
-    """返回指定会话的缓存命中统计，供 /context 使用。
-
-    传 session_id 查其他会话，不传则返回当前会话。
-    返回值: {"models": {"flash": {...}, "pro": {...}}, "total": {...}}
-    """
+    """返回指定会话的缓存命中统计，供 /context 使用。"""
     if session_id and session_id != _current_session_id:
         data = _load_cache_stats(session_id)
     else:
         data = _CACHE_STATS
 
+    if not isinstance(data, dict):
+        data = {"flash": dict(_EMPTY_STATS), "pro": dict(_EMPTY_STATS)}
+
     models: dict[str, dict] = {}
     total = dict(_EMPTY_STATS)
     for key, stats in data.items():
-        if key in ("flash", "pro"):
+        if key in ("flash", "pro") and isinstance(stats, dict):
             models[key] = dict(stats)
             for k in total:
-                total[k] += stats[k]
+                total[k] += stats.get(k, 0)
     return {"models": models, "total": total}
 # 对话循环（核心）
 # ═══════════════════════════════════════════════════════════════

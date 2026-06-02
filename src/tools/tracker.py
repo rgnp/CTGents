@@ -164,8 +164,8 @@ def get_stats() -> dict:
         if not ok:
             tool_fail[t] += 1
         dur = r.get("duration_ms", 0)
-        if dur > 0:
-            tool_dur[t].append(dur)
+        if isinstance(dur, (int, float)) and dur > 0:
+            tool_dur[t].append(float(dur))
         keys = tuple(r.get("args_keys", []))
         tool_args_patterns[t][keys] += 1
 
