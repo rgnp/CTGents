@@ -79,7 +79,8 @@ def _make_env_message() -> dict:
         "content": (
             "当前环境：\n"
             f"- 操作系统: {platform.system()} {platform.release()}\n"
-            "\n以上为运行环境信息，不需要在回复中复述或罗列。"
+            "\n以上为运行环境信息，不需要在回复中复述或罗列。\n\n"
+            "你拥有长期记忆，需要时用 recall 搜索相关记忆。"
         ),
         # 注意：不设 _volatile，此消息属于不可变 prefix
     }
@@ -252,10 +253,6 @@ def main() -> None:
     if proj_ctx:
         prefix_msgs.append(proj_ctx)
     ctx.rebuild_prefix(prefix_msgs)
-    # ── 动态上下文（log 区，不影响前缀缓存） ──
-    mem_ctx = _make_memory_context()
-    if mem_ctx:
-        ctx.log.append(mem_ctx)
     from .safety import get_mode_summary
     ctx.log.append({"role": "system", "content": get_mode_summary(), "_volatile": True})
     # ── 失败反思 ──
@@ -325,7 +322,7 @@ def main() -> None:
                     _print_recent(ctx.all)
                 if r.clear:
                     ctx.clear_log()
-                    # 重建 prefix（环境上下文 + 项目感知 + 记忆索引 + 安全模式）
+                    # 重建 prefix（环境上下文 + 项目感知）
                     prefix = []
                     try:
                         from .tools.rag import get_index_status
@@ -345,10 +342,6 @@ def main() -> None:
                     if proj_ctx:
                         prefix.append(proj_ctx)
                     ctx.rebuild_prefix(prefix)
-                    # ── 动态上下文（log 区，不影响前缀缓存） ──
-                    mem_ctx = _make_memory_context()
-                    if mem_ctx:
-                        ctx.log.append(mem_ctx)
                     from .safety import get_mode_summary
                     ctx.log.append({"role": "system", "content": get_mode_summary(), "_volatile": True})
                     # ── 失败反思 ──

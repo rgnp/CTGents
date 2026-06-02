@@ -729,6 +729,14 @@ def _compact_cache_context(ctx, user_input: str) -> None:
             "content": f"⏪ 对话摘要：{brief}",
         })
     new_log.extend(log[retain_start:])
+    # ── 后处理：压缩仍保留的过长工具结果 ──
+    # 被保留但太长的工具结果也做截断，因为内容已被消费
+    for i, msg in enumerate(new_log):
+        if msg.get("role") == "tool" and msg.get("_tool_result_compressed"):
+            content = msg.get("content", "")
+            if len(content) > _TOOL_RESULT_COMPRESS_THRESHOLD:
+                tool_name = msg.get("_tool_name", "")
+                msg["content"] = _compress_tool_result(tool_name, content)
     log[:] = new_log
     logger.info("上下文压缩完成：保留 %d/%d 条消息", len(log), len(log) + len(to_archive))
 
@@ -1197,6 +1205,8 @@ def run_conversation(
                         "role": "tool",
                         "tool_call_id": tc_data["id"],
                         "content": result,
+                        "_tool_name": tool_name,
+                        "_tool_result_compressed": True,  # 标记可压缩
                     })
                 # 记忆变更后更新 ctx.log 中的记忆索引
                 from .tools.memory import get_context, is_dirty, clear_dirty
