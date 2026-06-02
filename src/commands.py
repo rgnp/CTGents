@@ -119,6 +119,7 @@ def _cmd_rename(r: CmdResult, _ctx, args, sid) -> None:
         rename_session(sid, name)
         r.message = f"会话已重命名为: {name}"
     else:
+        r.message = f"当前没有活跃会话，下次保存时将使用名称: {name}"
         r.save = True
 
 
@@ -194,7 +195,11 @@ def _cmd_new(r: CmdResult, _ctx, _args, _sid) -> None:
 
 @builtin("/pop", description="撤回最后一条对话", usage="/pop [数量]")
 def _cmd_pop(r: CmdResult, ctx, args, _sid) -> None:
-    n = int(args[0]) if args else 1
+    try:
+        n = int(args[0]) if args else 1
+    except ValueError:
+        r.message = f"无效参数: {args[0]}，用法: /pop [数量]"
+        return
     removed = 0
     log = ctx.log
     for _ in range(n):
@@ -217,10 +222,16 @@ def _cmd_export(r: CmdResult, ctx, args, sid) -> None:
         except ValueError:
             name_parts = args
 
+    # 安全检查：防止路径穿越
     name = " ".join(name_parts) if name_parts else (get_session_name(sid) if sid else "export")
-    filename = f"{name}.md" if not name.endswith(".md") else name
+    safe_name = name.replace("\\", "/").split("/")[-1]  # 只取文件名部分
+    if not safe_name:
+        safe_name = "export"
+    filename = f"{safe_name}.md" if not safe_name.endswith(".md") else safe_name
 
     messages = list(ctx.all)
+    ...
+    filepath = Path(filename)
     if count is not None:
         rounds, n = [], 0
         for m in reversed(messages):
@@ -260,14 +271,16 @@ def _cmd_edit(r: CmdResult, ctx, args, _sid) -> None:
         return
     new_text = " ".join(args)
     log = ctx.log
+    edited = False
     while log and log[-1]["role"] != "user":
         log.pop()
     if log and log[-1]["role"] == "user":
         log.pop()
+        edited = True
     log.append({"role": "user", "content": new_text})
     r.save = True
     r.retry = True
-    r.message = f"已修改: {new_text}"
+    r.message = f"已修改: {new_text}" if edited else f"未找到可修改的对话，已追加: {new_text}"
 
 @builtin("/run", description="直接调用工具", usage="/run <工具名> <参数=值...>")
 def _cmd_run(r: CmdResult, _ctx, args, _sid) -> None:
@@ -413,6 +426,7 @@ def _cmd_status(r: CmdResult, ctx, _args, sid) -> None:
         "",
         "── 当前会话 ──",
         f"  当前模型:     {get_current_model_name()}（{get_current_model_id()}）",
+        f"  上下文用量:    {used_tokens:,} / {MAX_CONTEXT_TOKENS:,} token ({usage_pct:.1f}%)",
         f"  工具循环阈值:   {TOOL_LOOP_THRESHOLD:.0%}",
         f"  工具结果预算:   {TOOL_RESULT_BUDGET:.0%}",
         f"  Token/字符:     {TOKEN_PER_CHAR}",
@@ -439,6 +453,8 @@ def _cmd_mode(r: CmdResult, _ctx, args, _sid) -> None:
         return
     ok, msg = set_mode(args[0])
     r.message = msg
+    if ok:
+        r.save = True
 
 
 @builtin_multi(["/trust", "/allow"], description="信任工具（本会话自动放行）", usage="/trust <工具名>")
@@ -477,18 +493,27 @@ def _cmd_compact(r: CmdResult, ctx, args, _sid) -> None:
             except ValueError:
                 r.message = f"无效参数: {args[0]}，用法: /compact [all|keep=N]"
                 return
+        else:
+            r.message = f"无效参数: {args[0]}，用法: /compact [all|keep=N]"
+            return
 
     original_len = len(ctx)
 
     if keep == 0:
-        # /compact all：全量压缩（话题切换模式）
-        # 临时构建扁平列表给 _compact_context
+        # /compact all：保留 prefix，log 替换为摘要
         user_input = "换个话题，重新开始"
         result = _compact_context(ctx.all, user_input)
-        # 回写：prefix 取前面的 system 消息，log 取后面的
-        prefix_end = sum(1 for m in result if m.get("role") == "system" and "⏪" not in (m.get("content") or ""))
-        pfx_count = min(prefix_end, len(ctx.prefix))
-        ctx.rebuild_prefix(result[:pfx_count])
+        # result 是一个扁平列表，prefix 部分（最前面的 system 消息）保留，
+        # 其余放入 log
+        pfx_end = 0
+        for m in result:
+            if m.get("role") != "system":
+                break
+            pfx_end += 1
+        # 只保留与当前 prefix 匹配的 system 消息数
+        pfx_count = min(pfx_end, len(ctx.prefix))
+        if pfx_count > 0:
+            ctx.rebuild_prefix(result[:pfx_count])
         ctx.log[:] = result[pfx_count:]
     else:
         # /compact 或 /compact keep=N：按轮数保留
@@ -678,10 +703,14 @@ def _cmd_context(r: CmdResult, ctx, _args, _sid) -> None:
     # API 缓存命中统计（按模型区分）
     from .llm import get_cache_stats
     cache = get_cache_stats(_sid)
-    if isinstance(cache, dict) and "total" not in cache:
-        cache = {"models": {}, "total": cache}
-    total = cache["total"]
-    if total["requests"] > 0:
+    if not isinstance(cache, dict):
+        cache = {"models": {}, "total": {"requests": 0, "prompt_tokens": 0, "completion_tokens": 0,
+                 "cache_hit_tokens": 0, "cache_miss_tokens": 0}}
+    if "total" not in cache:
+        cache = {"models": cache, "total": {"requests": 0, "prompt_tokens": 0, "completion_tokens": 0,
+                 "cache_hit_tokens": 0, "cache_miss_tokens": 0}}
+    total = cache.get("total", {})
+    if total.get("requests", 0) > 0:
         lines.append("")
         lines.append("── API 统计（按模型） ──")
 
@@ -896,7 +925,7 @@ def _cmd_stats(r: CmdResult, _ctx, args, _sid) -> None:
         return
 
     stats = get_stats()
-    if stats.get("total", 0) == 0:
+    if not stats or stats.get("total", 0) == 0:
         r.message = "暂无工具调用记录"
         return
 
@@ -910,15 +939,15 @@ def _cmd_stats(r: CmdResult, _ctx, args, _sid) -> None:
     # 按分类
     parts.append("## 按分类")
     for cat, info in sorted(stats.get("by_category", {}).items()):
-        parts.append(f"  [{cat}] {info['calls']} 次调用, {info['fail']} 次失败")
+        parts.append(f"  [{cat}] {info.get('calls', 0)} 次调用, {info.get('fail', 0)} 次失败")
     parts.append("")
 
     # 最常用工具 top 10
     parts.append("## 最常用工具 Top 10")
     for t in stats.get("top_tools", []):
-        pct = t["success_rate"]
-        avg = t["avg_duration_ms"]
-        parts.append(f"  {t['name']:<24} {t['calls']:>4}次  成功率{pct:>5}%  均耗时{avg:>6}ms")
+        pct = t.get("success_rate", 0)
+        avg = t.get("avg_duration_ms", 0)
+        parts.append(f"  {t.get('name', '?'):<24} {t.get('calls', 0):>4}次  成功率{pct:>5}%  均耗时{avg:>6}ms")
     parts.append("")
 
     # 最慢工具 Top 5
@@ -964,6 +993,8 @@ def _cmd_stats(r: CmdResult, _ctx, args, _sid) -> None:
 def dispatch(user_input: str, ctx: CacheContext, session_id: str | None) -> CmdResult:
     r = CmdResult()
     parts = user_input.split()
+    if not parts:
+        return r
     cmd = parts[0].lower()
     args = parts[1:]
 
@@ -976,11 +1007,11 @@ def dispatch(user_input: str, ctx: CacheContext, session_id: str | None) -> CmdR
 def register_plugin_commands() -> None:
     """扫描插件，将其 COMMANDS 注册到指令系统。"""
     from .tools.plugin_mgr import _plugins
+    _cmd_fields = {"name", "description", "usage", "handler"}
     for mod in _plugins.values():
         cmds = getattr(mod, "COMMANDS", None)
         if cmds is None:
             continue
-        # 支持两种格式：list[Command] 或 dict{name: handler}
         if isinstance(cmds, dict):
             for cmd_name, handler in cmds.items():
                 c = Command(name=cmd_name, handler=handler)
@@ -990,7 +1021,7 @@ def register_plugin_commands() -> None:
                 if isinstance(c, Command):
                     _add_cmd(c)
                 elif isinstance(c, dict) and "name" in c:
-                    _add_cmd(Command(**c))
+                    _add_cmd(Command(**{k: v for k, v in c.items() if k in _cmd_fields}))
 
 # 启动时加载插件指令
 register_plugin_commands()
