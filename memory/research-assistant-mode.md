@@ -1,9 +1,9 @@
 ---
 name: research-assistant-mode
-description: 研究助手模式 v1.0：AI 作为冲塔怪的研究外脑
+description: 研究助手模式 v1.1
 metadata:
   type: strategy
-  updated: 2026-06-01T08:20:54Z
+  updated: 2026-06-02T00:09:37Z
 ---
 
-研究助手模式 v1.0：AI 作为冲塔怪的研究外脑。两种工作模式：A) 自主积累——扫描新论文、更新空白、生成跨领域假说；B) 按需指导——方向建议按"现状判断→可选方向→推荐→下一步"框架回答。深度可调（简单说/默认/详细分析）。所有洞察必须标注置信度（✅🔶⚪）。知识库联动：papers/gaps/cross-domain-ideas/dead-ends/topics/INDEX/TAXONOMY 七个文件按规则更新。规范文件在 knowledge/trajectory-prediction/meta/research-assistant-mode.md
+研究助手模式 v1.1。AI 作为冲塔怪的研究外脑。两种运转模式：A) 自主积累 B) 按需指导。核心硬约束（v1.1 新增）：铁律——任何方向建议、空白判断、假说推断必须有证据标签 [论文:xxx]/[空白:gaps.md#X]/[跨界:xxx]/[搜索:xxx]，查不到来源=幻觉=禁止输出。✅确认需≥2来源或1论文+逻辑，🔶推断需1相关来源，⚪猜测不得作为推荐建议。规范文件在 knowledge/trajectory-prediction/meta/research-assistant-mode.md

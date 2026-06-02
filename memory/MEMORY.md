@@ -1,7 +1,7 @@
 - [agent-tool-usage-efficiency](agent-tool-usage-efficiency.md) — 模型工具调用自检规则：
 - [ai-agent-dev-standards-six-dimensions](ai-agent-dev-standards-six-dimensions.md) — 基于 GitHub 2500+ 案例研究的 AI Agent
 - [dev-workflow-docs-must-sync](dev-workflow-docs-must-sync.md) — 任何功能开发完成后必须同步更新以下文档（写代码只是完成了一半
-- [research-assistant-mode](research-assistant-mode.md) — 研究助手模式 v1.0：AI 作为冲塔怪的研究外脑
+- [research-assistant-mode](research-assistant-mode.md) — 研究助手模式 v1.1
 - [test-sync-rule](test-sync-rule.md) — 增删改功能时，测试必须同步更新
 - [token-efficiency-principle](token-efficiency-principle.md) — 设计任何新功能时必须考虑 token 效率：
 - [user-grade](user-grade.md) — 用户是2025年入学的研究生，当前为研一（硕士一年级）学生
