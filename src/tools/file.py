@@ -9,6 +9,11 @@ from pathlib import Path
 # ── list_files 缓存 ──
 _LIST_CACHE_TTL = 300   # 秒（同 web 工具一致，5 分钟）
 _list_cache: dict[str, tuple[float, str]] = {}
+# ── 文件内容缓存 ──（read_file / read_file_lines 共用）
+_FILE_CACHE_TTL = 60    # 秒，短 TTL 避免读取过期内容
+_FILE_CACHE_MAX = 50    # 最大条目数
+_file_cache: dict[str, tuple[float, float, str]] = {}  # key → (ts, mtime, content)
+# ── 备份目录 ──
 # ── 备份目录 ──
 BACKUP_DIR = Path.home() / ".agent_backups"
 
@@ -506,6 +511,45 @@ def _list_backups(filepath: Path) -> list[Path]:
 # ── 读取 ──
 
 
+def _read_cached(path: Path) -> str:
+    """从缓存读取文件内容，未命中或过期则重新读取。基于 mtime 验证。"""
+    key = str(path.resolve())
+    meta = _file_cache.get(key)
+    now = time.time()
+    if meta is not None:
+        ts, cached_mtime, content = meta
+        try:
+            actual_mtime = path.stat().st_mtime
+        except OSError:
+            actual_mtime = 0
+        if (now - ts) < _FILE_CACHE_TTL and cached_mtime == actual_mtime:
+            return content
+    # 未命中或过期：重新读取
+    try:
+        raw = path.read_text(encoding="utf-8")
+    except UnicodeDecodeError:
+        return None  # 标记二进制文件
+    mtime = path.stat().st_mtime
+    _file_cache[key] = (now, mtime, raw)
+    # 上限淘汰
+    if len(_file_cache) > _FILE_CACHE_MAX:
+        oldest = min(_file_cache.keys(), key=lambda k: _file_cache[k][0])
+        del _file_cache[oldest]
+    return raw
+
+
+def read_file(path: str) -> str:
+    """读取本地文件内容。"""
+    filepath = _resolve(path)
+    if not filepath.exists():
+        return f"文件不存在: {path}"
+    if not filepath.is_file():
+        return f"路径不是文件: {path}"
+    raw = _read_cached(filepath)
+    if raw is None:
+        return f"无法以 UTF-8 编码读取: {path}（可能是二进制文件）"
+    return raw
+
 def read_file(path: str) -> str:
     """读取本地文件内容。"""
     filepath = _resolve(path)
@@ -524,10 +568,10 @@ def read_file_lines(path: str, start_line: int | None = None, end_line: int | No
     filepath = _resolve(path)
     _assert_file(filepath)
 
-    try:
-        lines = filepath.read_text(encoding="utf-8").split("\n")
-    except UnicodeDecodeError:
+    raw = _read_cached(filepath)
+    if raw is None:
         return f"无法以 UTF-8 编码读取: {path}（可能是二进制文件）"
+    lines = raw.split("\n")
 
     total = len(lines)
     s = max(1, start_line or 1)

@@ -477,29 +477,39 @@ def git_review(path: str | None = None) -> str:
     if static_issues:
         static_part = "## 静态检查发现的问题\n" + "\n".join(f"- {s}" for s in static_issues) + "\n"
 
-    # ── LLM 审查（用快速模型，省 token） ──
-    from ..llm import _invoke_llm, auto_select_model
+    # ── LLM 审查（仅对代码文件，纯文档跳过以节省 ~15s）──
+    CODE_EXTENSIONS = {".py", ".rs", ".go", ".js", ".ts", ".c", ".cpp", ".h", ".hpp",
+                       ".sh", ".toml", ".yaml", ".yml", ".json", ".tf", ".proto"}
+    has_code_changes = any(
+        any(f.endswith(ext) for ext in CODE_EXTENSIONS)
+        for f in changed_files
+    ) if changed_files else False
 
-    review_prompt = (
-        "审查以下代码 diff，只关注真正重要的问题，不要水话。\n"
-        "按严重程度输出（critical > warning > info），无事则说'无问题'。\n"
-        "检查项：\n"
-        "- 是否漏了错误处理（返回值没检查、异常没捕获）\n"
-        "- 是否改了接口但没改调用方\n"
-        "- 是否有多余代码（死代码、注释掉的代码）\n"
-        "- 性能问题（N+1 查询、不必要的大对象拷贝）\n"
-        "- 安全问题（eval、shell injection 风险）\n\n"
-        f"```diff\n{diff}\n```"
-    )
+    if not has_code_changes:
+        llm_review = "（纯文档/配置变更，跳过 LLM 审查）"
+    else:
+        from ..llm import _invoke_llm, auto_select_model
 
-    try:
-        backend = auto_select_model(review_prompt)  # 快速模型
-        llm_review, _ = _invoke_llm(backend, [
-            {"role": "system", "content": "你是一个代码审查助手。只说关键问题，不要凑字数。"},
-            {"role": "user", "content": review_prompt},
-        ], lambda _: None)
-    except Exception as e:
-        llm_review = f"（LLM 审查失败: {e}）"
+        review_prompt = (
+            "审查以下代码 diff，只关注真正重要的问题，不要水话。\n"
+            "按严重程度输出（critical > warning > info），无事则说'无问题'。\n"
+            "检查项：\n"
+            "- 是否漏了错误处理（返回值没检查、异常没捕获）\n"
+            "- 是否改了接口但没改调用方\n"
+            "- 是否有多余代码（死代码、注释掉的代码）\n"
+            "- 性能问题（N+1 查询、不必要的大对象拷贝）\n"
+            "- 安全问题（eval、shell injection 风险）\n\n"
+            f"```diff\n{diff}\n```"
+        )
+
+        try:
+            backend = auto_select_model(review_prompt)  # 快速模型
+            llm_review, _ = _invoke_llm(backend, [
+                {"role": "system", "content": "你是一个代码审查助手。只说关键问题，不要凑字数。"},
+                {"role": "user", "content": review_prompt},
+            ], lambda _: None)
+        except Exception as e:
+            llm_review = f"（LLM 审查失败: {e}）"
 
     # 确认有 diff 内容
     diff_stat = f"共 {len(changed_files)} 个文件, diff 大小 {len(diff)} 字符"
