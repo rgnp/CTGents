@@ -170,14 +170,9 @@ def install_plugin(name: str, code: str) -> str:
 
 
 def _register_plugin_commands(name: str) -> None:
-    """如果插件定义了 COMMANDS，注册到全局指令系统。"""
-    mod = _plugins.get(name)
-    if mod is None or not hasattr(mod, "COMMANDS"):
-        return
-    # 延迟导入避免循环依赖
-    from ..commands import COMMANDS
-    for cmd_name, handler in mod.COMMANDS.items():
-        COMMANDS[cmd_name] = handler
+    """通知指令系统重新扫描插件的 COMMANDS 并注册。"""
+    from ..commands import register_plugin_commands
+    register_plugin_commands()
 
 
 def list_plugins() -> str:

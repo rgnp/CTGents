@@ -45,7 +45,8 @@ def grep_code(pattern: str, path: str | None = None) -> str:
             result = subprocess.run(
                 cmd,
                 capture_output=True,
-                text=True,
+                encoding="utf-8",
+                errors="replace",
                 timeout=10,
             )
             output = result.stdout.strip()

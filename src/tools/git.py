@@ -238,7 +238,8 @@ def _git(args: list[str], cwd: str | None = None) -> dict:
         result = subprocess.run(
             ["git"] + args,
             capture_output=True,
-            text=True,
+            encoding="utf-8",
+            errors="replace",
             timeout=30,
             cwd=workdir,
         )
@@ -578,7 +579,6 @@ def _generate_commit_message(repo_path: str) -> str:
             continue
         # git diff --name-status 格式: M file.py
         if line[0] in ("A", "M", "D", "R", "??"):
-            line[0]
             filename = line[1:].strip() if len(line) > 1 else ""
             if line.startswith("??") or line.startswith("A"):
                 added.append(filename)
@@ -708,7 +708,7 @@ def git_pr(title: str | None = None, body: str | None = None,
     # 尝试用 gh CLI
     try:
         gh_check = subprocess.run(
-            ["gh", "--version"], capture_output=True, text=True, timeout=5
+            ["gh", "--version"], capture_output=True, encoding="utf-8", errors="replace", timeout=5
         )
         gh_available = gh_check.returncode == 0
     except (FileNotFoundError, OSError):
@@ -737,7 +737,7 @@ def git_pr(title: str | None = None, body: str | None = None,
         args = ["gh", "pr", "create", "--base", base_branch, "--title", title, "--body", body]
         try:
             r = subprocess.run(
-                args, capture_output=True, text=True, timeout=30, cwd=workdir
+                args, capture_output=True, encoding="utf-8", errors="replace", timeout=30, cwd=workdir
             )
             if r.returncode == 0:
                 pr_url = r.stdout.strip()

@@ -12,7 +12,7 @@ from typing import TYPE_CHECKING
 
 from .config import SESSION_DIR
 from .cache_context import CacheContext, compute_prefix_hash
-from .session import get_session_name, list_sessions, rename_session
+from .session import delete_session, get_session_name, list_sessions, rename_session
 from .tools import execute_tool
 
 if TYPE_CHECKING:
@@ -109,7 +109,6 @@ def _cmd_clear(r: CmdResult, ctx, _args, _sid) -> None:
 @builtin("/save", description="强制保存当前会话")
 def _cmd_save(r: CmdResult, _ctx, _args, _sid) -> None:
     r.save = True
-    r.save = True
 @builtin("/rename", description="重命名当前会话", usage="/rename <名称>")
 def _cmd_rename(r: CmdResult, _ctx, args, sid) -> None:
     if not args:
@@ -123,9 +122,32 @@ def _cmd_rename(r: CmdResult, _ctx, args, sid) -> None:
         r.save = True
 
 
-@builtin_multi(["/sessions", "/ls"], description="列出历史会话")
+
+@builtin_multi(["/delete", "/rm"], description="删除历史会话", usage="/delete <编号>")
+def _cmd_delete(r: CmdResult, _ctx, args, _sid) -> None:
+    if not args:
+        r.message = "用法: /delete <编号>"
+        return
+    sessions = list_sessions()
+    try:
+        idx = int(args[0]) - 1
+        if 0 <= idx < len(sessions):
+            sid = sessions[idx]
+            if sid == _sid:
+                r.message = "不能删除当前会话，请先 /new 或 /load 切换到其他会话"
+                return
+            name = get_session_name(sid)
+            delete_session(sid)
+            r.message = f"已删除会话: {name}"
+        else:
+            r.message = f"无效编号，共 {len(sessions)} 个会话"
+    except ValueError:
+        r.message = f"无效编号: {args[0]}"
+
+
 @builtin_multi(["/sessions", "/ls"], description="列出历史会话")
 def _cmd_sessions(r: CmdResult, _ctx, _args, _sid) -> None:
+    sessions = list_sessions()
     if not sessions:
         r.message = "没有历史会话"
         return
@@ -378,9 +400,8 @@ def _cmd_status(r: CmdResult, ctx, _args, sid) -> None:
 
     # ── 上下文 ──
     all_msgs = ctx.all
-    len(all_msgs)
     used_tokens = count_messages_tokens(all_msgs)
-    used_tokens / MAX_CONTEXT_TOKENS * 100
+    usage_pct = used_tokens / MAX_CONTEXT_TOKENS * 100
 
     lines = [
         "╔══════════════════════════════╗",
@@ -392,10 +413,6 @@ def _cmd_status(r: CmdResult, ctx, _args, sid) -> None:
         "",
         "── 当前会话 ──",
         f"  当前模型:     {get_current_model_name()}（{get_current_model_id()}）",
-        f"  工具循环阈值:   {TOOL_LOOP_THRESHOLD:.0%}",
-        f"  工具结果预算:   {TOOL_RESULT_BUDGET:.0%}",
-        f"  Token/字符:     {TOKEN_PER_CHAR}",
-        f"  最大重试:       {MAX_RETRIES} 次",
         f"  工具循环阈值:   {TOOL_LOOP_THRESHOLD:.0%}",
         f"  工具结果预算:   {TOOL_RESULT_BUDGET:.0%}",
         f"  Token/字符:     {TOKEN_PER_CHAR}",
@@ -702,7 +719,6 @@ def _cmd_context(r: CmdResult, ctx, _args, _sid) -> None:
                       f"{t['prompt_tokens']+t['completion_tokens']:,} token  "
                       f"缓存 {t_hit_ratio:.0f}%")
 
-    non_system_msgs = [m for m in log_msgs if m.get("role") != "system"]
     non_system_msgs = [m for m in log_msgs if m.get("role") != "system"]
     recent_tokens = 0
     for m in non_system_msgs[-6:]:

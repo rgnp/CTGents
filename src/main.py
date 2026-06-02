@@ -15,7 +15,7 @@ logging.basicConfig(
 from .cache_context import CacheContext
 from .commands import dispatch as dispatch_cmd
 from .config import SESSION_DIR
-from .llm import TokenCallback, clear_interrupt, request_interrupt, run_conversation
+from .llm import TokenCallback, TOOL_LABELS, clear_interrupt, request_interrupt, run_conversation
 from .session import list_sessions, load_session, save_session
 
 # ═══════════════════════════════════════════════════════════════
@@ -63,26 +63,18 @@ def _make_project_context() -> dict | None:
     return {
         "role": "system",
         "content": context,
+        "_volatile": True,  # 每次启动重建，不持久化到会话文件
     }
 
 logger = logging.getLogger(__name__)
 
 
 def _make_env_message() -> dict:
-    """生成环境上下文系统消息。
-
-    重要：不包含任何动态内容（时间戳、cwd等），确保字节级一致
-    → DeepSeek 前缀缓存命中率最大化。
-    """
+    """生成环境上下文系统消息 — 极小化，不浪费缓存前缀 token。"""
     return {
         "role": "system",
-        "content": (
-            "当前环境：\n"
-            f"- 操作系统: {platform.system()} {platform.release()}\n"
-            "\n以上为运行环境信息，不需要在回复中复述或罗列。\n\n"
-            "你拥有长期记忆，需要时用 recall 搜索相关记忆。"
-        ),
-        # 注意：不设 _volatile，此消息属于不可变 prefix
+        "content": "你是一个终端编程助手，可以读写文件、执行命令、搜索代码、操作 git。",
+        "_volatile": True,
     }
 
 
@@ -93,6 +85,20 @@ def _make_memory_context() -> dict | None:
     if not ctx_str:
         return None
     return {"role": "system", "content": ctx_str, "_volatile": True}
+
+
+def _upsert_log_system(ctx: CacheContext, marker: str, msg: dict) -> None:
+    """在 log 中查找含 marker 的 system 消息，找到则原地替换，否则追加。
+
+    防止安全模式等动态 system 消息在 log 中累积。
+    替换发生在 log 末尾区域，不影响对话前缀缓存。
+    """
+    for i in range(len(ctx.log) - 1, -1, -1):
+        m = ctx.log[i]
+        if m.get("role") == "system" and marker in m.get("content", ""):
+            ctx.log[i] = msg
+            return
+    ctx.log.append(msg)
 
 
 # ── UI 辅助 ──
@@ -144,43 +150,6 @@ def _make_display() -> tuple[TokenCallback, Callable[[], bool]]:
     return on_token, has_output
 
 
-TOOL_LABELS: dict[str, str] = {
-    "search_web":    "搜索",
-    "read_page":     "阅读网页",
-    "read_file":     "读取文件",
-    "read_file_lines": "读取文件（带行号）",
-    "write_file":    "写入文件",
-    "edit_file_lines": "行级编辑",
-    "undo_edit":     "撤销编辑",
-    "list_files":    "浏览目录",
-    "delete_file":   "删除文件",
-    "count_lines":   "统计行数",
-    "run_python":    "执行代码",
-    "run_command":   "执行命令",
-    "grep_code":     "搜索代码",
-    "think":         "思考",
-    "remember":      "记住",
-    "recall":        "回忆",
-    "forget":        "忘记",
-    "install_plugin": "安装插件",
-    "list_plugins":   "列出插件",
-    "discover":       "能力扫描",
-    "plugin_spec":    "插件规范",
-    # Git 工具
-    "git_status":    "Git 状态",
-    "git_diff":      "Git 差异",
-    "git_log":       "Git 日志",
-    "git_commit":    "Git 提交",
-    "git_push":      "Git 推送",
-    "git_pr":        "Git PR",
-    "git_branch":    "Git 分支",
-    "scan_project":  "扫描项目",
-    "check_project": "规范检查",
-    "generate_agents_md": "生成规范",
-    "docs_sync_check": "文档同步检查",
-}
-
-
 def _on_tool(name: str, args: dict) -> None:
     label = TOOL_LABELS.get(name, name)
     detail = " ".join(f"{k}={v}" for k, v in args.items())
@@ -218,6 +187,35 @@ def _reload_dispatch():
     return True, f"已热加载：{'、'.join(loaded_items)}。LLM 下次请求将自动获取最新工具定义。"
 
 
+def _run_suggest_loop(ctx: CacheContext, session_id: str | None) -> str | None:
+    """主动建议 + 修复闭环：扫描工具调用记录，发现问题则询问用户是否修复。"""
+    try:
+        from .suggest import check as _suggest_check
+        tip, repair = _suggest_check()
+        if not tip:
+            return session_id
+        print(f"\n💡 {tip}")
+        ans = input("  要修吗？(Y/n) ").strip().lower()
+        if ans == "n":
+            return session_id
+        on_token, has_output = _make_display()
+        sid = [session_id]
+        _start_esc_listener()
+        try:
+            run_conversation(
+                ctx, repair, on_token, _on_tool,
+                on_progress=lambda sid=sid: sid.__setitem__(0, save_session(ctx.all, sid[0])),
+                session_id=session_id,
+            )
+        finally:
+            _stop_esc_listener()
+        if has_output():
+            print()
+        return sid[0]
+    except Exception:
+        return session_id
+
+
 # ── 主入口 ──
 
 def main() -> None:
@@ -252,10 +250,25 @@ def main() -> None:
     proj_ctx = _make_project_context()
     if proj_ctx:
         prefix_msgs.append(proj_ctx)
+    try:
+        from .tools.rag import get_index_status
+        rag_info = get_index_status()
+        if "未建立" not in rag_info:
+            prefix_msgs.append({
+                "role": "system",
+                "content": "RAG 索引已就绪，可用 rag_query 语义搜索代码。",
+                "_volatile": True,
+            })
+    except Exception:
+        pass
     ctx.rebuild_prefix(prefix_msgs)
+    # ── 动态上下文（log 区，不影响前缀缓存） ──
+    mem_ctx = _make_memory_context()
+    if mem_ctx:
+        ctx.log.append(mem_ctx)
     from .safety import get_mode_summary
-    ctx.log.append({"role": "system", "content": get_mode_summary(), "_volatile": True})
-    # ── 失败反思 ──
+    _upsert_log_system(ctx, "模式:",
+                       {"role": "system", "content": get_mode_summary(), "_volatile": True})
     try:
         from .tools.reflect import get_summary as _reflect_summary
         ref = _reflect_summary()
@@ -342,18 +355,13 @@ def main() -> None:
                     if proj_ctx:
                         prefix.append(proj_ctx)
                     ctx.rebuild_prefix(prefix)
+                    # ── 动态上下文（log 区，不影响前缀缓存） ──
+                    mem_ctx = _make_memory_context()
+                    if mem_ctx:
+                        ctx.log.append(mem_ctx)
                     from .safety import get_mode_summary
-                    ctx.log.append({"role": "system", "content": get_mode_summary(), "_volatile": True})
-                    # ── 失败反思 ──
-                    try:
-                        from .tools.reflect import get_summary as _reflect_summary
-                        ref = _reflect_summary()
-                        if ref:
-                            ctx.log.append({"role": "system", "content": ref, "_volatile": True})
-                    except Exception:
-                        pass
-                if r.exit:
-                    break
+                    _upsert_log_system(ctx, "安全模式",
+                                       {"role": "system", "content": get_mode_summary(), "_volatile": True})
                 if r.retry:
                     last_user = ctx.last_user_content() or ""
                     if last_user:
@@ -371,29 +379,7 @@ def main() -> None:
                         session_id = sid[0]
                         if has_output():
                             print()
-                        # ── 主动建议 + 修复闭环 ──
-                        try:
-                            from .suggest import check as _suggest_check
-                            tip, repair = _suggest_check()
-                            if tip:
-                                print(f"\n💡 {tip}")
-                                ans = input("  要修吗？(Y/n) ").strip().lower()
-                                if ans != "n":
-                                    on_token, has_output = _make_display()
-                                    _start_esc_listener()
-                                    try:
-                                        run_conversation(
-                                            ctx, repair, on_token, _on_tool,
-                                            on_progress=lambda sid=sid: sid.__setitem__(0, save_session(ctx.all, sid[0])),
-                                            session_id=session_id,
-                                        )
-                                    finally:
-                                        _stop_esc_listener()
-                                    session_id = sid[0]
-                                    if has_output():
-                                        print()
-                        except Exception:
-                            pass
+                        session_id = _run_suggest_loop(ctx, session_id)
                 continue
 
             try:
@@ -411,29 +397,7 @@ def main() -> None:
                 session_id = sid[0]
                 if has_output():
                     print()
-                # ── 主动建议 + 修复闭环 ──
-                try:
-                    from .suggest import check as _suggest_check
-                    tip, repair = _suggest_check()
-                    if tip:
-                        print(f"\n💡 {tip}")
-                        ans = input("  要修吗？(Y/n) ").strip().lower()
-                        if ans != "n":
-                            on_token, has_output = _make_display()
-                            _start_esc_listener()
-                            try:
-                                run_conversation(
-                                    ctx, repair, on_token, _on_tool,
-                                    on_progress=lambda sid=sid: sid.__setitem__(0, save_session(ctx.all, sid[0])),
-                                    session_id=session_id,
-                                )
-                            finally:
-                                _stop_esc_listener()
-                            session_id = sid[0]
-                            if has_output():
-                                print()
-                except Exception:
-                    pass
+                session_id = _run_suggest_loop(ctx, session_id)
             except KeyboardInterrupt:
                 _stop_esc_listener()
                 print("\n[中断]")

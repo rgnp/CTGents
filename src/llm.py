@@ -29,8 +29,8 @@ from .tools.tokens import count_messages_tokens, truncate_to_budget
 from .cache_context import CacheContext
 
 
-# 工具显示标签（用于安全确认提示，避免循环导入 main.py）
-_TOOL_LABEL_MAP: dict[str, str] = {
+# 工具显示标签（安全确认 + 终端回显共用）
+TOOL_LABELS: dict[str, str] = {
     "search_web":    "搜索",
     "read_page":     "阅读网页",
     "read_file":     "读取文件",
@@ -60,6 +60,8 @@ _TOOL_LABEL_MAP: dict[str, str] = {
     "git_pr":        "Git PR",
     "git_branch":    "Git 分支",
     "scan_project":  "扫描项目",
+    "check_project": "规范检查",
+    "generate_agents_md": "生成规范",
     "docs_sync_check": "文档同步检查",
 }
 
@@ -340,7 +342,6 @@ def switch_model(name: str) -> tuple[bool, str]:
     # 按完整模型 ID 查找
     for _key, backend in AVAILABLE_MODELS.items():
         if backend.info.id == name:
-            global _current_backend2
             _current_backend = backend
             info = backend.info
             return True, f"已切换到 {info.name}（{info.id}）"
@@ -643,14 +644,12 @@ def _compress_tool_result(tool_name: str, result: str) -> str:
     return head + hint
 
 # ═══════════════════════════════════════════════════════════════
-# 对话历史压缩（Phase 3）
+# 对话上下文优化（Append-Only — 对齐 Reasonix 缓存优先策略）
 # ═══════════════════════════════════════════════════════════════
 
-# 触发压缩的上下文比例（达到 25% 时触发，保持上下文紧凑）
-_COMPACT_THRESHOLD = 0.25
-# 压缩时保留最近对话的预算比例
-_COMPACT_RETAIN_RATIO = 0.08
-# 话题切换关键词（检测到后全量压缩）
+# 触发优化的上下文比例（达到 85% 时触发 — 追加摘要，不删历史）
+_COMPACT_THRESHOLD = 0.85
+# 话题切换关键词（检测到后追加边界标记）
 _TOPIC_SWITCH_KEYWORDS = [
     "换个", "换一", "不谈", "不说", "跳过", "算了",
     "下一个", "新的", "另外", "不管", "再看",
@@ -683,62 +682,42 @@ def _compact_context(ctx, user_input: str):
 
 
 def _compact_cache_context(ctx, user_input: str) -> None:
-    """Internal: compact CacheContext.log in-place."""
+    """Append-only compaction — 永不删除旧消息，只追加摘要到末尾。
+
+    设计原则（对齐 Reasonix 的缓存优先策略）：
+      - log 是只追加的，任何 mutate/delete 都会破坏 DeepSeek 前缀缓存
+      - 压缩内容以 system 消息形式追加到末尾（send() 保持在末尾，不扰动前缀）
+      - 话题切换只加分隔标记，不删历史
+      - 旧工具结果在入口处已压缩（_compress_tool_result），不再二次处理
+    """
     log = ctx.log
     if not log:
         return
 
+    brief = _make_brief_summary(log, max_len=300)
+    if not brief:
+        return
+
     if _is_topic_switch(user_input):
-        to_archive = list(log)
-        brief = _compactor.get_summary() or _make_brief_summary(to_archive)
-        new_log: list[dict] = []
-        if brief:
-            new_log.append({
-                "role": "system",
-                "content": f"⏪ 前一话题已结束。{brief}",
-            })
-        log[:] = new_log
-        logger.info("话题切换检测到，已压缩 %d 条旧对话", len(to_archive))
+        log.append({
+            "role": "system",
+            "content": f"⏪ 前一话题已结束。{brief}",
+        })
+        logger.info("话题切换：追加边界标记（保留 %d 条历史）", len(log))
         return
 
-    retain_budget = int(MAX_CONTEXT_TOKENS * _COMPACT_RETAIN_RATIO)
-    accumulated = 0
-    retain_start = len(log)
-
-    for i in range(len(log) - 1, -1, -1):
-        content = log[i].get("content", "") or ""
-        tokens = len(content) * 0.35
-        if accumulated + tokens > retain_budget:
+    # 常规压缩：追加运行中摘要。检查是否已有最近摘要，避免重复追加
+    recent_summary = False
+    for m in reversed(log[-6:]):  # 只看最近 6 条
+        if m.get("role") == "system" and "⏪ 对话摘要" in m.get("content", ""):
+            recent_summary = True
             break
-        accumulated += tokens
-        retain_start = i
-
-    while retain_start < len(log) and log[retain_start].get("role") != "user":
-        retain_start += 1
-
-    if retain_start <= 0:
-        return
-
-    to_archive = log[:retain_start]
-    brief = _compactor.get_summary() or _make_brief_summary(to_archive)
-
-    new_log = []
-    if brief:
-        new_log.append({
+    if not recent_summary:
+        log.append({
             "role": "system",
             "content": f"⏪ 对话摘要：{brief}",
         })
-    new_log.extend(log[retain_start:])
-    # ── 后处理：压缩仍保留的过长工具结果 ──
-    # 被保留但太长的工具结果也做截断，因为内容已被消费
-    for i, msg in enumerate(new_log):
-        if msg.get("role") == "tool" and msg.get("_tool_result_compressed"):
-            content = msg.get("content", "")
-            if len(content) > _TOOL_RESULT_COMPRESS_THRESHOLD:
-                tool_name = msg.get("_tool_name", "")
-                msg["content"] = _compress_tool_result(tool_name, content)
-    log[:] = new_log
-    logger.info("上下文压缩完成：保留 %d/%d 条消息", len(log), len(log) + len(to_archive))
+        logger.info("上下文优化：追加摘要（保留 %d 条历史，完整缓存前缀）", len(log))
 
 
 def _make_brief_summary(messages: list[dict], max_len: int = 300) -> str:
@@ -776,161 +755,6 @@ def _make_brief_summary(messages: list[dict], max_len: int = 300) -> str:
         result += f"（共 {user_count} 轮交互）"
 
     return result
-
-
-# ═══════════════════════════════════════════════════════════════
-# 后台压缩器 — 持续生成日志摘要，压缩时瞬时完成
-# 模仿 Claude Code 的 Session Memory 后台持续更新机制
-# ═══════════════════════════════════════════════════════════════
-
-_BG_CHECK_INTERVAL = 20       # 后台检查间隔（秒）
-_BG_MIN_NEW_MSGS = 8          # 每次触发需要的最小新消息数
-_BG_RETAIN_TAIL = 12          # 保留最近 N 条不归档（留给正在进行的对话）
-_BG_MAX_SUMMARY_LEN = 1000    # 摘要总长度上限
-
-# LLM 摘要系统提示词（固定 → DeepSeek 前缀缓存永久命中，0 增量 token）
-_SUMMARY_SYSTEM_PROMPT = (
-    "You are a session memory updater for a coding assistant.\n"
-    "Given previous summary and new conversation messages, "
-    "produce an updated 1-2 sentence summary.\n"
-    "Focus on: actions taken, code changes, key decisions, current status.\n"
-    "Be precise and specific. If nothing meaningful changed, say so briefly."
-)
-
-
-def _make_llm_summary(prev_summary: str | None, messages: list[dict]) -> str:
-    """LLM semantic summary using Flash model. Fixed system prompt -> prefix cache hit."""
-    # Same-module references, no circular import risk
-
-    parts: list[str] = []
-    for m in messages:
-        role = m.get("role", "")
-        content = (m.get("content") or "").strip()
-        if not content:
-            continue
-        if role == "user":
-            parts.append(f"user: {content[:200]}")
-        elif role == "assistant":
-            text = content[:200]
-            if text:
-                parts.append(f"asst: {text}")
-        elif role == "tool":
-            first_line = content.split("\n")[0][:80]
-            tid = m.get("tool_call_id", "")
-            if first_line:
-                parts.append(f"tool({tid[:8]}): {first_line}")
-
-    if not parts:
-        return ""
-
-    msgs_text = "\n".join(parts)
-
-    api_msgs = [
-        {"role": "system", "content": _SUMMARY_SYSTEM_PROMPT},
-        {"role": "user", "content": (
-            f"Previous summary: {prev_summary or '(none)'}\n\n"
-            f"New messages:\n{msgs_text}\n\n"
-            f"Updated summary (1-2 sentences):"
-        )},
-    ]
-
-    try:
-        backend = auto_select_model("summarize")
-        result, _ = _invoke_llm(backend, api_msgs, lambda _: None, track_stats=False)
-        summary = (result or "").strip()
-        if summary:
-            return summary[:_BG_MAX_SUMMARY_LEN]
-    except Exception:
-        logger.warning("LLM summary failed, fallback to brief", exc_info=True)
-
-    return ""
-
-
-class BackgroundCompactor:
-    """Background context compactor with daemon thread for instant compaction."""
-
-    def __init__(self) -> None:
-        self._thread: threading.Thread | None = None
-        self._lock = threading.Lock()
-        self._summary: str | None = None
-        self._running = False
-        self._ctx: CacheContext | None = None
-        self._last_idx: int = 0
-
-    def get_summary(self) -> str | None:
-        with self._lock:
-            return self._summary
-
-    def start(self, ctx: CacheContext) -> None:
-        self._ctx = ctx
-        self._summary = None
-        self._last_idx = 0
-        if self._thread is None or not self._thread.is_alive():
-            self._running = True
-            self._thread = threading.Thread(
-                target=self._run, daemon=True, name="bg-compactor"
-            )
-            self._thread.start()
-            logger.info("bg-compactor started")
-
-    def stop(self) -> None:
-        self._running = False
-
-    def _run(self) -> None:
-        while self._running:
-            try:
-                self._tick()
-            except Exception:
-                logger.exception("bg-compactor error")
-            time.sleep(_BG_CHECK_INTERVAL)
-
-    def _tick(self) -> None:
-        ctx = self._ctx
-        if ctx is None:
-            return
-        log = ctx.log
-        if not log:
-            self._last_idx = 0
-            with self._lock:
-                self._summary = None
-            return
-
-        if len(log) < self._last_idx:
-            self._last_idx = 0
-            with self._lock:
-                self._summary = None
-            return
-
-        if len(log) < self._last_idx + _BG_MIN_NEW_MSGS:
-            return
-
-        end = len(log) - _BG_RETAIN_TAIL
-        if end <= self._last_idx:
-            self._last_idx = max(0, len(log) - _BG_RETAIN_TAIL)
-            return
-
-        to_summarize = log[self._last_idx:end]
-        self._last_idx = end
-
-        # LLM 语义摘要（system prompt 固定 → 缓存命中），失败则 fallback
-        brief = _make_llm_summary(self._summary, to_summarize)
-        if not brief:
-            brief = _make_brief_summary(to_summarize, max_len=200)
-            if not brief:
-                return
-            # fallback 时仍需追加尾部
-            with self._lock:
-                if self._summary:
-                    self._summary = (self._summary + " | " + brief)[:_BG_MAX_SUMMARY_LEN]
-                else:
-                    self._summary = brief
-        else:
-            with self._lock:
-                self._summary = brief
-
-        logger.debug("bg-summary updated via LLM: +%d msgs", len(to_summarize))
-# 模块级单例（run_conversation 中按需启动）
-_compactor = BackgroundCompactor()
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -1097,9 +921,6 @@ def run_conversation(
     if backend is not _current_backend:
         on_token(f"\n[🤖 使用 {model_name} 处理此任务]\n\n")
 
-    # 确保后台压缩器已启动（幂等）
-    _compactor.start(ctx)
-
     while True:
         used = count_messages_tokens(ctx.all)
         limit = int(MAX_CONTEXT_TOKENS * TOOL_LOOP_THRESHOLD)
@@ -1111,7 +932,7 @@ def run_conversation(
         # Phase 3：自动压缩旧对话（超过 70% 时触发）
         compact_limit = int(MAX_CONTEXT_TOKENS * _COMPACT_THRESHOLD)
         if used >= compact_limit:
-            logger.info("触发自动压缩：%d >= %d (70%%)", used, compact_limit)
+            logger.info("触发上下文优化：%d >= %d (%.0f%%)", used, compact_limit, _COMPACT_THRESHOLD * 100)
             _compact_context(ctx, user_input)
             logger.info("压缩后消息数: %d", len(ctx))
 
@@ -1156,7 +977,7 @@ def run_conversation(
                     if safety == "confirm":
                         level = get_safety_level(tool_name).value
                         mode = get_mode()
-                        label = _TOOL_LABEL_MAP.get(tool_name, tool_name)
+                        label = TOOL_LABELS.get(tool_name, tool_name)
                         detail = " ".join(f"{k}={v}" for k, v in args.items())
                         if len(detail) > 120:
                             detail = detail[:117] + "..."

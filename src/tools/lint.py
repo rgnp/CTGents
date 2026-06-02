@@ -468,7 +468,7 @@ def _check_git(root: Path) -> dict:
     try:
         result = subprocess.run(
             ["git", "-C", str(root), "status", "--porcelain"],
-            capture_output=True, text=True, timeout=10
+            capture_output=True, encoding="utf-8", errors="replace", timeout=10
         )
         dirty_files = len([l for l in result.stdout.split("\n") if l.strip()])
         if dirty_files > 10:
@@ -485,7 +485,7 @@ def _check_git(root: Path) -> dict:
     try:
         result = subprocess.run(
             ["git", "-C", str(root), "log", "--oneline", "-1"],
-            capture_output=True, text=True, timeout=10
+            capture_output=True, encoding="utf-8", errors="replace", timeout=10
         )
         if result.stdout.strip():
             score += 2
@@ -495,7 +495,7 @@ def _check_git(root: Path) -> dict:
     try:
         result = subprocess.run(
             ["git", "-C", str(git_root or root), "remote", "-v"],
-            capture_output=True, text=True, timeout=10
+            capture_output=True, encoding="utf-8", errors="replace", timeout=10
         )
         if result.stdout.strip():
             score += 2
@@ -1039,7 +1039,7 @@ def docs_sync_check(path: str | None = None) -> str:
         for cmd_flag in ["--name-only", "--cached --name-only"]:
             r = subprocess.run(
                 f"git -C {root} diff {cmd_flag}".split(),
-                capture_output=True, text=True, timeout=10,
+                capture_output=True, encoding="utf-8", errors="replace", timeout=10,
             )
             if r.returncode == 0:
                 for line in r.stdout.strip().split("\n"):
@@ -1050,7 +1050,7 @@ def docs_sync_check(path: str | None = None) -> str:
         # 未跟踪文件
         r = subprocess.run(
             f"git -C {root} status --porcelain".split(),
-            capture_output=True, text=True, timeout=10,
+            capture_output=True, encoding="utf-8", errors="replace", timeout=10,
         )
         if r.returncode == 0:
             for line in r.stdout.strip().split("\n"):

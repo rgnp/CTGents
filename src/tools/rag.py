@@ -989,13 +989,9 @@ def index_project(path: str | None = None, force: bool = False) -> str:
         if d.file_path not in changed_paths
     ]
 
-    # 添加新块
+    # 添加新块（add_document 自动更新倒排索引和计数）
     for c in new_chunks:
         existing_index.add_document(c)
-
-    existing_index.num_docs = len(existing_index.documents)
-    # 重建倒排索引
-    existing_index = _rebuild_from_documents(existing_index.documents)
 
     _save_index(project_root, existing_index)
     _write_hash_cache(project_root, new_hashes)

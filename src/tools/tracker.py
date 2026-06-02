@@ -53,11 +53,19 @@ def record_call(tool_name: str, args: dict, success: bool,
     global _write_count
     TRACKER_DIR.mkdir(parents=True, exist_ok=True)
     args_keys = sorted(args.keys())
+    args_sig_parts = [tool_name]
+    for k in args_keys:
+        v = args[k]
+        if isinstance(v, str) and len(v) > 80:
+            v = v[:80]
+        args_sig_parts.append(f"{k}={v}")
+    args_sig = "|".join(args_sig_parts)
     record = {
         "ts": datetime.now().isoformat(timespec="seconds"),
         "tool": tool_name,
         "category": _classify(tool_name),
         "args_keys": args_keys,
+        "args_sig": args_sig,
         "success": success,
         "error": error[:200] if error else "",
         "duration_ms": round(duration_ms, 1),
@@ -168,7 +176,6 @@ def get_stats() -> dict:
         cat_stats[c] = {"calls": cnt, "fail": cat_f}
 
     # 按工具
-    # 按工具
     tool_stats = {}
     for t, cnt in tool_counter.items():
         fails = tool_fail.get(t, 0)
@@ -178,14 +185,6 @@ def get_stats() -> dict:
             "success_rate": round((cnt - fails) / cnt * 100, 1),
             "avg_duration_ms": round(sum(durs) / len(durs), 1),
         }
-
-    # 按分类
-    cat_stats = {c: {"calls": cnt, "fail": cat_counter.get(c, 0) - tool_counter.get(c, 0) if False else 0}
-                 for c, cnt in cat_counter.items()}
-    cat_stats = {}
-    for c, cnt in cat_counter.items():
-        cat_f = sum(1 for r in records if r.get("category") == c and not r.get("success", True))
-        cat_stats[c] = {"calls": cnt, "fail": cat_f}
 
     # 重复模式
     repeated = {}

@@ -42,7 +42,7 @@ _DEDUP_BLACKLIST: frozenset[str] = frozenset({
 })
 
 # 窗口大小
-_WINDOW_SIZE = 8
+_WINDOW_SIZE = 64
 
 # 滑动窗口 + 结果缓存 + 锁 + 统计
 _window: list[int] = []

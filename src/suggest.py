@@ -45,8 +45,8 @@ def check() -> tuple[str | None, str | None]:
             else:
                 streak_broken = True
         if tool not in IGNORE_FOR_REPEAT:
-            keys = ",".join(r.get("args_keys", []))
-            sig_counter[(tool, keys)] += 1
+            sig = r.get("args_sig") or ",".join(r.get("args_keys", []))
+            sig_counter[(tool, sig)] += 1
         dur = r.get("duration_ms", 0)
         if dur > 0:
             tool_durations[tool].append(dur)

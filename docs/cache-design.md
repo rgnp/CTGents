@@ -4,27 +4,26 @@
 
 ---
 
-## 背景问题
-
-### 现状
+## 背景
 
 DeepSeek 提供「自动前缀缓存」：连续两次 API 请求的**字节前缀完全一致**时，匹配到的缓存部分只收 **~10% 原价**。
 
-但当前项目存在一个致命问题：
+### 历史问题（已修复）
+
+项目早期存在一个缓存毒药问题：
 
 ```python
-# src/main.py — 缓存毒药
-messages.insert(0, _make_env_message())  # ← 在开头插入，全量字节偏移
-messages.insert(1, _make_project_context())  # ← 同样破坏缓存
+# 旧代码 — 已废弃
+messages.insert(0, _make_env_message())   # 在开头插入，全量字节偏移
+messages.insert(1, _make_project_context()) # 同样破坏缓存
 ```
 
-`insert(0, ...)` 导致每次启动会话时，整个 `messages` 列表的每个字节都向后偏移，**DeepSeek 前缀缓存 100% 失效**。
+`insert(0, ...)` 导致每次启动会话时整个 `messages` 字节前缀偏移，**DeepSeek 前缀缓存 100% 失效**。此问题已通过三段式上下文重构解决（见 Phase 3）。
 
 ### 目标
 
 - 缓存命中率：~0% → **90%+**
 - 长期会话 token 费用降低 **5-10 倍**
-- 不改架构的情况下先做第一阶段，逐步推进
 
 ---
 
@@ -50,66 +49,67 @@ messages.insert(1, _make_project_context())  # ← 同样破坏缓存
 └─────────────────────────────────────────────┘
 ```
 
-### 构建规则
+**实现位置**：`src/cache_context.py` — `CacheContext` 类（218 行）
 
-| **Prefix 不变** | 会话开始时计算一次 prefix hash。prefix 中的 `_volatile` 消息被 `send()` 跳过，不发给 API |
-| **Log 只追加** | `messages` 永远只用 `.append()`，不使用 `.insert(0, ...)` 或 `.pop(0)` |
-| **Scratch 不发给 API** | `_volatile` 标记的消息在 `send()` 中完全过滤（prefix 区跳过，log 区 system 消息放末尾不影响前缀） |
-| **工具结果压缩** | 超过 3000 token 的工具结果在追加到 Log 前压缩为摘要 |
-| **前缀内容不得含动态数据** | 禁止 `os.getcwd()`、时间戳等动态值出现在 prefix 中 → 跨会话缓存命中 |
+| 组件 | 说明 |
+|------|------|
+| `CacheContext.prefix` | 会话开始计算一次，永不修改。包含 system prompt + tools |
+| `CacheContext.log` | 列表，支持 `append()` 追加对话轮次 |
+| `CacheContext.scratch` | 内存状态，不参与 `send()` 构建 |
+| `ctx.send()` | 拼接 prefix + log，校验 prefix 哈希完整性 |
+| `ctx.all` | 返回 prefix + log 完整列表，用于持久化 |
+
 ---
 
-### Phase 1：修复缓存毒药 ✅
+## 实施状态
 
-> 已完成（2026-06-01）。三阶段全量实施。
+### Phase 1：上下文压缩压缩 ✅ 已完成
 
-| 任务 | 说明 | 状态 |
-|------|------|------|
-| `CacheContext` 三段式架构 | prefix/log/scratch 分区 + 哈希校验 | ✅ |
-| `send()` 严格过滤 volatile | `_volatile` 标记的前缀消息完全不发给 API | ✅ |
-| `_make_env_message()` 固化 | 移除 `os.getcwd()`，字节级稳定前缀 | ✅ |
-| `_build_api_messages()` 向后兼容 | 旧代码无需修改 | ✅ |
-
-**验证**：前缀哈希机制确保不可变 prefix 被意外修改时立即报错。
-### Phase 2：工具结果压缩
-
-### Phase 2：工具结果压缩 ✅
-
-> 目标：减少后续轮次中携带的冗余工具结果。
+**目标**：减少后续轮次中携带的冗余工具结果。
 
 | 任务 | 说明 | 状态 |
 |------|------|:----:|
-| `_compress_tool_result()` | 超过 3000 字符 → 截断 + 提示语（read_file/search_web 等有专属提示） | ✅ |
-| 不压缩白名单 | git_status/git_diff/check_project 等短小工具不压缩 | ✅ |
-| 接入对话循环 | 在 `run_conversation` 中 `truncate_to_budget` 之后调用 | ✅ |
-| 测试 | 18 个单元测试覆盖边界/类型/白名单 | ✅ |
+| `_compact_cache_context()` | 保留最近轮次，压缩历史到摘要（支持话题切换检测） | ✅ |
+| 话题切换压缩 | 检测到换话题时追加边界标记，历史日志完整保留 | ✅ |
+| 附录优化 | 采用 append-only 策略：不删旧消息，仅末尾追加摘要 | ✅ |
+| 接入对话循环 | 在 `run_conversation` 中调用 | ✅ |
+| 测试 | 单元测试覆盖边界/类型/白名单 | ✅ |
 
-**验证**：`test_cache.py` 20 个测试全部通过。
+**实现位置**：`src/llm.py` — `_compact_context()` / `_compact_cache_context()`
 
 ---
 
+### Phase 2：工具结果截断 🔄 待评估
 
-**目标**：减少后续轮次中携带的冗余工具结果。
+**目标**：减少 Log 中大型工具结果的 token 占用。
 
 | 任务 | 说明 |
 |------|------|
 | `_truncate_tool_result()` | 工具结果 > 3000 token → 压缩为摘要（保留关键信息，省略详细输出） |
 | 追加标记到 Log | 压缩后的结果附带提示：`[已压缩，原结果 X token，可用 read_file 重新读取]` |
 
-### Phase 3：三段式上下文重构
+**注**：当前 `_compact_cache_context` 已包含基本的上下文保留策略，Phase 2 的单独截断逻辑暂未实现，视实际 token 开销情况决定是否补充。
+
+---
+
+### Phase 3：三段式上下文重构 ✅ 已完成
 
 **目标**：完全按照 Reasonix 的 Pillar 1 架构改造对话循环。
 
-| 任务 | 说明 |
-|------|------|
-| `src/cache_context.py` | 新模块：`CacheContext` 类，管理 prefix/log/scratch 三段 |
-| `CacheContext.prefix` | 会话开始计算一次，永不修改。包含 system prompt + tools |
-| `CacheContext.append_log(entry)` | 唯一写入 Log 的接口 |
-| `CacheContext.build_api_messages()` | 拼接 prefix + log（过滤 scratch），发给 API |
-| `llm.py` 适配 | `run_conversation` 改用 `CacheContext` 而非裸 `list[dict]` |
-| `session.py` 适配 | 会话保存/恢复兼容新的三段式结构 |
+| 任务 | 状态 |
+|------|:----:|
+| `src/cache_context.py` — `CacheContext` 类（218 行） | ✅ |
+| `CacheContext.prefix` — 会话开始计算一次，永不修改 | ✅ |
+| `ctx.log.append(entry)` — 唯一写入 Log 的接口 | ✅ |
+| `ctx.send()` — 拼接 prefix + log（过滤 scratch） | ✅ |
+| `llm.py` 适配 — `run_conversation` 改用 `CacheContext` | ✅ |
+| `session.py` 适配 — 会话保存/恢复兼容三段式结构 | ✅ |
+| 前缀哈希校验 — `PrefixIntegrityError` 防止意外修改 | ✅ |
+| `stats()` 统计接口 — 三段 token 用量统计 | ✅ |
 
-### Phase 4：并行分发 + 高级优化
+---
+
+### Phase 4：并行分发 + 高级优化 ❌ 未开始
 
 | 任务 | 说明 |
 |------|------|
@@ -119,18 +119,13 @@ messages.insert(1, _make_project_context())  # ← 同样破坏缓存
 
 ---
 
-## 验收标准
+## 当前效果
 
-| 阶段 | 验收条件 |
-|------|----------|
-| Phase 1 | 两轮相同对话，第二轮输入 token 低于第一轮 30%+ |
-| Phase 2 | 10 轮工具调用会话，总输入 token 减少 40%+ |
-| Phase 3 | 50 轮长会话，缓存命中率 > 80% |
-| Phase 4 | 并行工具调用耗时减少 > 30% |
+| 指标 | 优化前 | 当前状态 |
+|------|--------|---------|
+| 消息结构 | `insert(0, ...)` 破坏前缀 | 三段式 `CacheContext`，prefix 固定不变 |
+| 前缀缓存 | 100% 失效 | prefix 哈希校验，缓存候选 |
+| 历史压缩 | 无 | 话题切换时自动摘要压缩 |
+| Phase 4 并行/去重 | — | 待实现 |
 
----
-
-## 参考
-
-- [DeepSeek-Reasonix 架构文档](https://github.com/esengine/DeepSeek-Reasonix/blob/main/docs/ARCHITECTURE.md)
-- DeepSeek 前缀缓存文档：连续请求前缀匹配时，缓存命中部分按 ~10% 计费
+> ⚠️ **注意**：当前仅完成了架构改造（Phase 3）和基础压缩（Phase 1），实际的缓存命中效果取决于 DeepSeek 服务端对 prefix 的缓存策略。后续可通过对比 `send()` 返回的 token 用量数据来量化验证。

@@ -14,16 +14,14 @@ from pathlib import Path
 from typing import Any
 
 # MCP SDK 是可选依赖
-MCP_AVAILABLE = False
-if not MCP_AVAILABLE:
-    try:
-        from mcp import ClientSession, StdioServerParameters
-        from mcp.client.stdio import stdio_client
-        from mcp.client.sse import sse_client
+try:
+    from mcp import ClientSession, StdioServerParameters
+    from mcp.client.stdio import stdio_client
+    from mcp.client.sse import sse_client
 
-        MCP_AVAILABLE = True
-    except ImportError:
-        pass
+    MCP_AVAILABLE = True
+except ImportError:
+    MCP_AVAILABLE = False
 
 # ── 配置路径 ──
 MCP_CONFIG_DIR = Path(os.path.expanduser("~")) / ".ctgents"
@@ -42,12 +40,8 @@ TOOLS_MCP = [
         "function": {
             "name": "mcp_connect",
             "description": (
-                "连接到 MCP 服务器。支持两种模式：\n"
-                "1. stdio（本地进程，推荐）：通过 command+args 启动本地 MCP 服务器。\n"
-                "   例：mcp_connect(name='fs', command='npx', args=['-y', '@modelcontextprotocol/server-filesystem', '.'])\n"
-                "2. http（远程服务）：通过 url 连接远程 MCP 服务器。\n"
-                "   例：mcp_connect(name='remote', url='http://localhost:8000/mcp')\n"
-                "连接后服务器提供的工具会自动注册到 Agent 可用工具列表中。"
+                "连接到 MCP 服务器。stdio 模式通过 command+args 启动本地进程，"
+                "http 模式通过 url 连接远程服务。连接后工具自动注册。"
             ),
             "parameters": {
                 "type": "object",

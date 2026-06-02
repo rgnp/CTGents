@@ -67,7 +67,7 @@ def _get_changed_files() -> list[str]:
     try:
         r1 = subprocess.run(
             ["git", "diff", "--name-only"],
-            capture_output=True, text=True, timeout=5, cwd=Path.cwd(),
+            capture_output=True, encoding="utf-8", errors="replace", timeout=5, cwd=Path.cwd(),
         )
         if r1.returncode == 0:
             for line in r1.stdout.strip().split("\n"):
@@ -76,7 +76,7 @@ def _get_changed_files() -> list[str]:
 
         r2 = subprocess.run(
             ["git", "diff", "--cached", "--name-only"],
-            capture_output=True, text=True, timeout=5, cwd=Path.cwd(),
+            capture_output=True, encoding="utf-8", errors="replace", timeout=5, cwd=Path.cwd(),
         )
         if r2.returncode == 0:
             for line in r2.stdout.strip().split("\n"):
@@ -85,7 +85,7 @@ def _get_changed_files() -> list[str]:
 
         r3 = subprocess.run(
             ["git", "status", "--porcelain"],
-            capture_output=True, text=True, timeout=5, cwd=Path.cwd(),
+            capture_output=True, encoding="utf-8", errors="replace", timeout=5, cwd=Path.cwd(),
         )
         if r3.returncode == 0:
             for line in r3.stdout.strip().split("\n"):
@@ -245,7 +245,7 @@ TOOLS_FILE = [
         "type": "function",
         "function": {
             "name": "write_file",
-            "description": "创建或覆写本地文件。用于保存报告、代码、笔记等。写入前会告知用户即将写入的路径。",
+            "description": "创建或覆写本地文件。",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -266,15 +266,7 @@ TOOLS_FILE = [
         "type": "function",
         "function": {
             "name": "edit_file_lines",
-            "description": (
-                "行级编辑文件：替换、删除或插入指定行。"
-                "修改前自动备份，可通过 undo_edit 撤销。"
-                "\n\n操作类型（action）："
-                "\n  replace — 用 new_lines 替换 [start_line, end_line] 范围内的行"
-                "\n  delete  — 删除 [start_line, end_line] 范围内的行"
-                "\n  insert  — 在 start_line 之后插入 new_lines"
-                "\n\n注意：行号从 1 开始。传入的行号是修改前的原始行号。"
-            ),
+            "description": "行级编辑文件：替换、删除或插入指定行。行号从 1 开始。",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -305,7 +297,7 @@ TOOLS_FILE = [
         "type": "function",
         "function": {
             "name": "undo_edit",
-            "description": "撤销最近一次对指定文件的编辑操作。恢复备份文件。",
+            "description": "撤销最近一次对该文件的编辑。",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -339,7 +331,7 @@ TOOLS_FILE = [
         "type": "function",
         "function": {
             "name": "delete_file",
-            "description": "删除指定文件。用于清理临时文件、测试脚本等。删除前会告知用户。不可恢复，谨慎使用。",
+            "description": "删除指定文件。不可恢复。",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -448,7 +440,7 @@ def _validate_imports(filepath: Path, backup_path: Path | None) -> str | None:
     try:
         r = subprocess.run(
             ["py", "-c", f"import {module_name}"],
-            capture_output=True, text=True, timeout=15,
+            capture_output=True, encoding="utf-8", errors="replace", timeout=15,
             cwd=str(project_root),
             env={**os.environ, "PYTHONDONTWRITEBYTECODE": "1"},
         )
@@ -549,18 +541,6 @@ def read_file(path: str) -> str:
     if raw is None:
         return f"无法以 UTF-8 编码读取: {path}（可能是二进制文件）"
     return raw
-
-def read_file(path: str) -> str:
-    """读取本地文件内容。"""
-    filepath = _resolve(path)
-    if not filepath.exists():
-        return f"文件不存在: {path}"
-    if not filepath.is_file():
-        return f"路径不是文件: {path}"
-    try:
-        return filepath.read_text(encoding="utf-8")
-    except UnicodeDecodeError:
-        return f"无法以 UTF-8 编码读取: {path}（可能是二进制文件）"
 
 
 def read_file_lines(path: str, start_line: int | None = None, end_line: int | None = None) -> str:

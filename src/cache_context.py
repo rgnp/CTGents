@@ -114,8 +114,8 @@ class CacheContext:
 
         策略（保障 DeepSeek 前缀缓存）：
           1. 不可变 prefix 系统消息排在 payload 最前面 → 缓存命中核心区
-          2. _volatile 标记的 prefix 消息跳过（不应混入不可变前缀）
-          3. log 中非 system 消息按追加顺序排后面 → 前缀持续命中
+          2. prefix 全部发送（_volatile 仅影响持久化过滤，不影响 API）
+          3. log 中非 system 消息按追加顺序排中间 → 前缀持续命中
           4. log 中 system 消息（记忆/安全模式/摘要）放末尾 → 不影响缓存前缀
         Args:
             validate: 是否校验 prefix 完整性，默认 True。
@@ -136,10 +136,8 @@ class CacheContext:
                 )
         api: list[dict] = []
 
-        # 2. immutable prefix — 跳过 _volatile 标记的消息（它们属于 scratch）
+        # 2. immutable prefix — 全部发送（_volatile 仅影响持久化，不影响 API 发送）
         for m in self.prefix:
-            if m.get("_volatile"):
-                continue
             api.append({"role": "system", "content": m.get("content", "")})
 
         # 3. log 中的非 system 消息（user/assistant/tool）—— 紧跟 prefix，享受缓存

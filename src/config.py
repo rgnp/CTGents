@@ -33,7 +33,7 @@ PRO_MAX_TOKENS: int = int(os.getenv("PRO_MAX_TOKENS", "65536"))
 TAVILY_API_KEY: str = _require_env("TAVILY_API_KEY")
 
 # ── 行为参数 ──
-TOOL_LOOP_THRESHOLD: float = 0.85
+TOOL_LOOP_THRESHOLD: float = 0.95
 MAX_RETRIES: int = 3
 RETRY_BASE_DELAY: float = 1.0
 MAX_EXEC_TIMEOUT: int = 5

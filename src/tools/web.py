@@ -6,7 +6,6 @@ import time
 import urllib.error
 import urllib.request
 from typing import Any
-from typing import Any
 
 import trafilatura
 
@@ -310,12 +309,6 @@ def _do_read_page(url: str) -> tuple[str, int | None]:
         )
 
     return text, status
-    if len(text) > _PAGE_MAX_CHARS:
-        text = text[:_PAGE_MAX_CHARS] + (
-            f"\n\n[已压缩：原始结果 {len(text)} 字符，"
-            f"仅显示前 {_PAGE_MAX_CHARS} 字符。"
-            "如需完整内容，可重新搜索或阅读页面]"
-        )
 
     return text
 

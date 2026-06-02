@@ -59,6 +59,15 @@ def rename_session(session_id: str, name: str) -> None:
         json.dump(meta, f, ensure_ascii=False)
 
 
+
+def delete_session(session_id: str) -> None:
+    """删除指定会话目录。"""
+    import shutil
+    path = _session_path(session_id)
+    if os.path.isdir(path):
+        shutil.rmtree(path)
+
+
 def _sanitize_surrogates(obj):
     """递归替换字符串中的孤立代理字符（U+D800-U+DFFF）。
 
