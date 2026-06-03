@@ -63,6 +63,17 @@ TOOL_LABELS: dict[str, str] = {
     "check_project": "规范检查",
     "generate_agents_md": "生成规范",
     "docs_sync_check": "文档同步检查",
+    "evolve_query":    "进化查询",
+    "evolve_validate": "进化验证",
+    "search_papers":   "论文搜索",
+    "read_paper":      "阅读论文",
+    "save_note":       "保存笔记",
+    "search_knowledge": "搜索知识库",
+    "kb_topics":       "知识库主题",
+    "link_papers":     "关联论文",
+    "kb_stats":        "知识库统计",
+    "rag_browse":      "浏览知识库",
+    "rag_read":        "阅读文档",
 }
 
 logger = logging.getLogger(__name__)
@@ -789,7 +800,8 @@ _PARALLEL_SAFE: frozenset[str] = frozenset({
     # 代码搜索
     "grep_code",
     # 网络查询
-    "search_web", "read_page",
+    "search_web", "read_page", "search_papers", "read_paper",
+    "search_notes", "list_notes",
     # Git 读取（状态/日志/差异/分支）
     "git_status", "git_diff", "git_log", "git_branch",
     # RAG 查询

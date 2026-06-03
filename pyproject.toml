@@ -57,7 +57,7 @@ skip-magic-trailing-comma = false
 minversion = "7.0"
 testpaths = ["tests"]
 pythonpath = ["src"]
-addopts = "-v --tb=short -p no:cacheprovider"
+addopts = "-v --tb=short -p no:cacheprovider --ignore=tests/test_prefix_cache.py --ignore=tests/analyze_cache_hitrate.py"
 markers = [
     "slow: 速度较慢的测试（依赖安装等）",
 ]

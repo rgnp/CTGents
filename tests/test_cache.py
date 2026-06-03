@@ -51,9 +51,8 @@ class TestBuildApiMessages:
         ]
         api = _build_api_messages(msgs)
         roles = [m["role"] for m in api]
-        # volatile system 被过滤，只有 s2（非 volatile）在系统前缀中
-        assert roles == ["system", "user", "assistant"]
-        assert api[0]["content"] == "s2"  # 非 volatile 的 s2 纳入前缀
+        # _volatile 不影响 API 发送，仅影响持久化；两个 system 都发送
+        assert roles == ["system", "system", "user", "assistant"]
 
     def test_non_system_order_preserved(self):
         msgs = [
@@ -88,7 +87,8 @@ class TestCompactContext:
             {"role": "user", "content": "问题"},
             {"role": "assistant", "content": "回答"},
         ]
-        assert len(_compact_context(msgs, "继续")) == 3
+        # append-only: 3 + 1 summary = 4
+        assert len(_compact_context(msgs, "继续")) == 4
 
     def test_topic_switch_compresses_all(self):
         msgs = [
@@ -97,7 +97,9 @@ class TestCompactContext:
             {"role": "assistant", "content": "旧回答"},
         ]
         result = _compact_context(msgs, "换个话题")
-        assert len(result) <= 2  # 规则 + 归档消息
+        # append-only: 3 + 1 boundary marker = 4
+        assert len(result) == 4
+        assert any("前一话题已结束" in m.get("content", "") for m in result)
 
     def test_topic_switch_not_triggered(self):
         msgs = [
@@ -106,7 +108,8 @@ class TestCompactContext:
             {"role": "assistant", "content": "好的"},
         ]
         result = _compact_context(msgs, "继续讨论同一个话题")
-        assert len(result) == 3
+        # append-only: 3 + 1 summary = 4
+        assert len(result) == 4
 
     def test_large_messages_truncated(self):
         big = "X" * 100000
@@ -116,7 +119,8 @@ class TestCompactContext:
             msgs.append({"role": "assistant", "content": f"回答{i} " + big})
             msgs.append({"role": "tool", "content": big[:100]})
         result = _compact_context(msgs, "继续做")
-        assert len(result) < len(msgs)
+        # append-only: 不会减少消息，只追加摘要
+        assert len(result) >= len(msgs)
         assert any("⏪" in m.get("content", "") for m in result if m["role"] == "system")
 
 
@@ -141,7 +145,7 @@ class TestCompressToolResult:
         text = "y" * (_TOOL_RESULT_COMPRESS_THRESHOLD + 1)
         compressed = _compress_tool_result("read_file", text)
         assert "已压缩" in compressed
-        assert "1201" in compressed
+        assert str(_TOOL_RESULT_COMPRESS_THRESHOLD + 1) in compressed
 
     def test_large_result_truncated(self):
         text = "z" * 5000

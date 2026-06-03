@@ -205,6 +205,6 @@ class TestStormThreadSafety:
 
         # 全部应是首次，None
         assert all(r is None for r in results)
-        # 窗口应有 8 个（窗口上限）
+        # 窗口应有 9 个（窗口上限 64，9 条不触发淘汰）
         from src.tools.storm import get_storm_stats
-        assert get_storm_stats()["window_size"] == 8
+        assert get_storm_stats()["window_size"] == 9

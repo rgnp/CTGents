@@ -1,10 +1,12 @@
 import logging
 import os
-import platform
+import re
+import subprocess
 import sys
 import threading
 import time
 from collections.abc import Callable
+from pathlib import Path
 
 logging.basicConfig(
     level=logging.WARNING,
@@ -52,6 +54,32 @@ def _stop_esc_listener() -> None:
     """停止 Esc 监听线程。"""
     global _esc_listener_active
     _esc_listener_active = False
+
+
+def _launch_watchdog() -> int | None:
+    """启动看门狗子进程。返回 PID 或 None。"""
+    try:
+        proc = subprocess.Popen(
+            [sys.executable, "-m", "src.watchdog", str(os.getpid()), str(Path.cwd())],
+            creationflags=subprocess.CREATE_NEW_PROCESS_GROUP if sys.platform == "win32" else 0,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+        return proc.pid
+    except Exception:
+        return None
+
+
+def _heartbeat_loop() -> None:
+    """后台线程：每 30 秒写入心跳时间戳。"""
+    heartbeat_file = Path.home() / ".ctgents" / "watchdog_heartbeat"
+    heartbeat_file.parent.mkdir(parents=True, exist_ok=True)
+    while True:
+        try:
+            heartbeat_file.write_text(str(time.time()))
+        except OSError:
+            pass
+        time.sleep(30)
 
 
 
@@ -159,6 +187,60 @@ def _on_tool(name: str, args: dict) -> None:
     print(f"  [{label}] {detail}")
 
 
+# ═══════════════════════════════════════════════════════════════
+# 预读优化：用户输入中包含文件路径时，提前读入上下文
+# ═══════════════════════════════════════════════════════════════
+
+_FILE_PATH_RE = re.compile(
+    r'(?:(?:\.\.?/|[a-zA-Z]:\\|\\\\)?(?:[\w.-]+[/\\])+[\w.-]+\.(?:py|md|txt|json|yaml|yml|toml|cfg|ini|js|ts|html|css|sh|bat|ps1))'
+    r'|(?:(?:\.\.?/|[a-zA-Z]:\\|\\\\)?src/[\w./\\-]+\.py)',
+)
+
+_PREREAD_MAX = 5       # 最多预读文件数
+_PREREAD_MAX_CHARS = 3000  # 单文件最多读取字符
+
+
+def _preread_files(user_input: str, ctx) -> list[dict]:
+    """扫描用户输入中的文件路径，预读到上下文。返回预读的 tool 消息列表。"""
+    from .tools.file import _resolve, _read_cached
+
+    paths = set()
+    for m in _FILE_PATH_RE.finditer(user_input):
+        raw = m.group(0).strip().rstrip(".,;:!?\"'")
+        if len(raw) < 4:
+            continue
+        try:
+            p = _resolve(raw)
+            if p.exists() and p.is_file():
+                paths.add(p)
+        except Exception:
+            continue
+        if len(paths) >= _PREREAD_MAX:
+            break
+
+    if not paths:
+        return []
+
+    pre_msgs = []
+    for p in sorted(paths)[:_PREREAD_MAX]:
+        content = _read_cached(p)
+        if content is None:
+            continue
+        if len(content) > _PREREAD_MAX_CHARS:
+            content = content[:_PREREAD_MAX_CHARS] + (
+                f"\n\n[预读截断：文件 {len(content)} 字符，仅显示前 {_PREREAD_MAX_CHARS} 字符]"
+            )
+        pre_msgs.append({
+            "role": "tool",
+            "tool_call_id": f"preread_{hash(str(p))}",
+            "content": f"[预读] {p}\n{content}",
+            "_tool_name": "read_file",
+        })
+        print(f"  📖 预读: {p}")
+
+    return pre_msgs
+
+
 def _reload_dispatch():
     """全量热加载：指令系统 + 内置工具 + 插件，无需重启。"""
     global dispatch_cmd
@@ -252,12 +334,24 @@ def main() -> None:
     if proj_ctx:
         prefix_msgs.append(proj_ctx)
     try:
-        from .tools.rag import get_index_status
+        from .tools.rag import get_index_status, _load_doc_index
         rag_info = get_index_status()
-        if "未建立" not in rag_info:
+        has_code = "未建立" not in rag_info
+        has_research = _load_doc_index("research") is not None
+
+        if has_code and has_research:
+            hint = "RAG 已就绪：rag_query(scope='code') 搜代码，rag_query(scope='research') 搜论文笔记。研究知识库可用 search_knowledge 或 RAG 语义搜索。"
+        elif has_code:
+            hint = "RAG 代码索引已就绪。研究知识库可用 search_papers 搜论文、save_note 记笔记。用 rag_index_research 将知识库接入 RAG 语义搜索。"
+        elif has_research:
+            hint = "RAG 研究索引已就绪。rag_index 可建立代码索引。"
+        else:
+            hint = ""
+
+        if hint:
             prefix_msgs.append({
                 "role": "system",
-                "content": "RAG 索引已就绪，可用 rag_query 语义搜索代码。",
+                "content": hint,
                 "_volatile": True,
             })
     except Exception:
@@ -279,6 +373,22 @@ def main() -> None:
         pass
 
     print("Agent 已启动，输入 /help 查看指令列表\n")
+
+    # ── 看门狗 + 心跳 ──
+    _watchdog_pid = _launch_watchdog()
+    if _watchdog_pid:
+        logger.info("看门狗已启动 (PID: %d)", _watchdog_pid)
+    _heartbeat_thread = threading.Thread(target=_heartbeat_loop, daemon=True)
+    _heartbeat_thread.start()
+
+    # ── 覆盖率门禁摘要 ──
+    try:
+        from .coverage_gate import get_tier_summary
+        tier = get_tier_summary()
+        if tier:
+            ctx.log.append({"role": "system", "content": tier, "_volatile": True})
+    except Exception:
+        pass
 
     _use_rich_input = sys.stdin.isatty()
     if _use_rich_input:
@@ -339,12 +449,18 @@ def main() -> None:
                     # 重建 prefix（环境上下文 + 项目感知）
                     prefix = []
                     try:
-                        from .tools.rag import get_index_status
+                        from .tools.rag import get_index_status, _load_doc_index
                         rag_info = get_index_status()
                         if "未建立" not in rag_info:
                             prefix.append({
                                 "role": "system",
-                                "content": "📚 RAG 代码索引已就绪，可用 rag_query 进行语义搜索。",
+                                "content": "RAG 代码索引已就绪。研究知识库可用 search_papers 搜论文、save_note 记笔记。",
+                                "_volatile": True,
+                            })
+                        if _load_doc_index("research") is not None:
+                            prefix.append({
+                                "role": "system",
+                                "content": "RAG 研究索引已就绪。rag_query(scope='research') 可语义搜索论文和笔记。",
                                 "_volatile": True,
                             })
                     except Exception:
@@ -384,6 +500,15 @@ def main() -> None:
                 continue
 
             try:
+                # ── 预读优化：用户提到了文件路径，先读入上下文 ──
+                pre_msgs = _preread_files(user_input, ctx)
+                if pre_msgs:
+                    contents = "\n\n".join(m["content"] for m in pre_msgs)
+                    user_input = (
+                        f"[以下文件已预读，可直接基于其内容回答]\n\n{contents}\n\n"
+                        f"── 用户问题 ──\n{user_input}"
+                    )
+
                 on_token, has_output = _make_display()
                 sid = [session_id]
                 _start_esc_listener()
@@ -455,4 +580,31 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    main()
+    # ── 最外层崩溃保护 ──
+    crash_file = Path.home() / ".ctgents" / "crash_restart_count"
+    crash_file.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        crash_file.write_text("0")
+        main()
+    except BaseException as e:
+        if isinstance(e, (KeyboardInterrupt, SystemExit)):
+            raise
+        try:
+            count = int(crash_file.read_text().strip() or "0")
+        except Exception:
+            count = 0
+        count += 1
+        crash_file.write_text(str(count))
+        logger.critical("Agent 崩溃 (第 %d 次): %s: %s", count, type(e).__name__, e)
+        if count >= 3:
+            print(f"\n⚠️ Agent 连续崩溃 {count} 次，停止自动重启。错误: {type(e).__name__}: {e}")
+            sys.exit(1)
+        print(f"\n⚠️ Agent 崩溃 (第 {count} 次)，自动 git reset 并重启...")
+        try:
+            subprocess.run(["git", "reset", "--hard", "HEAD"],
+                           cwd=str(Path(__file__).parent.parent),
+                           capture_output=True, timeout=10)
+        except Exception:
+            pass
+        print("正在重启...")
+        os.execv(sys.executable, [sys.executable, "-m", "src.main"])

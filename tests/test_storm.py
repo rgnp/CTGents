@@ -65,11 +65,11 @@ class TestStormDedup:
             r = storm_check("read_file", {"path": f"file_{i}.py"})
             assert r is None, f"第 {i+1} 次调用不应重复"
 
-        assert get_storm_stats()["window_size"] == 8, "窗口应保持最多 8 条"
+        assert get_storm_stats()["window_size"] == 9, "窗口 64，9条不触发淘汰"
 
-        # 此时 file_0.py 已被淘汰，可以再次调用
+        # 窗口 64，file_0.py 仍在窗口内，应命中缓存
         r = storm_check("read_file", {"path": "file_0.py"})
-        assert r is None, "最早的一条已被淘汰，应可再次调用"
+        assert r is not None, "窗口 64 不会淘汰 9 条中的第一条，应命中缓存"
 
     def test_args_normalization_none_values(self):
         """None 值参数不应影响哈希。"""
@@ -214,15 +214,15 @@ class TestStormCache:
 
         assert get_storm_stats()["cached"] == 8
 
-        # 第 9 条挤掉 file_0
+        # 第 9 条：窗口 64，不会淘汰
         storm_check("read_file", {"path": "file_8.py"})
         storm_record("read_file", {"path": "file_8.py"}, "content_8")
 
-        assert get_storm_stats()["cached"] == 8  # 仍为 8，file_0 被淘汰
+        assert get_storm_stats()["cached"] == 9  # 窗口 64，9 条不淘汰
 
-        # file_0 被淘汰后重新调用应通过（非重复）
+        # file_0 仍在窗口中，重复调用应命中
         r = storm_check("read_file", {"path": "file_0.py"})
-        assert r is None, "被淘汰后应可再次调用"
+        assert r is not None, "file_0 仍在窗口，应命中缓存"
 
     def test_record_blacklist_ignored(self):
         """storm_record 对黑名单工具是空操作。"""

@@ -4,6 +4,5 @@ tavily-python>=0.5.0
 trafilatura>=2.0.0
 lxml_html_clean
 prompt_toolkit>=3.0.0
-pyyaml>=6.0
 mcp>=1.0.0  # MCP 协议支持（可选）
 

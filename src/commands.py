@@ -990,6 +990,69 @@ def _cmd_stats(r: CmdResult, _ctx, args, _sid) -> None:
     r.message = "\n".join(parts)
 
 
+# ── 自进化命令 ──
+
+@builtin("/evolve", description="触发自进化：研究→综合→生成→验证→合入/回滚",
+         usage="/evolve <目标描述>")
+def _cmd_evolve(r: CmdResult, ctx, args, session_id) -> None:
+    """启动自进化流程。注入进化系统 prompt 驱动 LLM 自主完成。"""
+    if not args:
+        r.message = (
+            "用法: /evolve <目标描述>\n"
+            "例如:\n"
+            "  /evolve 优化文件搜索性能\n"
+            "  /evolve 给 read_file 添加缓存命中率统计\n"
+            "  /evolve 重构 llm.py 中的错误处理逻辑\n"
+        )
+        return
+    goal = " ".join(args)
+    from .evolution_loop import build_evolution_system_prompt
+    prompt = build_evolution_system_prompt(goal)
+    ctx.log.append({"role": "system", "content": prompt, "_volatile": True})
+    r.retry = True
+    r.save = True
+    r.message = f"自进化已启动\n目标: {goal}\n\nAgent 将自主完成研究→综合→生成→验证的全流程。按 Esc 可中断。"
+
+
+@builtin("/research", description="仅研究不修改：多源搜索+模式提取",
+         usage="/research <主题>")
+def _cmd_research(r: CmdResult, ctx, args, session_id) -> None:
+    """纯研究模式：搜索并报告发现，不修改代码。"""
+    if not args:
+        r.message = "用法: /research <主题>\n例如: /research Python asyncio 最佳实践"
+        return
+    topic = " ".join(args)
+    from .evolution_loop import build_research_prompt
+    prompt = build_research_prompt(topic)
+    ctx.log.append({"role": "system", "content": prompt, "_volatile": True})
+    r.retry = True
+    r.save = True
+    r.message = f"研究模式已启动\n主题: {topic}"
+
+
+@builtin("/watchdog", description="看门狗状态", usage="/watchdog [status]")
+def _cmd_watchdog(r: CmdResult, ctx, args, session_id) -> None:
+    """查看 watchdog 状态。"""
+    try:
+        from .watchdog import get_status
+        state = get_status()
+        if state is None:
+            r.message = "看门狗未运行（仅在本 session 内通过主进程启动时激活）"
+            return
+        lines = [
+            "═══ 看门狗状态 ═══",
+            f"  监控 PID: {state.get('parent_pid', 'N/A')}",
+            f"  复活次数: {state.get('resurrections', 0)}",
+            f"  崩溃记录: {len(state.get('crashes', []))} 次",
+            f"  启动时间: {state.get('started', 'N/A')}",
+        ]
+        if state.get("last_crash_reason"):
+            lines.append(f"  最近崩溃原因: {state['last_crash_reason']}")
+        r.message = "\n".join(lines)
+    except Exception as e:
+        r.message = f"无法读取看门狗状态: {e}"
+
+
 def dispatch(user_input: str, ctx: CacheContext, session_id: str | None) -> CmdResult:
     r = CmdResult()
     parts = user_input.split()
