@@ -95,28 +95,26 @@ SYSTEM_MAP = {
     "commands": {
         "name": "指令系统",
         "files": "src/commands.py",
-        "what": "/help /evolve /research /model /self /health /watchdog /stats 等终端命令",
+        "what": "/help /evolve /research /model /self /health /stats 等终端命令",
         "why": "@builtin 装饰器注册模式，CmdResult 控制后续行为（retry/save/clear）",
         "tools": [],
         "connections": {
             "evolution_loop": "/evolve 和 /research 注入进化 prompt",
             "llm": "/model 切换粘性模型，/clear 重置",
             "self": "/self 和 /health 调用 build_self_portrait()",
-            "watchdog": "/watchdog 读取看门狗状态",
             "evolve": "/stats 读取进化统计",
         },
     },
     "guard": {
         "name": "自我保护系统",
-        "files": "src/guard.py + src/coverage_gate.py + src/watchdog.py",
-        "what": "三层保护——崩溃自愈（traceback 分析→回滚→重试）、覆盖率门禁（5 级渐进解锁）、看门狗（独立进程监控复活）",
-        "why": "agent 可修改自身代码，唯一约束是测试覆盖率和外部看门狗。guard.py/watchdog.py 永不被修改",
+        "files": "src/guard.py + src/coverage_gate.py",
+        "what": "两层保护——崩溃自愈（traceback 分析→回滚→重试）+ 函数级关联测试门禁（tier 渐进解锁）",
+        "why": "agent 可修改自身代码，约束是函数级关联测试：要改的函数必须有测试覆盖。guard.py 永不被修改",
         "tools": [],
         "connections": {
             "coverage_gate": "is_protected() 委托 can_modify() 判断",
             "tools/file": "write_file 前检查 is_protected()",
             "main": "崩溃时外层 try-catch 调用 analyze_crash→execute_rollback",
-            "watchdog": "独立进程，通过心跳文件监控主进程",
         },
     },
     "evolution": {
@@ -184,7 +182,7 @@ SYSTEM_MAP = {
 CONNECTION_GRAPH = [
     ("main", "llm", "用户输入 → run_conversation() → LLM 回复"),
     ("main", "commands", "以 / 开头的输入 → dispatch() → CmdResult"),
-    ("main", "watchdog", "启动时 launch_watchdog() + heartbeat 线程"),
+    
     ("main", "guard", "崩溃时 analyze_crash() → execute_rollback() → 重试"),
     ("llm", "cache_context", "ctx.send() 序列化消息 → API 调用"),
     ("llm", "tools/__init__", "get_tools() → API tool definitions"),
@@ -270,13 +268,17 @@ def _architecture_section() -> str:
         "1. 缓存优先 — DeepSeek 前缀缓存按字节匹配，前缀不变则全命中。",
         "   因此 system prompt 极简（24 token），粘性模型避免切换，工具定义序列化一致。",
         "2. 渐进披露 — 不是所有信息都塞上下文。自省用 self 工具，搜索用 RAG，研究用子代理。",
-        "3. 无文件锁 — agent 理论上能改任何代码，只靠测试覆盖率和外部看门狗约束。",
+        "3. 无文件锁 — agent 理论上能改任何代码，靠函数级关联测试门禁约束：修改前须有测试保护。",
         "4. 自洽 — 写完代码自动刷新 RAG/覆盖率/插件，不需要人工记得。",
         "",
         "### 为什么是这个结构",
         "main.py 是外壳（I/O 循环 + 启动初始化），llm.py 是大脑（模型调用 + 工具批处理），",
-        "tools/ 是手（58 个工具操作文件/网络/代码/git），cache_context.py 是记忆（三段式上下文），",
-        "guard.py + watchdog.py 是免疫系统（崩溃回滚 + 进程复活）。",
+        "tools/ 是手（工具操作文件/网络/代码/git），cache_context.py 是记忆（三段式上下文），",
+        "guard.py 是免疫系统（崩溃回滚 + 重试）。",
+        "",
+        "### 完整文档",
+        "项目根目录 AGENTS.md 包含准确的架构文件清单、常用命令、设计决策。",
+        "随时用 read_file('AGENTS.md') 查看最新版——它不塞 prefix，按需读取。",
         "进化/研究/记忆/RAG 是上层能力——它们通过工具暴露给 LLM，LLM 自主决定何时调用。",
         "",
         "### 数据流",
@@ -290,7 +292,7 @@ def _architecture_section() -> str:
         "```",
         "",
         "### 启动流程",
-        "1. 启动看门狗子进程 + 心跳线程",
+        "1. 加载环境配置 → 构建 CacheContext prefix",
         "2. 构建 CacheContext prefix（env msg + 项目上下文 + RAG 状态）",
         "3. 注入覆盖率门禁摘要到 log",
         "4. 进入 read–eval–print 循环",
@@ -372,11 +374,11 @@ def _runtime_section() -> str:
     except Exception:
         pass
 
-    # 看门狗
+    # 覆盖率
     try:
-        from ..watchdog import get_status
-        wd = get_status()
-        lines.append(f"看门狗: {'运行中' if wd else '未运行'}")
+        from ..coverage_gate import get_overall_coverage, get_tier_summary
+        cov = get_overall_coverage()
+        lines.append(f"测试覆盖率: {cov:.0%}")
     except Exception:
         pass
 

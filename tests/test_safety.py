@@ -106,18 +106,14 @@ class TestMode:
         assert get_mode() == "manual"
 
     def test_mode_summary(self):
-        clear_trust()
-        set_mode("auto")
+        # 安全模式已移除，返回空字符串
         summary = get_mode_summary()
-        assert "AUTO" in summary
-        assert "信任" not in summary
+        assert summary == ""
 
     def test_mode_summary_with_trust(self):
-        set_mode("manual")
-        trust_tool("git_push")
+        # 安全模式已移除，返回空字符串
         summary = get_mode_summary()
-        assert "MANUAL" in summary
-        assert "信任" in summary
+        assert summary == ""
 
 
 class TestSessionTrust:

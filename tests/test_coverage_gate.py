@@ -1,4 +1,4 @@
-"""coverage_gate.py 测试 — 渐进安全模型的门禁逻辑。"""
+"""coverage_gate.py 测试 — 函数级关联测试门禁逻辑。"""
 
 import sys
 from pathlib import Path
@@ -36,13 +36,9 @@ class TestPatternMatching:
         assert not _match_pattern("src/main.py", "src/tools/*.py")
         assert not _match_pattern("tests/test.py", "src/*.py")
 
-    def test_watchdog_pattern(self):
-        assert _match_pattern("src/watchdog.py", "src/watchdog.py")
-        assert not _match_pattern("src/guard.py", "src/watchdog.py")
-
 
 class TestTierClassification:
-    """Tier 分类测试。"""
+    """Tier 分类测试（三 tier：0/1_config/2_core/3_critical）。"""
 
     def test_tool_in_tier_0(self):
         tier = _get_tier(str(Path(__file__).parent.parent / "src" / "tools" / "file.py"))
@@ -50,32 +46,20 @@ class TestTierClassification:
         assert tier[0] == "tier_0_open"
 
     def test_config_in_tier_1(self):
-        tier = _get_tier(str(Path(__file__).parent.parent / "src" / "config.py"))
-        assert tier is not None
-        assert tier[0] == "tier_1_config"
+        fp = str(Path(__file__).parent.parent / "src" / "config.py")
+        assert _get_tier(fp)[0] == "tier_1_config"
 
     def test_llm_in_tier_2(self):
-        tier = _get_tier(str(Path(__file__).parent.parent / "src" / "llm.py"))
-        assert tier is not None
-        assert tier[0] == "tier_2_core"
+        fp = str(Path(__file__).parent.parent / "src" / "llm.py")
+        assert _get_tier(fp)[0] == "tier_2_core"
 
     def test_guard_in_tier_3(self):
-        tier = _get_tier(str(Path(__file__).parent.parent / "src" / "guard.py"))
-        assert tier is not None
-        assert tier[0] == "tier_3_critical"
+        fp = str(Path(__file__).parent.parent / "src" / "guard.py")
+        assert _get_tier(fp)[0] == "tier_3_critical"
 
     def test_main_in_tier_3(self):
-        tier = _get_tier(str(Path(__file__).parent.parent / "src" / "main.py"))
-        assert tier is not None
-        assert tier[0] == "tier_3_critical"
-
-    def test_watchdog_in_tier_4(self):
-        # watchdog.py 可能还不存在，但模式应匹配
-        wd_path = str(Path(__file__).parent.parent / "src" / "watchdog.py")
-        tier = _get_tier(wd_path)
-        # 文件可能不存在但分类逻辑应正确
-        if tier is not None:
-            assert tier[0] == "tier_4_watchdog"
+        fp = str(Path(__file__).parent.parent / "src" / "main.py")
+        assert _get_tier(fp)[0] == "tier_3_critical"
 
     def test_non_project_file(self):
         tier = _get_tier("/tmp/random.py")
@@ -89,7 +73,7 @@ class TestCanModify:
     def _mock_coverage(pct):
         clear_cache()
         import src.coverage_gate as cg
-        cg._coverage_cache = (pct, {}, 9999999999)
+        cg._coverage_cache = (pct, {}, {}, 9999999999)
 
     def test_tier_0_always_modifiable(self):
         self._mock_coverage(0.10)
@@ -101,7 +85,7 @@ class TestCanModify:
         self._mock_coverage(0.50)
         fp = str(Path(__file__).parent.parent / "src" / "config.py")
         allowed, reason = can_modify(fp)
-        assert allowed, f"覆盖率 50% >= 45% 应允许，实际: {reason}"
+        assert allowed, f"覆盖率 50% >= 45% 应允许: {reason}"
 
     def test_tier_2_blocked_at_50pct(self):
         self._mock_coverage(0.50)
@@ -109,29 +93,27 @@ class TestCanModify:
         allowed, reason = can_modify(fp)
         assert not allowed, f"覆盖率 50% < 60% 应拒绝，实际: {reason}"
 
-    def test_tier_4_always_blocked(self):
-        self._mock_coverage(0.50)
-        fp = str(Path(__file__).parent.parent / "src" / "watchdog.py")
-        allowed, reason = can_modify(fp)
-        assert not allowed, f"tier_4 应始终拒绝，实际: {reason}"
-
     def test_tier_2_unlocked_at_60pct(self):
         self._mock_coverage(0.60)
         fp = str(Path(__file__).parent.parent / "src" / "llm.py")
         allowed, reason = can_modify(fp)
-        assert allowed, f"覆盖率 60% >= 60% 应允许，实际: {reason}"
+        assert allowed, f"覆盖率 60% >= 60% 应允许: {reason}"
 
     def test_tier_3_blocked_at_60pct(self):
         self._mock_coverage(0.60)
         fp = str(Path(__file__).parent.parent / "src" / "guard.py")
         allowed, reason = can_modify(fp)
-        assert not allowed, f"覆盖率 60% < 75% 应拒绝，实际: {reason}"
+        assert not allowed, f"覆盖率 60% < 75% 应拒绝: {reason}"
 
     def test_tier_3_unlocked_at_80pct(self):
         self._mock_coverage(0.80)
-        fp = str(Path(__file__).parent.parent / "src" / "main.py")
+        fp = str(Path(__file__).parent.parent / "src" / "guard.py")
         allowed, reason = can_modify(fp)
-        assert allowed, f"覆盖率 80% >= 75% 应允许，实际: {reason}"
+        assert allowed, f"覆盖率 80% >= 75% 应允许: {reason}"
+
+    def test_non_project_file(self):
+        allowed, reason = can_modify("/tmp/x.py")
+        assert not allowed
 
 
 class TestGetAccessLevel:
@@ -141,7 +123,7 @@ class TestGetAccessLevel:
     def _mock_coverage(pct):
         clear_cache()
         import src.coverage_gate as cg
-        cg._coverage_cache = (pct, {}, 9999999999)
+        cg._coverage_cache = (pct, {}, {}, 9999999999)
 
     def test_tool_write_access(self):
         self._mock_coverage(0.50)
@@ -153,11 +135,6 @@ class TestGetAccessLevel:
         fp = str(Path(__file__).parent.parent / "src" / "llm.py")
         assert get_access_level(fp) == AccessLevel.READ_ONLY
 
-    def test_watchdog_restricted(self):
-        self._mock_coverage(0.50)
-        fp = str(Path(__file__).parent.parent / "src" / "watchdog.py")
-        assert get_access_level(fp) == AccessLevel.RESTRICTED
-
 
 class TestTierSummary:
     """get_tier_summary 测试。"""
@@ -165,14 +142,12 @@ class TestTierSummary:
     def test_summary_contains_all_tiers(self):
         clear_cache()
         import src.coverage_gate as cg
-        cg._coverage_cache = (0.50, {}, 9999999999)
+        cg._coverage_cache = (0.50, {}, {}, 9999999999)
         summary = get_tier_summary()
         assert "tier_0_open" in summary
         assert "tier_1_config" in summary
         assert "tier_2_core" in summary
         assert "tier_3_critical" in summary
-        assert "tier_4_watchdog" in summary
-        assert "50%" in summary or "50%" in summary.replace("50%", "50%")
 
 
 class TestSuggestTests:
@@ -182,20 +157,20 @@ class TestSuggestTests:
     def _mock_coverage(pct):
         clear_cache()
         import src.coverage_gate as cg
-        cg._coverage_cache = (pct, {}, 9999999999)
+        cg._coverage_cache = (pct, {}, {}, 9999999999)
 
     def test_suggests_for_locked_file(self):
         self._mock_coverage(0.30)
         fp = str(Path(__file__).parent.parent / "src" / "llm.py")
         result = suggest_tests_to_unlock(fp)
-        assert "需要覆盖率从" in result
         assert "60%" in result or "0.60" in result
+        assert "30%" in result or "0.30" in result
 
     def test_suggests_for_unlocked_file(self):
         self._mock_coverage(0.80)
         fp = str(Path(__file__).parent.parent / "src" / "tools" / "file.py")
         result = suggest_tests_to_unlock(fp)
-        assert "已解锁" in result
+        assert "始终可修改" in result
 
 
 class TestModifiableFiles:
@@ -205,9 +180,9 @@ class TestModifiableFiles:
     def _mock_coverage(pct):
         clear_cache()
         import src.coverage_gate as cg
-        cg._coverage_cache = (pct, {}, 9999999999)
+        cg._coverage_cache = (pct, {}, {}, 9999999999)
 
-    def test_tools_always_modifiable(self):
+    def test_tier_0_always_included(self):
         self._mock_coverage(0.10)
         files = get_modifiable_files()
         tool_files = [f for f in files if f.startswith("src/tools/")]
@@ -222,63 +197,70 @@ class TestModifiableFiles:
 
 
 class TestThresholds:
-    """验证门槛值合理递增。"""
+    """验证门槛值合理递增（三 tier）。"""
 
     def test_thresholds_increasing(self):
         thresholds = [FILE_TIERS[t]["threshold"] for t in
                        ["tier_0_open", "tier_1_config", "tier_2_core",
-                        "tier_3_critical", "tier_4_watchdog"]]
+                        "tier_3_critical"]]
         for i in range(len(thresholds) - 1):
             assert thresholds[i] < thresholds[i + 1], (
                 f"门槛应递增: {thresholds[i]} < {thresholds[i+1]}"
             )
 
-    def test_tier_4_requires_full_coverage(self):
-        assert FILE_TIERS["tier_4_watchdog"]["threshold"] == 1.0
+    def test_tier_3_requires_75pct(self):
+        assert FILE_TIERS["tier_3_critical"]["threshold"] == 0.75
 
 
-if __name__ == "__main__":
-    tests = [
-        ("Pattern: 精确匹配", TestPatternMatching().test_exact_match),
-        ("Pattern: 通配符匹配", TestPatternMatching().test_wildcard_match),
-        ("Pattern: 深层通配符", TestPatternMatching().test_deep_wildcard),
-        ("Pattern: 不匹配", TestPatternMatching().test_no_match),
-        ("Pattern: watchdog 模式", TestPatternMatching().test_watchdog_pattern),
-        ("Tier: 工具在 tier_0", TestTierClassification().test_tool_in_tier_0),
-        ("Tier: 配置在 tier_1", TestTierClassification().test_config_in_tier_1),
-        ("Tier: LLM 在 tier_2", TestTierClassification().test_llm_in_tier_2),
-        ("Tier: guard 在 tier_3", TestTierClassification().test_guard_in_tier_3),
-        ("Tier: main 在 tier_3", TestTierClassification().test_main_in_tier_3),
-        ("Tier: 非项目文件", TestTierClassification().test_non_project_file),
-        ("修改: tier_0 始终可改", TestCanModify().test_tier_0_always_modifiable),
-        ("修改: tier_1 50%可改", TestCanModify().test_tier_1_modifiable_with_50pct),
-        ("修改: tier_2 50%拒绝", TestCanModify().test_tier_2_blocked_at_50pct),
-        ("修改: tier_4 永远拒绝", TestCanModify().test_tier_4_always_blocked),
-        ("修改: tier_2 60%解锁", TestCanModify().test_tier_2_unlocked_at_60pct),
-        ("修改: tier_3 60%拒绝", TestCanModify().test_tier_3_blocked_at_60pct),
-        ("修改: tier_3 80%解锁", TestCanModify().test_tier_3_unlocked_at_80pct),
-        ("访问: 工具有写权限", TestGetAccessLevel().test_tool_write_access),
-        ("访问: LLM 只读", TestGetAccessLevel().test_llm_read_only),
-        ("访问: watchdog 受限", TestGetAccessLevel().test_watchdog_restricted),
-        ("摘要: 包含所有 tier", TestTierSummary().test_summary_contains_all_tiers),
-        ("建议: 锁定文件", TestSuggestTests().test_suggests_for_locked_file),
-        ("建议: 已解锁文件", TestSuggestTests().test_suggests_for_unlocked_file),
-        ("文件: 工具始终可改", TestModifiableFiles().test_tools_always_modifiable),
-        ("文件: 覆盖率更高解锁更多", TestModifiableFiles().test_more_files_with_higher_coverage),
-        ("门槛: 递增", TestThresholds().test_thresholds_increasing),
-        ("门槛: tier_4 需100%", TestThresholds().test_tier_4_requires_full_coverage),
-    ]
+class TestFunctionLevelCheck:
+    """函数级关联测试检查 — 核心新功能测试。"""
 
-    passed = 0
-    for name, fn in tests:
-        try:
-            fn()
-            print(f"  ✅ {name}")
-            passed += 1
-        except AssertionError as e:
-            print(f"  ❌ {name}: {e}")
-        except Exception as e:
-            print(f"  💥 {name}: {type(e).__name__}: {e}")
+    @staticmethod
+    def _setup_cache(pct, covered_lines=None):
+        clear_cache()
+        import src.coverage_gate as cg
+        line_data = {"src/commands.py": covered_lines or set()}
+        cg._coverage_cache = (pct, {"src/commands.py": pct}, line_data, 9999999999)
 
-    print(f"\n{'═' * 40}")
-    print(f"  结果: {passed}/{len(tests)} 通过")
+    def test_function_level_no_touched_functions_falls_back(self):
+        """不提供 touched_functions 时回退到全局覆盖率检查。"""
+        self._setup_cache(0.50)
+        fp = str(Path(__file__).parent.parent / "src" / "commands.py")
+        allowed, reason = can_modify(fp)
+        assert allowed, f"50% >= 45% 应允许: {reason}"
+
+    def test_function_level_covered_allows(self):
+        """要改的函数有测试覆盖 → 放行。"""
+        self._setup_cache(0.30, {50, 51, 52, 53})  # 覆盖了 _add_cmd 函数（第50行起）
+        fp = str(Path(__file__).parent.parent / "src" / "commands.py")
+        allowed, reason = can_modify(fp, touched_functions=["_add_cmd"])
+        assert allowed, f"函数有覆盖应允许: {reason}"
+
+    def test_function_level_uncovered_blocks(self):
+        """要改的函数没测试覆盖 → 拒绝并列出函数名。"""
+        self._setup_cache(0.30, set())
+        fp = str(Path(__file__).parent.parent / "src" / "commands.py")
+        allowed, reason = can_modify(fp, touched_functions=["dispatch"])
+        assert not allowed, f"无覆盖应拒绝: {reason}"
+        assert "dispatch" in reason
+
+    def test_function_level_mixed_coverage(self):
+        """部分有覆盖 → 拒绝并精确指出哪个函数没覆盖。"""
+        self._setup_cache(0.30, set(range(50, 61)))  # 只覆盖 _add_cmd
+        fp = str(Path(__file__).parent.parent / "src" / "commands.py")
+        allowed, reason = can_modify(fp, touched_functions=["_add_cmd", "dispatch"])
+        assert not allowed
+        assert "dispatch" in reason
+
+    def test_function_level_tier_0_always_ok(self):
+        """Tier 0 文件不走函数级检查，始终放行。"""
+        fp = str(Path(__file__).parent.parent / "src" / "tools" / "file.py")
+        allowed, reason = can_modify(fp, touched_functions=["write_file"])
+        assert allowed, f"Tier 0 应始终放行: {reason}"
+
+    def test_suggest_with_touched_functions(self):
+        """suggest_tests_to_unlock 支持函数级精确建议。"""
+        self._setup_cache(0.30, set())
+        fp = str(Path(__file__).parent.parent / "src" / "commands.py")
+        result = suggest_tests_to_unlock(fp, touched_functions=["dispatch"])
+        assert "dispatch" in result

@@ -14,7 +14,7 @@ class TestParallelSafeWhitelist:
 
     def test_read_tools_in_whitelist(self):
         """读取类工具应在白名单中。"""
-        for tool in ("read_file", "read_file_lines", "list_files", "count_lines"):
+        for tool in ("read_file", "list_files", "count_lines"):
             assert tool in _PARALLEL_SAFE, f"{tool} 应在并行白名单中"
 
     def test_search_tools_in_whitelist(self):

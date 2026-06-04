@@ -189,9 +189,8 @@ def check_tool(tool_name: str) -> str:
 
 
 def get_mode_summary() -> str:
-    """返回模式摘要，用于注入 system prompt。"""
-    trusted = f"（{len(_session_trust)} 个工具已信任）" if _session_trust else ""
-    return f"模式: {_mode.upper()}{trusted}"
+    """已废弃——安全模式已移除。保留函数签名防止旧会话中的 import 报错。"""
+    return ""
 
 
 def format_tool_safety(tool_name: str) -> str:

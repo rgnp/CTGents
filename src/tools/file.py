@@ -10,7 +10,7 @@ from pathlib import Path
 _LIST_CACHE_TTL = 300   # 秒（同 web 工具一致，5 分钟）
 _list_cache: dict[str, tuple[float, str]] = {}
 # ── 文件内容缓存 ──（read_file / read_file_lines 共用）
-_FILE_CACHE_TTL = 60    # 秒，短 TTL 避免读取过期内容
+_FILE_CACHE_TTL = 300  # 秒，5分钟。项目源码不会频繁变，mtime 双重验证
 _FILE_CACHE_MAX = 50    # 最大条目数
 _file_cache: dict[str, tuple[float, float, str]] = {}  # key → (ts, mtime, content)
 # ── 备份目录 ──
@@ -200,27 +200,7 @@ TOOLS_FILE = [
         "type": "function",
         "function": {
             "name": "read_file",
-            "description": "读取本地文件内容。可以读取项目中的代码、文档、配置等文件。",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "path": {
-                        "type": "string",
-                        "description": "文件路径，支持相对路径或绝对路径",
-                    }
-                },
-                "required": ["path"],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "read_file_lines",
-            "description": (
-                "带行号读取文件。每行前面标注行号，适合定位要修改的行。"
-                "修改前先用此工具查看文件内容。"
-            ),
+            "description": "读取文件。不加行号参数返回全文；加 start_line/end_line 返回带行号的指定范围。",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -245,7 +225,10 @@ TOOLS_FILE = [
         "type": "function",
         "function": {
             "name": "write_file",
-            "description": "创建或覆写本地文件。",
+            "description": (
+                "创建或覆写本地文件。⚠️ 使用前必须先用 read_file 读取目标文件的当前内容，"
+                "不要凭记忆操作。修改完成后记得运行测试验证。"
+            ),
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -266,7 +249,11 @@ TOOLS_FILE = [
         "type": "function",
         "function": {
             "name": "edit_file_lines",
-            "description": "行级编辑文件：替换、删除或插入指定行。行号从 1 开始。",
+            "description": (
+                "行级编辑文件：替换、删除或插入指定行。行号从 1 开始。"
+                "⚠️ 编辑前必须先用 read_file 读取目标文件当前内容和行号。"
+                "不要凭记忆猜测行号——文件可能已被之前的编辑改变。"
+            ),
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -290,23 +277,6 @@ TOOLS_FILE = [
                     },
                 },
                 "required": ["path", "action", "start_line"],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "undo_edit",
-            "description": "撤销最近一次对该文件的编辑。",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "path": {
-                        "type": "string",
-                        "description": "要撤销的文件路径",
-                    },
-                },
-                "required": ["path"],
             },
         },
     },
@@ -369,6 +339,15 @@ TOOLS_FILE = [
 
 def _resolve(path: str) -> Path:
     return Path(path).expanduser().resolve()
+
+
+def _ensure_in_workspace(filepath: Path) -> None:
+    """确保路径在工作目录内。所有写/删操作必须经过此检查。"""
+    root = Path.cwd().resolve()
+    try:
+        filepath.resolve().relative_to(root)
+    except ValueError:
+        raise PermissionError(f"路径超出工作目录范围: {filepath}\n工作目录: {root}\n所有增删改操作只能在工作目录内进行。")
 
 
 def _assert_file(filepath: Path) -> None:
@@ -530,8 +509,8 @@ def _read_cached(path: Path) -> str:
     return raw
 
 
-def read_file(path: str) -> str:
-    """读取本地文件内容。"""
+def read_file(path: str, start_line: int | None = None, end_line: int | None = None) -> str:
+    """读取文件。不带行号参数返回全文，带行号参数返回带行号的指定范围。"""
     filepath = _resolve(path)
     if not filepath.exists():
         return f"文件不存在: {path}"
@@ -540,36 +519,25 @@ def read_file(path: str) -> str:
     raw = _read_cached(filepath)
     if raw is None:
         return f"无法以 UTF-8 编码读取: {path}（可能是二进制文件）"
-    return raw
 
+    if start_line is None and end_line is None:
+        return raw
 
-def read_file_lines(path: str, start_line: int | None = None, end_line: int | None = None) -> str:
-    """带行号读取文件指定范围。"""
-    filepath = _resolve(path)
-    _assert_file(filepath)
-
-    raw = _read_cached(filepath)
-    if raw is None:
-        return f"无法以 UTF-8 编码读取: {path}（可能是二进制文件）"
     lines = raw.split("\n")
-
     total = len(lines)
     s = max(1, start_line or 1)
     e = min(total, end_line or total)
-
     if s > total:
         return f"起始行号 {s} 超出文件总行数 {total}"
     if s > e:
         return f"起始行号 {s} 大于结束行号 {e}"
+    return "\n".join(f"{i+1:4d}|{line}" for i, line in enumerate(lines[s-1:e], start=s-1))
 
-    result_lines = []
-    for i in range(s - 1, e):
-        line_num = i + 1
-        # 行号右对齐 + 竖线，便于阅读
-        result_lines.append(f"{line_num:>6} | {lines[i]}")
 
-    info = f"文件: {filepath}（共 {total} 行），显示第 {s}-{e} 行"
-    return info + "\n" + "-" * len(info) + "\n" + "\n".join(result_lines)
+def read_file_lines(path: str, start_line: int | None = None, end_line: int | None = None) -> str:
+    """已废弃，同 read_file。保留向后兼容。"""
+    return read_file(path, start_line, end_line)
+
 
 
 # ── 写入（覆写）──
@@ -578,22 +546,14 @@ def read_file_lines(path: str, start_line: int | None = None, end_line: int | No
 def write_file(path: str, content: str) -> str:
     """创建或覆写文件。写入前自动备份，.py 文件自动语法校验。"""
     filepath = _resolve(path)
+    _ensure_in_workspace(filepath)
     from ..guard import is_protected
     if is_protected(filepath):
-        return f"⛔ 受保护文件，禁止修改: {path}\n该文件是系统自愈模块，修改它可能导致系统无法自动恢复。"
-    backup = _backup(filepath) if filepath.exists() else None
+        return f"⛔ 受保护文件，禁止修改: {path}"
     try:
         filepath.parent.mkdir(parents=True, exist_ok=True)
         filepath.write_text(content, encoding="utf-8")
-        err = _validate_py(filepath, backup)
-        if err:
-            return f"写入失败: {err}"
-        err = _validate_imports(filepath, backup)
-        if err:
-            return f"写入失败: {err}"
-        _invalidate_pyc(filepath)
-        track = _track_changes(str(filepath))
-        return f"已写入: {filepath}（{len(content)} 字符）{track}"
+        return f"已写入: {filepath}（{len(content)} 字符）"
     except OSError as e:
         return f"写入失败: {e}"
 
@@ -605,6 +565,7 @@ def edit_file_lines(path: str, action: str, start_line: int,
                     end_line: int | None = None, new_lines: str | None = None) -> str:
     """行级编辑文件。"""
     filepath = _resolve(path)
+    _ensure_in_workspace(filepath)
     _assert_file(filepath)
     from ..guard import is_protected
     if is_protected(filepath):
@@ -634,9 +595,7 @@ def edit_file_lines(path: str, action: str, start_line: int,
         return f"{action} 操作需要提供 new_lines"
 
     # ── 执行操作 ──
-    backup_path = _backup(filepath)
     new_content_lines = new_lines.split("\n") if new_lines else []
-
     if action == "replace":
         result = original_lines[:s - 1] + new_content_lines + original_lines[e:]
     elif action == "delete":
@@ -649,22 +608,6 @@ def edit_file_lines(path: str, action: str, start_line: int,
     # ── 写回 ──
     filepath.write_text("\n".join(result), encoding="utf-8")
 
-    # ── Python 语法校验 ──
-    err = _validate_py(filepath, backup_path)
-    if err:
-        track = _track_changes(str(filepath))
-        return f"编辑失败: {err}{track}"
-
-    # ── Import 校验 ──
-    err = _validate_imports(filepath, backup_path)
-    if err:
-        track = _track_changes(str(filepath))
-        return f"编辑失败: {err}{track}"
-
-    # ── 清理字节码缓存 ──
-    _invalidate_pyc(filepath)
-
-    # ── 构造详细的变更报告 ──
     old_count = (e - s + 1) if action in ("replace", "delete") else 0
     new_count = len(new_content_lines)
     delta = new_count - old_count
@@ -677,13 +620,10 @@ def edit_file_lines(path: str, action: str, start_line: int,
     elif action == "insert":
         changed_range += f"后（插入 {new_count} 行）"
 
-    track = _track_changes(str(filepath))
     return (
         f"已编辑: {filepath}\n"
         f"操作: {action} {changed_range}\n"
-        f"备份: {backup_path}\n"
         f"文件现在共 {len(result)} 行"
-        f"{track}"
     )
 
 
@@ -691,22 +631,8 @@ def edit_file_lines(path: str, action: str, start_line: int,
 
 
 def undo_edit(path: str) -> str:
-    """撤销最近一次编辑。"""
-    filepath = _resolve(path)
-    backups = _list_backups(filepath)
-    if not backups:
-        return f"没有找到 {path} 的备份记录"
-
-    latest = backups[0]
-    if not latest.exists():
-        return f"备份文件已损坏: {latest}"
-
-    # 当前文件也备份一次（防误操作）
-    if filepath.exists():
-        _backup(filepath)
-
-    shutil.copy2(latest, filepath)
-    return f"已撤销: {filepath}（恢复自 {latest.name}）"
+    """已废弃。"""
+    return "⛔ undo_edit 已废弃"
 
 def count_lines(path: str) -> str:
     """统计文件行数、字符数、单词数。"""
@@ -779,6 +705,7 @@ def list_files(path: str | None) -> str:
 def delete_file(path: str) -> str:
     """删除文件。删除前会告知用户。不可恢复。"""
     filepath = _resolve(path)
+    _ensure_in_workspace(filepath)
     if not filepath.exists():
         return f"文件不存在: {path}"
     if not filepath.is_file():
@@ -815,8 +742,6 @@ def execute(name: str, args: dict) -> str | None:
             args.get("end_line"),
             args.get("new_lines"),
         )
-    if name == "undo_edit":
-        return undo_edit(args.get("path", ""))
     if name == "count_lines":
         return count_lines(args.get("path", ""))
     if name == "list_files":

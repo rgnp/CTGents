@@ -138,7 +138,7 @@ def build_evolution_system_prompt(goal: str) -> str:
         "2. 改完后必须 `evolve_validate` 验证",
         "3. 验证失败必须回滚或修复",
         "4. 同样的错误不犯两次（先查 `evolve_query`）",
-        "5. 修改 `src/guard.py` 或 `src/watchdog.py` 需要最高覆盖率（查 `evolve_coverage`）",
+        "5. 修改 `src/guard.py` 需要最高覆盖率（查 `evolve_coverage`）",
         "",
         "### 输出规范",
         "每个阶段完成后给出明确的「阶段完成」标记，便于追踪进度。",

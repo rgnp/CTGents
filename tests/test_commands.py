@@ -59,8 +59,8 @@ class TestDispatch:
         assert len(r.message) >= 0
         assert len(r.message) > 0
 
-    def test_mode_registered(self):
-        r = cmds.dispatch("/mode", self.ctx, None)
+    def test_model_registered(self):
+        r = cmds.dispatch("/model", self.ctx, None)
         assert len(r.message) > 0
 
     def test_unknown_command(self):

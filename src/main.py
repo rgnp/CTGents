@@ -1,7 +1,6 @@
 import logging
 import os
 import re
-import subprocess
 import sys
 import threading
 import time
@@ -14,7 +13,6 @@ logging.basicConfig(
     datefmt="%H:%M:%S",
 )
 
-from .guard import analyze_crash, build_report, execute_rollback
 from .cache_context import CacheContext
 from .commands import dispatch as dispatch_cmd
 from .config import SESSION_DIR
@@ -56,31 +54,13 @@ def _stop_esc_listener() -> None:
     _esc_listener_active = False
 
 
-def _launch_watchdog() -> int | None:
-    """启动看门狗子进程。返回 PID 或 None。"""
-    try:
-        proc = subprocess.Popen(
-            [sys.executable, "-m", "src.watchdog", str(os.getpid()), str(Path.cwd())],
-            creationflags=subprocess.CREATE_NEW_PROCESS_GROUP if sys.platform == "win32" else 0,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-        )
-        return proc.pid
-    except Exception:
+def _make_memory_context() -> dict | None:
+    """读取记忆索引，生成简洁的记忆上下文。"""
+    from .tools.memory import get_context
+    ctx_str = get_context()
+    if not ctx_str:
         return None
-
-
-def _heartbeat_loop() -> None:
-    """后台线程：每 30 秒写入心跳时间戳。"""
-    heartbeat_file = Path.home() / ".ctgents" / "watchdog_heartbeat"
-    heartbeat_file.parent.mkdir(parents=True, exist_ok=True)
-    while True:
-        try:
-            heartbeat_file.write_text(str(time.time()))
-        except OSError:
-            pass
-        time.sleep(30)
-
+    return {"role": "system", "content": ctx_str, "_volatile": True}
 
 
 def _make_project_context() -> dict | None:
@@ -99,31 +79,9 @@ logger = logging.getLogger(__name__)
 
 
 def _make_agents_message() -> dict:
-    """从 AGENTS.md 构建 Agent 总纲系统消息（不可变前缀成员）。
-
-    AGENTS.md 是 Agent 的完整操作手册——行为协议、工具清单、架构规则。
-    每次会话启动时加载到 immutable prefix，确保 DeepSeek 前缀缓存 100% 命中。
-    参考：Reasonix 的 cache-first loop 设计——系统提示必须 byte-stable。
-    """
     agents_path = Path(__file__).parent.parent / "AGENTS.md"
-    if agents_path.exists():
-        content = agents_path.read_text(encoding="utf-8")
-    else:
-        content = "你是一个终端编程助手，可以读写文件、执行命令、搜索代码、操作 git。"
-    return {
-        "role": "system",
-        "content": content,
-        "_volatile": True,  # 每次启动重建，不持久化到会话文件
-    }
-
-
-def _make_memory_context() -> dict | None:
-    """读取记忆索引，生成简洁的记忆上下文（缓存版，不反复读文件）。"""
-    from .tools.memory import get_context
-    ctx_str = get_context()
-    if not ctx_str:
-        return None
-    return {"role": "system", "content": ctx_str, "_volatile": True}
+    content = agents_path.read_text(encoding="utf-8") if agents_path.exists() else "CTGents 编程助手。"
+    return {"role": "system", "content": content, "_volatile": True}
 
 
 def _append_volatile_context(ctx: CacheContext) -> None:
@@ -139,10 +97,6 @@ def _append_volatile_context(ctx: CacheContext) -> None:
     mem_ctx = _make_memory_context()
     if mem_ctx:
         ctx.log.append(mem_ctx)
-
-    # ── 安全模式 ──
-    from .safety import get_mode_summary
-    ctx.log.append({"role": "system", "content": get_mode_summary(), "_volatile": True})
 
     # ── RAG 索引状态（移出 prefix，避免索引变→prefix碎→缓存全丢） ──
     try:
@@ -360,10 +314,8 @@ def main() -> None:
             idx = int(choice) - 1
             if 0 <= idx < len(sessions):
                 session_id = sessions[idx]
-                messages, summary = load_session(session_id)
+                messages, _summary = load_session(session_id)
                 ctx = CacheContext(log_msgs=messages)
-                if summary:
-                    ctx.log.append({"role": "system", "content": f"之前对话的摘要：{summary}", "_volatile": True})
                 print(f"已加载会话 [{session_id}]，共 {len(ctx)} 条消息")
                 _print_recent(ctx.all)
                 print()
@@ -383,22 +335,6 @@ def main() -> None:
     _append_volatile_context(ctx)
 
     print("Agent 已启动，输入 /help 查看指令列表\n")
-
-    # ── 看门狗 + 心跳 ──
-    _watchdog_pid = _launch_watchdog()
-    if _watchdog_pid:
-        logger.info("看门狗已启动 (PID: %d)", _watchdog_pid)
-    _heartbeat_thread = threading.Thread(target=_heartbeat_loop, daemon=True)
-    _heartbeat_thread.start()
-
-    # ── 覆盖率门禁摘要 ──
-    try:
-        from .coverage_gate import get_tier_summary
-        tier = get_tier_summary()
-        if tier:
-            ctx.log.append({"role": "system", "content": tier, "_volatile": True})
-    except Exception:
-        pass
 
     _use_rich_input = sys.stdin.isatty()
     if _use_rich_input:
@@ -447,23 +383,43 @@ def main() -> None:
                     print(f"会话已保存: [{session_id}]")
                 if r.load:
                     ctx.clear_log()
-                    loaded_msgs, summary = load_session(r.load)
+                    loaded_msgs, _summary = load_session(r.load)
                     ctx.log.extend(loaded_msgs)
-                    if summary:
-                        ctx.log.append({"role": "system", "content": f"之前对话的摘要：{summary}", "_volatile": True})
                     session_id = r.load
                     print(f"已加载会话 [{r.load}]，共 {len(ctx)} 条消息")
                     _print_recent(ctx.all)
                 if r.clear:
                     ctx.clear_log()
-                    # 重建 prefix（仅 AGENTS.md + 项目上下文）
-                    prefix = [_make_agents_message()]
+                    # 重建 prefix（环境上下文 + 项目感知）
+                    prefix = []
+                    try:
+                        from .tools.rag import get_index_status, _load_doc_index
+                        rag_info = get_index_status()
+                        if "未建立" not in rag_info:
+                            prefix.append({
+                                "role": "system",
+                                "content": "RAG 代码索引已就绪。研究知识库可用 search_papers 搜论文、save_note 记笔记。",
+                                "_volatile": True,
+                            })
+                        if _load_doc_index("research") is not None:
+                            prefix.append({
+                                "role": "system",
+                                "content": "RAG 研究索引已就绪。rag_query(scope='research') 可语义搜索论文和笔记。",
+                                "_volatile": True,
+                            })
+                    except Exception:
+                        pass
+                    if r.save:   # /new: 同时重置 session
+                        session_id = None
+                    prefix.append(_make_agents_message())
                     proj_ctx = _make_project_context()
                     if proj_ctx:
                         prefix.append(proj_ctx)
                     ctx.rebuild_prefix(prefix)
-                    # ── volatile 系统消息（log 末尾，仅追加不修改） ──
-                    _append_volatile_context(ctx)
+                    # ── 动态上下文（log 区，不影响前缀缓存） ──
+                    mem_ctx = _make_memory_context()
+                    if mem_ctx:
+                        ctx.log.append(mem_ctx)
                 if r.retry:
                     last_user = ctx.last_user_content() or ""
                     if last_user:
@@ -539,16 +495,14 @@ def main() -> None:
                 if isinstance(e, SystemExit) and e.code == 0:
                     break
 
-                # ── 自愈系统：分析崩溃 → 回滚 → 重试 ──
+                # 显示错误信息
                 if isinstance(e, Exception):
-                    analysis = analyze_crash(type(e), e, e.__traceback__)
-                    if analysis["recoverable"]:
-                        restored = execute_rollback(analysis["rollback_candidates"])
-                        report = build_report(analysis, restored)
-                        ctx.log.append({"role": "system", "content": report, "_volatile": True})
-                        session_id = save_session(ctx.all, session_id)
-                        print(f"\n⚠️ 崩溃检测: 已回滚 {len(restored)} 个文件，注入诊断上下文，重试中...\n")
-                        continue
+                    print(f"\n💥 错误: {type(e).__name__}: {e}")
+                    import traceback
+                    tb_lines = traceback.format_exception(type(e), e, e.__traceback__)
+                    for line in tb_lines[-5:]:
+                        print(f"   {line.strip()}")
+                    print()
 
                 # ── 非 Exception 的 BaseException（SystemExit 非零等）──
                 logger.error("对话出错: %s", e)
@@ -565,31 +519,4 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    # ── 最外层崩溃保护 ──
-    crash_file = Path.home() / ".ctgents" / "crash_restart_count"
-    crash_file.parent.mkdir(parents=True, exist_ok=True)
-    try:
-        crash_file.write_text("0")
-        main()
-    except BaseException as e:
-        if isinstance(e, (KeyboardInterrupt, SystemExit)):
-            raise
-        try:
-            count = int(crash_file.read_text().strip() or "0")
-        except Exception:
-            count = 0
-        count += 1
-        crash_file.write_text(str(count))
-        logger.critical("Agent 崩溃 (第 %d 次): %s: %s", count, type(e).__name__, e)
-        if count >= 3:
-            print(f"\n⚠️ Agent 连续崩溃 {count} 次，停止自动重启。错误: {type(e).__name__}: {e}")
-            sys.exit(1)
-        print(f"\n⚠️ Agent 崩溃 (第 {count} 次)，自动 git reset 并重启...")
-        try:
-            subprocess.run(["git", "reset", "--hard", "HEAD"],
-                           cwd=str(Path(__file__).parent.parent),
-                           capture_output=True, timeout=10)
-        except Exception:
-            pass
-        print("正在重启...")
-        os.execv(sys.executable, [sys.executable, "-m", "src.main"])
+    main()

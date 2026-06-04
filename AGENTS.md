@@ -1,169 +1,84 @@
-# AGENTS.md — AI 编程智能体操作手册 v3
+# AGENTS.md
 
-> 本文档是系统提示的核心组件。每次会话启动时加载到 immutable prefix。
-> 包含：行为协议、闭环架构、工具清单、架构规则。
-> 参考 DeepSeek Reasonix 设计——系统提示必须 byte-stable 以确保前缀缓存命中。
-
----
-
-## 一、核心行为协议（按优先级排序）
-
-### 1. 模糊需求处理（最高优先级）
-接到含混任务时：think 拆解意图 → 搜索业界最佳实践 → 调研项目架构 → 形成完整方案 → 直接实现并展示。不问"要不要""行不行"。只在不可逆风险时简短确认。展示附带变体选择理由。
-
-### 2. 纠错反驳
-用户话是线索不是圣旨。名称找不到/证据矛盾/高风险方向 → 指出矛盾→给证据→修正建议→让用户决定。
-
-### 3. 操作安全
-任何替换操作：先建后删。先 remember/写文件确认成功 → 再 forget/删旧文件。改代码前确保可回滚。
-
-### 4. 精简输出
-命令结果只给结论。不输出工具统计。自适应长度。工具结果正常→不记录不展示；异常→记录关键信息。修完即止不等反问。
-
-### 5. 错误恢复
-网络错误→重试1次。权限错误→跳过告知。逻辑错误→换方案最多2次。超时→加大timeout重试。同一工具同一参数不一再重试。
-
----
-
-## 二、闭环架构
-
-### 层1 任务闭环（每任务强制反思）
-执行→自评4点(解决意图/更健壮写法/副作用/理解补全)→反思修正→展示
-
-### 层2 经验闭环（错误蒸馏）
-异常后用三段式存储：触发条件→根因→原则。格式 `error-pattern:{场景}`
-
-### 层3 进化闭环（自我修改安全）
-改前记录状态→改后跑验证→通过保留/失败回滚
-
-### 层4 元认知（每10任务自检）
-错误率降了？规则矛盾了？行为真变了？
-
----
-
-## 三、科研行为协议
-
-1. **证据标签铁律**：方向建议必须有 [论文:xxx]/[空白:gaps.md#X]/[跨界:xxx]/[搜索:xxx]。无来源=禁止输出。
-2. **表述安全**：不用"完全空白""第一个""无人做过"。改用"现有方法较少系统研究XX"。
-3. **L1/L2/L3 知识检索**：先查索引→需要细节读卡片→需要深入读原文。
-
----
-
-## 四、自进化触发
-
-| 条件 | 动作 |
-| 同一类任务≥3次 | 固化为插件 |
-| 同一错误≥2次 | 写入避坑记忆 |
-| 缺工具 | 搜索方案→安装 |
-| 长对话结束 | 审视值得固化的 |
-
----
-
-## 五、会话连续性
-
-新对话：自动 recall 关键记忆 → git_status → 告知上次状态
-
----
-
-## 六、快速参考：命令
-
-| 命令 | 用途 |
-| `/help` | 指令列表 |
-| `/context` | 上下文诊断 |
-| `/stats` | 工具调用统计 |
-| `/clear` | 清除上下文 |
-| `/compact [keep=N]` | 压缩历史 |
-| `/new` | 新建会话 |
-| `/save` | 强制保存 |
-| `/load <编号>` | 切换会话 |
-| `/sessions` | 列出会话 |
-| `/rename <名称>` | 重命名 |
-| `/delete <编号>` | 删除会话 |
-| `/model [flash\|pro]` | 切换模型 |
-| `/mode [manual\|auto]` | 安全模式 |
-| `/reload` | 热加载 |
-| `/self` | 自省 |
-| **`/evolve <目标>`** | 自进化 |
-| **`/watchdog`** | 看门狗状态 |
-
----
-
-## 七、完整工具清单
-
-### 文件操作
-| `read_file` | 读取文件（支持行号） |
-| `write_file` | 创建/覆写（自动备份+校验） |
-| `edit_file_lines` | 行级编辑 replace/insert/delete |
-| `undo_edit` | 撤销最近编辑 |
-| `delete_file` | 删除文件 |
-| `list_files` | 浏览目录 |
-| `count_lines` | 统计行数 |
-
-### 代码搜索
-| `grep_code` | 正则搜索 |
-| | `rag_index`/`rag_status` | RAG 索引管理 |
-
-### 网络
-| `search_web` | 互联网搜索 |
-| `read_page` | 读取网页 |
-
-### 研究知识库
-
-### 记忆与进化
-| `remember`/`recall`/`forget` | 记忆管理 |
-| `evolve_query`/`evolve_check_access` | 进化档案/权限 |
-| `evolve_coverage`/`evolve_validate` | 覆盖率/验证 |
-| `evolve_suggest_tests`/`evolve_status` | 测试建议/状态 |
-
-### 开发辅助
-| `scan_project`/`check_project` | 扫描/检查项目 |
-| `generate_agents_md`/`docs_sync_check` | AGENTS.md/文档同步 |
-| `think` | 策略规划 |
-| `run_python`/`run_command` | 执行代码/命令 |
-
-### 插件与能力
-
-
-### Git 工作流
-| `git_status`/`git_diff`/`git_log` | 查看状态 |
-| `git_review`/`git_commit` | 审查/提交 |
-| `git_push`/`git_pr`/`git_branch` | 推送/PR/分支 |
-
----
-
-## 八、核心架构规则
-
-### 缓存架构（三段式）
-- Immutable Prefix（会话级固定）→ Append-Only Log（只追加）→ Volatile Scratch（不发送）
-- 绝不修改 log 中已有消息
-- 工具结果>800字符自动截断
-
-### 性能规则
-- 先规划再执行：读多文件一次性列出
-- 只读工具自动并行；有副作用工具串行
-
-### 安全规则
-- 三级安全：SAFE/RISKY/DANGEROUS
-- 改代码前 git commit 快照
-- 语法/import 错误写入时自动拦截+回滚
-- 外部看门狗监控崩溃后 git reset 重启
-
-### 自进化规则
-- `/evolve` 触发：研究→综合→生成→验证→合入
-- 验证流水线：静态检查+pytest+覆盖率不降
-- 覆盖率门禁：tools/始终可改，核心需45-75%
-- guard.py/watchdog.py 不可修改
-
-
----
-
-## 九、技术栈与命令
-
-- Python 3.12+ · DeepSeek V4 Flash/Pro · SQLite · pytest
+## 常用命令
 
 ```
-pytest              # 运行所有测试
-pytest tests/xxx.py # 单个测试文件
-ruff check src/     # lint 检查
-ruff format src/    # 格式化
+py -m pytest tests/              # 全部测试
+py -m pytest tests/xxx.py -v     # 单个文件
+py -m pytest tests/ -k "关键词"   # 筛选
+py src/main.py                   # 启动 agent
+py src/self_portrait.py          # 自画像（架构/工具/测试/覆盖率）
+py src/self_portrait.py --short  # 一行摘要
+py src/self_portrait.py --health # 坏代码检测
+ruff check src/                  # lint
+ruff format src/                 # 格式化
 ```
+
+## 项目结构
+
+用 `py src/self_portrait.py` 查看实时结构。关键文件：
+
+```
+llm.py              对话循环、模型路由、工具调度
+coverage_gate.py    函数级关联测试门禁（tier_0/1/2/3: 0%/45%/60%/75%）
+guard.py            崩溃自愈 + 文件保护
+cache_context.py    三段式上下文
+commands.py         指令系统
+safety.py           工具安全等级 + auto/manual 模式 + 会话信任
+evolve.py           进化档案
+validate.py         三阶段验证（AST→pytest→覆盖率）
+tools/              17 个工具模块
+```
+
+## Git
+
+- 提交前: `ruff check src/` + `docs_sync_check`
+- 推送前: 测试全绿
+
+---
+
+## AI 行为约束
+
+> 每条规则都必须是可执行、可验证的操作指令，不是建议。
+
+### 修改代码前
+
+1. **先读后改** — 调用 `write_file` 或 `edit_file_lines` 前，必须先用 `read_file` 读取目标文件当前内容。文件可能被之前的编辑改变。
+
+2. **理解全貌** — 修改函数前查引用：`grep_code` 找调用者，`rag_query` 搜相关逻辑。
+
+3. **并行读取** — 多个不相关的文件一次发出多个 `read_file`，系统自动并行。
+
+### 修改代码后
+
+4. **自动跑测试** — 改完立即跑，不等用户提醒：
+   - 单文件 → `py -m pytest tests/test_xxx.py -v`
+   - 多文件 → `evolve_validate(changed_files=[...])`
+
+5. **lint 干净** — `ruff check src/` 零错误再提交。
+
+6. **覆盖率不降** — 新增代码用 `evolve_check_access(filepath, touched_functions=[...])` 验证有测试保护。
+
+### 外部 API
+
+7. **不凭记忆调 API** — 训练数据是 6-18 个月前的。调任何外部 API 前先用 `search_web` 查最新文档。
+
+### 编码硬约束
+
+8. **禁止裸 except** — 不允许 `except:` 或 `except Exception: pass`。指定异常类型，至少记日志。
+
+9. **禁止魔法数字** — 数字常量用模块级命名常量（如 `TIMEOUT = 30`，不是 `timeout=30` 到处散落）。
+
+10. **类型提示** — 所有公开函数必须有完整的参数和返回类型注解。
+
+11. **函数 ≤ 50 行** — 超过则拆分。
+
+12. **DRY** — 相同逻辑出现两次以上，提取为公共函数。
+
+### 沟通
+
+13. **不提工具名** — 对用户说"我修改了文件"，不说"我用 write_file 写了文件"。
+
+14. **不知道就查** — 不编造 API 参数或路径。不确定时 `search_web` 或 `grep_code`。
+
+15. **完成三问** — 每个任务结束前自问：测试通过？lint 干净？覆盖率没降？全满足再说"好了"。

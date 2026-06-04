@@ -52,8 +52,9 @@ TOOLS_EVOLVE: list[dict] = [
         "function": {
             "name": "evolve_check_access",
             "description": (
-                "检查当前是否有权限修改指定文件。"
-                "返回允许/拒绝及原因。如果没有权限，会告诉你需要多少测试覆盖率才能解锁。"
+                "检查当前是否有权限修改指定文件。优先进行函数级关联测试检查："
+                "如果要改的函数有测试保护，直接放行；没覆盖则精确列出需补测试的函数名。"
+                "不提供 touched_functions 时回退到全局覆盖率 tier 检查。"
             ),
             "parameters": {
                 "type": "object",
@@ -61,6 +62,15 @@ TOOLS_EVOLVE: list[dict] = [
                     "filepath": {
                         "type": "string",
                         "description": "要检查的文件路径",
+                    },
+                    "touched_functions": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": (
+                            "计划修改的函数/方法名列表（可选但强烈推荐）。"
+                            "提供后进行函数级关联测试检查——只查这些函数是否有测试覆盖。"
+                            "比全局覆盖率检查更精确、更容易通过。"
+                        ),
                     },
                 },
                 "required": ["filepath"],
@@ -85,7 +95,7 @@ TOOLS_EVOLVE: list[dict] = [
             "description": (
                 "运行验证流水线：静态检查（AST+import+lint）→ 沙箱测试（pytest）"
                 "→ 后检查（覆盖率不降+无新增lint错误）。"
-                "在代码修改完成后、最终合入前调用。超时默认 120 秒。"
+                "⚠️ 每次修改代码后必须调用此工具验证，不要手动让用户去测。超时默认 120 秒。"
             ),
             "parameters": {
                 "type": "object",
@@ -111,6 +121,7 @@ TOOLS_EVOLVE: list[dict] = [
             "name": "evolve_suggest_tests",
             "description": (
                 "获取建议：需要添加哪些测试才能解锁对目标文件的修改权限。"
+                "支持函数级精确建议：提供 touched_functions 后，只列出未覆盖的函数及行号。"
                 "当 evolve_check_access 返回拒绝时调用，了解需要做什么才能解锁。"
             ),
             "parameters": {
@@ -119,6 +130,14 @@ TOOLS_EVOLVE: list[dict] = [
                     "target_file": {
                         "type": "string",
                         "description": "想要修改的文件路径",
+                    },
+                    "touched_functions": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": (
+                            "计划修改的函数名列表（可选）。提供后给出函数级精确建议，"
+                            "包括每个函数的行号和覆盖状态。"
+                        ),
                     },
                 },
                 "required": ["target_file"],
@@ -185,9 +204,10 @@ def _cmd_query(args: dict) -> str:
 def _cmd_check_access(args: dict) -> str:
     from ..coverage_gate import can_modify
     filepath = args.get("filepath", "")
+    touched_functions = args.get("touched_functions")
     if not filepath:
         return "请提供 filepath 参数。"
-    allowed, reason = can_modify(filepath)
+    allowed, reason = can_modify(filepath, touched_functions=touched_functions)
     if allowed:
         return f"✅ 可以修改: {reason}"
     else:
@@ -219,9 +239,10 @@ def _cmd_validate(args: dict) -> str:
 def _cmd_suggest_tests(args: dict) -> str:
     from ..coverage_gate import suggest_tests_to_unlock
     target = args.get("target_file", "")
+    touched_functions = args.get("touched_functions")
     if not target:
         return "请提供 target_file 参数。"
-    return suggest_tests_to_unlock(target)
+    return suggest_tests_to_unlock(target, touched_functions=touched_functions)
 
 
 def _cmd_status(args: dict) -> str:

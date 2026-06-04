@@ -13,7 +13,6 @@ import pytest
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
-
 # ═══════════════════════════════════════════════════════════════
 # 1. 保护系统 → 覆盖率门禁
 # ═══════════════════════════════════════════════════════════════
@@ -31,11 +30,6 @@ class TestGuardCoverageGate:
         from src.guard import is_protected, _GUARD_FILE
         assert is_protected(str(_GUARD_FILE)) is True
 
-    def test_is_protected_always_blocks_watchdog(self):
-        from src.guard import is_protected
-        watchdog = PROJECT_ROOT / "src" / "watchdog.py"
-        assert is_protected(str(watchdog)) is True
-
     def test_is_protected_allows_outside_project(self, tmp_path):
         """项目外的文件（如测试临时文件）不应被保护。"""
         from src.guard import is_protected
@@ -49,7 +43,6 @@ class TestGuardCoverageGate:
         llm_file = PROJECT_ROOT / "src" / "llm.py"
         result = is_protected(str(llm_file))
         assert isinstance(result, bool)
-
 
 # ═══════════════════════════════════════════════════════════════
 # 2. 文件写入 → 一致性维护
@@ -78,7 +71,6 @@ class TestConsistencyHook:
         """knowledge/*.md 写入触发研究索引，不抛异常。"""
         from src.tools.__init__ import _maintain_consistency
         _maintain_consistency(str(PROJECT_ROOT / "knowledge" / "test.md"))
-
 
 # ═══════════════════════════════════════════════════════════════
 # 3. 进化系统 → 进化档案
@@ -113,7 +105,6 @@ class TestEvolveSystem:
         ))
         results = find_similar("文件搜索优化", top_n=3)
         assert isinstance(results, list)
-
 
 # ═══════════════════════════════════════════════════════════════
 # 4. 粘性模型
@@ -157,7 +148,6 @@ class TestStickyModel:
         src.llm.set_session_model("flash")
         assert src.llm._session_model == "flash"
         src.llm.reset_session_model()
-
 
 # ═══════════════════════════════════════════════════════════════
 # 5. 工具注册
@@ -230,15 +220,6 @@ class TestToolRegistry:
         result = dispatch("/model pro", ctx, "test-session")
         assert "Pro" in result.message or "pro" in result.message.lower()
 
-    def test_watchdog_command(self):
-        from src.cache_context import CacheContext
-        from src.commands import dispatch
-
-        ctx = CacheContext()
-        result = dispatch("/watchdog status", ctx, "test-session")
-        assert result is not None
-
-
 # ═══════════════════════════════════════════════════════════════
 # 7. 覆盖率门禁
 # ═══════════════════════════════════════════════════════════════
@@ -249,8 +230,8 @@ class TestCoverageGate:
     def test_file_tiers_covers_critical_files(self):
         from src.coverage_gate import FILE_TIERS
         assert "tier_0_open" in FILE_TIERS
-        assert "tier_4_watchdog" in FILE_TIERS
-        assert FILE_TIERS["tier_4_watchdog"]["threshold"] >= 1.0
+        assert "tier_3_critical" in FILE_TIERS
+        assert FILE_TIERS["tier_3_critical"]["threshold"] >= 0.75
 
     def test_can_modify_returns_tuple(self):
         from src.coverage_gate import can_modify
@@ -263,29 +244,8 @@ class TestCoverageGate:
         summary = get_tier_summary()
         assert "覆盖率" in summary
 
-
 # ═══════════════════════════════════════════════════════════════
 # 8. 看门狗
-# ═══════════════════════════════════════════════════════════════
-
-class TestWatchdog:
-    """看门狗模块必须可导入且有关键函数。"""
-
-    def test_watchdog_importable(self):
-        from src import watchdog
-        assert hasattr(watchdog, "run_watchdog")
-
-    def test_watchdog_heartbeat_no_file(self, tmp_path, monkeypatch):
-        import src.watchdog
-        monkeypatch.setattr(src.watchdog, "HEARTBEAT_FILE", tmp_path / "heartbeat")
-        from src.watchdog import _check_heartbeat
-        # 无心跳文件 → 返回超时年龄
-        age = _check_heartbeat()
-        assert age is not None
-
-
-# ═══════════════════════════════════════════════════════════════
-# 9. 自愈系统
 # ═══════════════════════════════════════════════════════════════
 
 class TestGuardSelfHealing:
@@ -310,7 +270,6 @@ class TestGuardSelfHealing:
         report = build_report(analysis, ["src/test.py"])
         assert "崩溃" in report
         assert "回滚" in report or "恢复" in report
-
 
 # ═══════════════════════════════════════════════════════════════
 # 10. 启动自检 /health

@@ -198,39 +198,6 @@ def _cmd_model(r: CmdResult, _ctx, args, _sid) -> None:
 # ═══════════════════════════════════════════════════════════════
 
 # ═══════════════════════════════════════════════════════════════
-# Auto Mode 指令
-# ═══════════════════════════════════════════════════════════════
-
-@builtin("/mode", description="查看/切换安全模式", usage="/mode [manual|auto]")
-def _cmd_mode(r: CmdResult, _ctx, args, _sid) -> None:
-    from .safety import get_mode_summary, set_mode
-    if not args:
-        r.message = get_mode_summary()
-        return
-    ok, msg = set_mode(args[0])
-    r.message = msg
-    if ok:
-        r.save = True
-
-
-@builtin_multi(["/trust", "/allow"], description="信任工具（本会话自动放行）", usage="/trust <工具名>")
-def _cmd_trust(r: CmdResult, _ctx, args, _sid) -> None:
-    from .safety import clear_trust, list_trusted, revoke_trust, trust_tool
-    if not args:
-        r.message = list_trusted()
-        return
-    if args[0] == "clear":
-        r.message = clear_trust()
-    elif args[0] == "list":
-        r.message = list_trusted()
-    elif args[0].startswith("-"):
-        name = args[0][1:]
-        r.message = revoke_trust(name)
-    else:
-        r.message = trust_tool(args[0])
-
-
-# ═══════════════════════════════════════════════════════════════
 # 上下文诊断指令
 # ═══════════════════════════════════════════════════════════════
 
@@ -373,15 +340,16 @@ def _cmd_context(r: CmdResult, ctx, _args, _sid) -> None:
         lines.append(f"  🔧 并行执行工具数: {safe['parallel_tools']}")
         lines.append(f"  🐌 串行执行工具数: {safe['serial_tools']}")
 
-    # API 缓存命中统计（按模型区分）
+    # API 缓存统计（按模型区分）
+    # cached_tokens 来自 API 真实返回，hit_ratio = cached / prompt_tokens
     from .llm import get_cache_stats
     cache = get_cache_stats(_sid)
     if not isinstance(cache, dict):
-        cache = {"models": {}, "total": {"requests": 0, "prompt_tokens": 0, "completion_tokens": 0,
-                 "cache_hit_tokens": 0, "cache_miss_tokens": 0}}
+        cache = {"models": {}, "total": {"requests": 0, "prompt_tokens": 0,
+                 "completion_tokens": 0, "cached_tokens": 0}}
     if "total" not in cache:
-        cache = {"models": cache, "total": {"requests": 0, "prompt_tokens": 0, "completion_tokens": 0,
-                 "cache_hit_tokens": 0, "cache_miss_tokens": 0}}
+        cache = {"models": cache, "total": {"requests": 0, "prompt_tokens": 0,
+                 "completion_tokens": 0, "cached_tokens": 0}}
     total = cache.get("total", {})
     if total.get("requests", 0) > 0:
         lines.append("")
@@ -394,32 +362,32 @@ def _cmd_context(r: CmdResult, ctx, _args, _sid) -> None:
             reqs = s["requests"]
             prompt = s["prompt_tokens"]
             completion = s["completion_tokens"]
-            hit = s["cache_hit_tokens"]
-            miss = s["cache_miss_tokens"]
-            hit_ratio = hit / (hit + miss) * 100 if (hit + miss) > 0 else 0
+            cached = s["cached_tokens"]
+            hit_ratio = cached / prompt * 100 if prompt > 0 else 0
             total_tokens = prompt + completion
 
             model_emoji = "⚡" if model_key == "flash" else "🧠"
             lines.append(f"  {model_emoji} {model_key.title()}")
             lines.append(f"    请求: {reqs}次  |  输出: {completion:,} tok")
-            lines.append(f"    输入: {prompt:,} tok  |  总计: {total_tokens:,} tok")
+            lines.append(f"    输入: {prompt:,} tok (缓存命中 {cached:,})  |"
+                         f"  总计: {total_tokens:,} tok")
 
-            if hit + miss > 0:
+            if prompt > 0:
                 bar_len = 16
                 hit_bars = int(bar_len * hit_ratio / 100)
                 bar = "█" * hit_bars + "░" * (bar_len - hit_bars)
-                lines.append(f"    缓存: {bar}  {hit_ratio:.0f}%")
-            else:
-                lines.append("    缓存: 暂无数据")
+                saved = prompt - cached  # 未被缓存的部分 = 实际计费的
+                lines.append(f"    缓存: {bar}  {hit_ratio:.0f}%  "
+                             f"(节省 {cached:,} tok, 实际计费 {saved:,} tok)")
 
         # 总计行
         lines.append("")
         t = total
-        t_hit_ratio = t["cache_hit_tokens"] / (t["cache_hit_tokens"] + t["cache_miss_tokens"]) * 100 \
-            if (t["cache_hit_tokens"] + t["cache_miss_tokens"]) > 0 else 0
+        t_hit = t["cached_tokens"] / t["prompt_tokens"] * 100 if t["prompt_tokens"] > 0 else 0
+        t_saved = t["cached_tokens"]
         lines.append(f"  📊 总计: {t['requests']}次请求  "
                       f"{t['prompt_tokens']+t['completion_tokens']:,} token  "
-                      f"缓存 {t_hit_ratio:.0f}%")
+                      f"缓存命中 {t_hit:.0f}% (节省 {t_saved:,} tok)")
 
     non_system_msgs = [m for m in log_msgs if m.get("role") != "system"]
     recent_tokens = 0

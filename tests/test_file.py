@@ -132,20 +132,23 @@ class TestReadWrite:
         result = read_file(str(f))
         assert "无法" in result or "二进制" in result
 
-    def test_write_and_read_back(self, tmp_path):
+    def test_write_and_read_back(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
         f = tmp_path / "new_file.py"
         result = write_file(str(f), "answer = 42\n")
         assert "已写入" in result
         content = read_file(str(f))
         assert "answer = 42" in content
 
-    def test_write_to_new_directory(self, tmp_path):
+    def test_write_to_new_directory(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
         f = tmp_path / "subdir" / "nested.py"
         result = write_file(str(f), "# nested\n")
         assert "已写入" in result
         assert f.exists()
 
-    def test_write_syntax_error_rejected(self, tmp_path):
+    def test_write_syntax_error_rejected(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
         f = tmp_path / "broken.py"
         result = write_file(str(f), "def broken(:\n    pass\n")
         assert "失败" in result
