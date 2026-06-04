@@ -193,148 +193,6 @@ def _cmd_new(r: CmdResult, _ctx, _args, _sid) -> None:
     r.clear = True
 
 
-@builtin("/pop", description="撤回最后一条对话", usage="/pop [数量]")
-def _cmd_pop(r: CmdResult, ctx, args, _sid) -> None:
-    try:
-        n = int(args[0]) if args else 1
-    except ValueError:
-        r.message = f"无效参数: {args[0]}，用法: /pop [数量]"
-        return
-    removed = 0
-    log = ctx.log
-    for _ in range(n):
-        while log and log[-1]["role"] != "user":
-            log.pop()
-        if log and log[-1]["role"] == "user":
-            log.pop()
-            removed += 1
-    r.save = True
-    r.message = f"已撤回 {removed} 条对话"
-
-@builtin("/export", description="导出对话为 Markdown", usage="/export [轮数] [文件名]")
-def _cmd_export(r: CmdResult, ctx, args, sid) -> None:
-    count: int | None = None
-    name_parts: list[str] = []
-    if args:
-        try:
-            count = int(args[0])
-            name_parts = args[1:]
-        except ValueError:
-            name_parts = args
-
-    # 安全检查：防止路径穿越
-    name = " ".join(name_parts) if name_parts else (get_session_name(sid) if sid else "export")
-    safe_name = name.replace("\\", "/").split("/")[-1]  # 只取文件名部分
-    if not safe_name:
-        safe_name = "export"
-    filename = f"{safe_name}.md" if not safe_name.endswith(".md") else safe_name
-
-    messages = list(ctx.all)
-    ...
-    filepath = Path(filename)
-    if count is not None:
-        rounds, n = [], 0
-        for m in reversed(messages):
-            rounds.insert(0, m)
-            if m.get("role") == "user":
-                n += 1
-                if n >= count:
-                    break
-        messages = rounds
-
-    lines = [f"# {name}\n"]
-    for m in messages:
-        role, content, tc = m.get("role", ""), m.get("content", "") or "", m.get("tool_calls")
-        if role == "system":
-            continue
-        elif role == "user":
-            lines.append(f"## You\n\n{content}\n")
-        elif role == "assistant":
-            if tc:
-                tools = ", ".join(t["function"]["name"] for t in tc)
-                lines.append(f"## Agent\n\n*[调用工具: {tools}]*\n")
-            if content:
-                lines.append(f"{content}\n")
-        elif role == "tool":
-            preview = content[:120].replace("\n", " ") + ("..." if len(content) > 120 else "")
-            lines.append(f"*[工具结果: {preview}]*\n")
-
-    filepath = Path(filename)
-    filepath.write_text("\n".join(lines), encoding="utf-8")
-    r.message = f"已导出到: {filepath.resolve()}（{len(lines)} 行）"
-
-
-@builtin("/edit", description="修改最后一条对话并重发", usage="/edit <新内容>")
-def _cmd_edit(r: CmdResult, ctx, args, _sid) -> None:
-    if not args:
-        r.message = "用法: /edit <新内容>"
-        return
-    new_text = " ".join(args)
-    log = ctx.log
-    edited = False
-    while log and log[-1]["role"] != "user":
-        log.pop()
-    if log and log[-1]["role"] == "user":
-        log.pop()
-        edited = True
-    log.append({"role": "user", "content": new_text})
-    r.save = True
-    r.retry = True
-    r.message = f"已修改: {new_text}" if edited else f"未找到可修改的对话，已追加: {new_text}"
-
-@builtin("/run", description="直接调用工具", usage="/run <工具名> <参数=值...>")
-def _cmd_run(r: CmdResult, _ctx, args, _sid) -> None:
-    if not args:
-        r.message = "用法: /run <工具名> <参数=值...>"
-        return
-    name = args[0]
-    raw = " ".join(args[1:])
-    tool_args: dict[str, str] = {}
-    if raw:
-        for m in re.finditer(r'(\w+)=(.+?)(?=\s+\w+=|$)', raw):
-            tool_args[m.group(1)] = m.group(2).strip()
-    tc = SimpleNamespace(function=SimpleNamespace(name=name, arguments=json.dumps(tool_args)))
-    r.message = execute_tool(tc)
-
-
-@builtin("/plugin", description="列出/调用插件", usage="/plugin [工具名] [参数=值...]")
-def _cmd_plugin(r: CmdResult, _ctx, args, _sid) -> None:
-    from .tools.plugin_mgr import _plugins
-    if not args:
-        if not _plugins:
-            r.message = "未安装任何插件。"
-            return
-        lines = [f"已安装插件 ({len(_plugins)} 个)：\n"]
-        for pname, mod in _plugins.items():
-            desc = getattr(mod, "DESCRIPTION", "（无描述）")
-            tools = [t["function"]["name"] for t in getattr(mod, "TOOLS", [])]
-            lines.append(f"  {pname}")
-            lines.append(f"    {desc}")
-            if tools:
-                lines.append(f"    工具: {', '.join(tools)}")
-            lines.append("")
-        r.message = "\n".join(lines).strip()
-        return
-
-    name = args[0]
-    for mod in _plugins.values():
-        if hasattr(mod, "TOOLS") and any(t["function"]["name"] == name for t in mod.TOOLS):
-            raw = " ".join(args[1:])
-            tool_args: dict[str, str] = {}
-            if raw:
-                for m in re.finditer(r'(\w+)=(.+?)(?=\s+\w+=|$)', raw):
-                    tool_args[m.group(1)] = m.group(2).strip()
-            tc = SimpleNamespace(function=SimpleNamespace(name=name, arguments=json.dumps(tool_args)))
-            r.message = execute_tool(tc)
-            return
-    r.message = f"未找到插件工具: {name}"
-
-
-# ═══════════════════════════════════════════════════════════════
-# 热加载指令
-# ═══════════════════════════════════════════════════════════════
-
-@builtin("/reload", description="热加载所有模块 + 工具注册表（改代码后无需重启）")
 def _cmd_reload(r: CmdResult, _ctx, _args, _sid) -> None:
     """使用 importlib.reload 热加载所有已加载的 src.* 模块。"""
     import importlib
@@ -394,7 +252,10 @@ def _cmd_status(r: CmdResult, ctx, _args, sid) -> None:
     )
     from .llm import get_current_model_id, get_current_model_name
     from .session import list_sessions
-    from .tools.plugin_mgr import _plugins
+    try:
+        from .tools.plugin_mgr import _plugins
+    except ImportError:
+        _plugins = {}
     from .tools.tokens import count_messages_tokens
 
     # ── 插件 ──
@@ -778,8 +639,15 @@ def _cmd_context(r: CmdResult, ctx, _args, _sid) -> None:
 def _cmd_self(r: CmdResult, _ctx, _args, _sid) -> None:
     """生成 Agent 自省全景（供 AI 读取，非人类 UI）。"""
     from .tools import get_tools
-    from .tools.plugin_mgr import _plugins
-    from .tools.mcp import get_connection_summary
+    try:
+        from .tools.plugin_mgr import _plugins
+    except ImportError:
+        _plugins = {}
+    try:
+        from .tools.mcp import get_connection_summary
+    except ImportError:
+        def get_connection_summary():
+            return {}
 
     parts: list[str] = []
 
@@ -1014,23 +882,6 @@ def _cmd_evolve(r: CmdResult, ctx, args, session_id) -> None:
     r.message = f"自进化已启动\n目标: {goal}\n\nAgent 将自主完成研究→综合→生成→验证的全流程。按 Esc 可中断。"
 
 
-@builtin("/research", description="仅研究不修改：多源搜索+模式提取",
-         usage="/research <主题>")
-def _cmd_research(r: CmdResult, ctx, args, session_id) -> None:
-    """纯研究模式：搜索并报告发现，不修改代码。"""
-    if not args:
-        r.message = "用法: /research <主题>\n例如: /research Python asyncio 最佳实践"
-        return
-    topic = " ".join(args)
-    from .evolution_loop import build_research_prompt
-    prompt = build_research_prompt(topic)
-    ctx.log.append({"role": "system", "content": prompt, "_volatile": True})
-    r.retry = True
-    r.save = True
-    r.message = f"研究模式已启动\n主题: {topic}"
-
-
-@builtin("/watchdog", description="看门狗状态", usage="/watchdog [status]")
 def _cmd_watchdog(r: CmdResult, ctx, args, session_id) -> None:
     """查看 watchdog 状态。"""
     try:
@@ -1067,9 +918,11 @@ def dispatch(user_input: str, ctx: CacheContext, session_id: str | None) -> CmdR
     return r
 
 
-def register_plugin_commands() -> None:
     """扫描插件，将其 COMMANDS 注册到指令系统。"""
-    from .tools.plugin_mgr import _plugins
+    try:
+        from .tools.plugin_mgr import _plugins
+    except ImportError:
+        _plugins = {}
     _cmd_fields = {"name", "description", "usage", "handler"}
     for mod in _plugins.values():
         cmds = getattr(mod, "COMMANDS", None)
@@ -1094,4 +947,3 @@ def register_plugin_commands() -> None:
                     logger.warning("插件 COMMANDS 列表项格式无效: %s", type(c).__name__)
 
 # 启动时加载插件指令
-register_plugin_commands()

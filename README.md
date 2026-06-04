@@ -79,7 +79,6 @@ make lint          # 代码检查（ruff）
 /context           # 上下文诊断：token分布、缓存、工具定义占比
 /stats             # 工具调用统计（频次、成功率、耗时）
 /evolve <目标>     # 触发自进化
-/research <主题>   # 纯研究模式（搜索+分析，不修改代码）
 /watchdog          # 查看外部看门狗状态
 /mode auto         # 自动模式（安全操作无需确认）
 /model             # 查看/切换 LLM 模型
@@ -115,14 +114,12 @@ make lint          # 代码检查（ruff）
 │       ├── git.py           #   Git 全流程
 │       ├── project.py       #   项目扫描/分析
 │       ├── lint.py          #   规范检查/文档同步
-│       ├── research.py      #   研究知识库（SQLite）
 │       ├── rag.py           #   RAG 索引+语义搜索（三层）
 │       ├── evolve.py        #   进化工具（LLM可调用）
 │       ├── memory.py        #   记忆系统
 │       ├── think.py         #   策略思考
 │       ├── storm.py         #   去重引擎
 │       ├── tracker.py       #   调用追踪
-│       ├── mcp.py           #   MCP 协议
 │       └── __init__.py      #   注册中心+调度
 ├── tests/                   # 339 测试用例
 ├── docs/                    # 设计文档

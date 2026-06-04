@@ -159,7 +159,7 @@ TOOLS_RAG = [
         "type": "function",
         "function": {
             "name": "rag_query",
-            "description": "语义搜索。scope='code'搜代码，'research'搜论文笔记，'all'两者都搜。比 grep_code 更智能。",
+            "description": "语义搜索。比 grep_code 更智能，搜索代码结构和内容。scope='code'搜代码，'all'两者都搜。",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -173,8 +173,8 @@ TOOLS_RAG = [
                     },
                     "scope": {
                         "type": "string",
-                        "enum": ["code", "research", "all"],
-                        "description": "搜索范围：code 代码，research 论文笔记，all 全部。默认 code",
+                        "enum": ["code", "all"],
+                        "description": "搜索范围：code 代码，all 全部。默认 code",
                     },
                 },
                 "required": ["query"],
@@ -185,38 +185,8 @@ TOOLS_RAG = [
         "type": "function",
         "function": {
             "name": "rag_status",
-            "description": "查看 RAG 索引状态：代码索引+研究索引。",
+            "description": "查看 RAG 索引状态。",
             "parameters": {"type": "object", "properties": {}, "required": []},
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "rag_index_research",
-            "description": "索引研究知识库（论文+笔记+knowledge/文档）到 RAG。之后可用 rag_query(scope='research') 搜索。",
-            "parameters": {"type": "object", "properties": {}, "required": []},
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "rag_browse",
-            "description": "浏览研究知识库全貌：列出所有论文、笔记、知识文档的标题和摘要。先了解有什么，再决定深入看什么。",
-            "parameters": {"type": "object", "properties": {}, "required": []},
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "rag_read",
-            "description": "读取研究知识库中某个文档的完整内容。先用 rag_browse 或 rag_query 找到 source_id，再用此工具深入阅读。",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "source_id": {"type": "string", "description": "文档 ID（从 rag_browse 或 rag_query 结果中获取）"},
-                },
-                "required": ["source_id"],
-            },
         },
     },
 ]
@@ -1429,49 +1399,16 @@ def read_research_doc(source_id: str) -> str:
 def execute(name: str, args: dict) -> str:
     """工具调度入口。"""
     if name == "rag_index":
-        include_research = args.get("include_research", False)
         result = index_project(
             path=args.get("path"),
             force=args.get("force", False),
         )
-        if include_research:
-            result += "\n" + index_research_content()
         return result
     elif name == "rag_query":
-        scope = args.get("scope", "code")
-        if scope == "research":
-            return query_research(
-                query=args["query"],
-                top_k=args.get("top_k", DEFAULT_TOP_K),
-            )
-        elif scope == "all":
-            code_result = query_index(
-                query=args["query"],
-                top_k=args.get("top_k", DEFAULT_TOP_K),
-            )
-            research_result = query_research(
-                query=args["query"],
-                top_k=args.get("top_k", DEFAULT_TOP_K),
-            )
-            return f"{code_result}\n\n{research_result}"
-        else:
-            return query_index(
-                query=args["query"],
-                top_k=args.get("top_k", DEFAULT_TOP_K),
-            )
+        return query_index(
+            query=args["query"],
+            top_k=args.get("top_k", DEFAULT_TOP_K),
+        )
     elif name == "rag_status":
-        status = get_index_status()
-        research_idx = _load_doc_index("research")
-        if research_idx:
-            status += f"\n  研究索引: {research_idx['doc_count']} 个文档块"
-        else:
-            status += "\n  研究索引: 未建立"
-        return status
-    elif name == "rag_index_research":
-        return index_research_content()
-    elif name == "rag_browse":
-        return browse_research()
-    elif name == "rag_read":
-        return read_research_doc(args.get("source_id", ""))
-    else:
-        raise ValueError(f"未知的 RAG 工具: {name}")
+        return get_stats_text()
+    return f"未知 RAG 工具: {name}"

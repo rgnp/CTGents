@@ -1,6 +1,3 @@
-- [ai-agent-dev-standards-six-dimensions](ai-agent-dev-standards-six-dimensions.md) — 基于 GitHub 2500+ 案例研究的 AI Agent
-- [aux-coordinate-system-alignment](aux-coordinate-system-alignment.md) — 辅助任务设计中，aux target 必须和主任务使用同一坐
-- [aux-destination-head-defense](aux-destination-head-defense.md) — 审稿人会质疑"目的地辅助头只是把最后一帧loss又加了一遍"
-- [auxiliary-task-map-built](auxiliary-task-map-built.md) — 2026-06-02: 构建了"辅助任务×轨迹预测"系统地图
-- [research-tool-chain-evolution](research-tool-chain-evolution.md) — 我已经创建了两个 Python 工具来固化科研能力：
-- [user-preferences](user-preferences.md) — 用户偏好协议 v3 (2026-06-03)，整合所有效率/
+# Memory Index
+
+- [user-preferences.md](user-preferences.md) — 用户偏好协议 v3 (2026-06-03)，整合所有效率/

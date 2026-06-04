@@ -52,7 +52,6 @@
 ## 四、自进化触发
 
 | 条件 | 动作 |
-|------|------|
 | 同一类任务≥3次 | 固化为插件 |
 | 同一错误≥2次 | 写入避坑记忆 |
 | 缺工具 | 搜索方案→安装 |
@@ -69,7 +68,6 @@
 ## 六、快速参考：命令
 
 | 命令 | 用途 |
-|------|------|
 | `/help` | 指令列表 |
 | `/context` | 上下文诊断 |
 | `/stats` | 工具调用统计 |
@@ -81,14 +79,11 @@
 | `/sessions` | 列出会话 |
 | `/rename <名称>` | 重命名 |
 | `/delete <编号>` | 删除会话 |
-| `/export [轮数] [文件名]` | 导出 MD |
-| `/pop [数量]` | 撤回 N 条 |
 | `/model [flash\|pro]` | 切换模型 |
 | `/mode [manual\|auto]` | 安全模式 |
 | `/reload` | 热加载 |
 | `/self` | 自省 |
 | **`/evolve <目标>`** | 自进化 |
-| **`/research <主题>`** | 研究模式 |
 | **`/watchdog`** | 看门狗状态 |
 
 ---
@@ -96,8 +91,6 @@
 ## 七、完整工具清单
 
 ### 文件操作
-| 工具 | 说明 |
-|------|------|
 | `read_file` | 读取文件（支持行号） |
 | `write_file` | 创建/覆写（自动备份+校验） |
 | `edit_file_lines` | 行级编辑 replace/insert/delete |
@@ -107,59 +100,31 @@
 | `count_lines` | 统计行数 |
 
 ### 代码搜索
-| 工具 | 说明 |
-|------|------|
 | `grep_code` | 正则搜索 |
-| `rag_query` | RAG 语义搜索 code/research/all |
-| `rag_index`/`rag_status` | RAG 索引管理 |
+| | `rag_index`/`rag_status` | RAG 索引管理 |
 
 ### 网络
-| 工具 | 说明 |
-|------|------|
 | `search_web` | 互联网搜索 |
 | `read_page` | 读取网页 |
 
 ### 研究知识库
-| 工具 | 说明 |
-|------|------|
-| `search_papers`/`read_paper` | 论文搜索/阅读 |
-| `save_note`/`search_knowledge` | 笔记/知识库搜索 |
-| `kb_topics`/`kb_stats` | 主题浏览/统计 |
-| `link_papers` | 论文关系 |
-| `rag_browse`/`rag_read` | 知识库浏览/阅读 |
-| `rag_index_research` | 索引研究知识库 |
 
 ### 记忆与进化
-| 工具 | 说明 |
-|------|------|
 | `remember`/`recall`/`forget` | 记忆管理 |
 | `evolve_query`/`evolve_check_access` | 进化档案/权限 |
 | `evolve_coverage`/`evolve_validate` | 覆盖率/验证 |
 | `evolve_suggest_tests`/`evolve_status` | 测试建议/状态 |
 
 ### 开发辅助
-| 工具 | 说明 |
-|------|------|
 | `scan_project`/`check_project` | 扫描/检查项目 |
 | `generate_agents_md`/`docs_sync_check` | AGENTS.md/文档同步 |
 | `think` | 策略规划 |
 | `run_python`/`run_command` | 执行代码/命令 |
 
 ### 插件与能力
-| 工具 | 说明 |
-|------|------|
-| `discover`/`plugin_spec` | 能力扫描/接口规范 |
-| `install_plugin`/`list_plugins` | 安装/列出插件 |
 
-### MCP 连接
-| 工具 | 说明 |
-|------|------|
-| `mcp_connect`/`mcp_disconnect` | 连接/断开 |
-| `mcp_list`/`mcp_save_config` | 列表/保存配置 |
 
 ### Git 工作流
-| 工具 | 说明 |
-|------|------|
 | `git_status`/`git_diff`/`git_log` | 查看状态 |
 | `git_review`/`git_commit` | 审查/提交 |
 | `git_push`/`git_pr`/`git_branch` | 推送/PR/分支 |
@@ -189,10 +154,6 @@
 - 覆盖率门禁：tools/始终可改，核心需45-75%
 - guard.py/watchdog.py 不可修改
 
-### 研究规则
-- 论文搜索自动入知识库
-- 读论文自动记录历史
-- 笔记关联论文和主题
 
 ---
 
