@@ -117,6 +117,15 @@ def _make_agents_message() -> dict:
     }
 
 
+def _make_memory_context() -> dict | None:
+    """读取记忆索引，生成简洁的记忆上下文（缓存版，不反复读文件）。"""
+    from .tools.memory import get_context
+    ctx_str = get_context()
+    if not ctx_str:
+        return None
+    return {"role": "system", "content": ctx_str, "_volatile": True}
+
+
 def _append_volatile_context(ctx: CacheContext) -> None:
     """向 log 末尾追加所有 volatile 系统消息（记忆/安全/RAG/反思）。
 

@@ -326,6 +326,13 @@ AVAILABLE_MODELS: dict[str, LLMBackend] = {
 # 当前选中的模型（默认 Flash）
 _current_backend: LLMBackend = AVAILABLE_MODELS["flash"]
 
+# ── 模型切换滞后计数器（避免 flash↔pro ping-pong 破坏前缀缓存） ──
+# DeepSeek KV 缓存按模型独立 — flash 和 pro 各有自己的缓存。
+# 频繁切换 = 两个模型都攒不起长前缀，缓存利用率暴跌。
+# 策略：升 pro 要快（复杂任务不能降质），降 flash 要慢（等缓存养肥）。
+_consecutive_simple_tasks: int = 0
+_STICKY_THRESHOLD: int = 3   # 连续 N 轮简单任务才从 pro 降回 flash
+
 
 def get_current_backend() -> LLMBackend:
     return _current_backend
@@ -343,6 +350,9 @@ def get_current_model_id() -> str:
 
 def switch_model(name: str) -> tuple[bool, str]:
     """切换当前模型。name 可以是 'flash'、'pro' 或完整模型 ID。"""
+    global _consecutive_simple_tasks
+    _consecutive_simple_tasks = 0  # 显式切换重置滞后计数
+
     # 先按短名称查找
     if name in AVAILABLE_MODELS:
         global _current_backend
@@ -423,14 +433,37 @@ def _estimate_task_complexity(user_input: str) -> str:
 
 
 def auto_select_model(user_input: str) -> LLMBackend:
-    """根据用户输入自动选择最合适的模型。"""
+    """根据用户输入自动选择最合适的模型。
+
+    滞后策略（保护前缀缓存，对齐 Reasonix）：
+      - flash → pro: 即刻切换（复杂任务不能降质）
+      - pro → flash: 需连续 _STICKY_THRESHOLD 轮简单任务才降回
+        （避免 ping-pong 导致两个模型都攒不起长前缀）
+    注意：此函数会更新全局 _current_backend，无需调用方再赋值。
+    """
+    global _consecutive_simple_tasks, _current_backend
     model_key = _estimate_task_complexity(user_input)
-    selected = AVAILABLE_MODELS.get(model_key, _current_backend)
-    return selected
 
+    is_on_flash = _current_backend is AVAILABLE_MODELS["flash"]
 
-# ── 缓存统计（按会话隔离 + 持久化到文件，不串会话） ──
+    if is_on_flash and model_key == "pro":
+        # flash → pro: 即刻升级，重置计数器
+        _consecutive_simple_tasks = 0
+        _current_backend = AVAILABLE_MODELS["pro"]
+        return _current_backend
 
+    if not is_on_flash and model_key == "flash":
+        # 当前 pro，遇到了简单任务 — 累积计数
+        _consecutive_simple_tasks += 1
+        if _consecutive_simple_tasks >= _STICKY_THRESHOLD:
+            _current_backend = AVAILABLE_MODELS["flash"]
+            return _current_backend
+        # 还不够，留在 pro
+        return _current_backend
+
+    # 模型匹配当前，重置简单任务计数
+    _consecutive_simple_tasks = 0
+    return _current_backend
 # 统计持久化目录：agent/stats/{session_id}.json
 _STATS_DIR = Path(__file__).resolve().parent.parent / "stats"
 
@@ -927,12 +960,13 @@ def run_conversation(
     reset_safe_stats()
 
     # 自动选择模型
+    prev_backend = _current_backend  # 切换前快照（auto_select_model 会更新 _current_backend）
     backend = auto_select_model(user_input)
     model_name = backend.info.name
     logger.info("路由: '%s...' → %s", user_input[:30], model_name)
 
-    # 如果选的不是当前模型，通知用户
-    if backend is not _current_backend:
+    # 模型变了 → 通知用户
+    if backend is not prev_backend:
         on_token(f"\n[🤖 使用 {model_name} 处理此任务]\n\n")
 
     while True:
