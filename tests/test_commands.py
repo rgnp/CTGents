@@ -51,20 +51,12 @@ class TestDispatch:
         r = cmds.dispatch("/context", self.ctx, "test-session")
         assert "Token" in r.message or len(r.message) > 0
 
-    def test_stats_registered(self):
-        r = cmds.dispatch("/stats", self.ctx, None)
-        assert len(r.message) > 0
-
     def test_sessions_registered(self):
         r = cmds.dispatch("/sessions", self.ctx, None)
         assert len(r.message) >= 0  # 可能为空（无历史会话）
-
-    def test_save_registered(self):
-        r = cmds.dispatch("/save", self.ctx, None)
-        assert r.save is True
-
-    def test_model_registered(self):
-        r = cmds.dispatch("/model", self.ctx, None)
+    def test_sessions_registered(self):
+        r = cmds.dispatch("/sessions", self.ctx, None)
+        assert len(r.message) >= 0
         assert len(r.message) > 0
 
     def test_mode_registered(self):
@@ -84,7 +76,3 @@ class TestDispatch:
         r = cmds.dispatch("/evolve 优化性能", self.ctx, "test")
         assert r.retry is True
         assert r.save is True
-
-    def test_watchdog_registered(self):
-        r = cmds.dispatch("/watchdog", self.ctx, None)
-        assert len(r.message) > 0

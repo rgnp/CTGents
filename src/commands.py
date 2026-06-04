@@ -106,24 +106,6 @@ def _cmd_clear(r: CmdResult, ctx, _args, _sid) -> None:
     r.message = "上下文已清除"
 
 
-@builtin("/save", description="强制保存当前会话")
-def _cmd_save(r: CmdResult, _ctx, _args, _sid) -> None:
-    r.save = True
-@builtin("/rename", description="重命名当前会话", usage="/rename <名称>")
-def _cmd_rename(r: CmdResult, _ctx, args, sid) -> None:
-    if not args:
-        r.message = "用法: /rename <名称>"
-        return
-    name = " ".join(args)
-    if sid:
-        rename_session(sid, name)
-        r.message = f"会话已重命名为: {name}"
-    else:
-        r.message = f"当前没有活跃会话，下次保存时将使用名称: {name}"
-        r.save = True
-
-
-
 @builtin_multi(["/delete", "/rm"], description="删除历史会话", usage="/delete <编号>")
 def _cmd_delete(r: CmdResult, _ctx, args, _sid) -> None:
     if not args:
@@ -193,31 +175,6 @@ def _cmd_new(r: CmdResult, _ctx, _args, _sid) -> None:
     r.clear = True
 
 
-def _cmd_reload(r: CmdResult, _ctx, _args, _sid) -> None:
-    """使用 importlib.reload 热加载所有已加载的 src.* 模块。"""
-    import importlib
-    import sys
-
-    reloaded = []
-    errors = []
-    for mod_name in sorted(k for k in sys.modules if k.startswith("src.") and sys.modules[k] is not None):
-        try:
-            importlib.reload(sys.modules[mod_name])
-            reloaded.append(mod_name)
-        except Exception as e:
-            errors.append(f"{mod_name}: {e}")
-
-    # 重新初始化工具注册表
-    try:
-        from .tools import _init_registry
-        _init_registry()
-    except Exception as e:
-        errors.append(f"tools._init_registry: {e}")
-
-    r.message = f"🔄 热加载完成：{len(reloaded)} 个模块"
-    if errors:
-        r.message += f"\n  ⚠️ {len(errors)} 个失败"
-
 
 # ═══════════════════════════════════════════════════════════════
 # 模型指令
@@ -239,68 +196,6 @@ def _cmd_model(r: CmdResult, _ctx, args, _sid) -> None:
 # ═══════════════════════════════════════════════════════════════
 # 状态指令
 # ═══════════════════════════════════════════════════════════════
-
-@builtin("/status", description="系统状态概览：插件、会话、配置一览")
-def _cmd_status(r: CmdResult, ctx, _args, sid) -> None:
-    from .config import (
-        MAX_CONTEXT_TOKENS,
-        MAX_RETRIES,
-        PLUGINS_DIR,
-        TOKEN_PER_CHAR,
-        TOOL_LOOP_THRESHOLD,
-        TOOL_RESULT_BUDGET,
-    )
-    from .llm import get_current_model_id, get_current_model_name
-    from .session import list_sessions
-    try:
-        from .tools.plugin_mgr import _plugins
-    except ImportError:
-        _plugins = {}
-    from .tools.tokens import count_messages_tokens
-
-    # ── 插件 ──
-    plugin_count = len(_plugins)
-    tool_count = sum(len(getattr(mod, "TOOLS", [])) for mod in _plugins.values())
-
-    # ── 会话 ──
-    sessions = list_sessions()
-    session_count = len(sessions)
-    current_idx = None
-    if sid:
-        for i, s in enumerate(sessions, 1):
-            if s == sid:
-                current_idx = i
-                break
-
-    # ── 上下文 ──
-    all_msgs = ctx.all
-    used_tokens = count_messages_tokens(all_msgs)
-    usage_pct = used_tokens / MAX_CONTEXT_TOKENS * 100
-
-    lines = [
-        "╔══════════════════════════════╗",
-        "║      系统状态概览            ║",
-        "╚══════════════════════════════╝",
-        "",
-        f"  📦 插件    {plugin_count} 个 · {tool_count} 个工具",
-        f"  💬 会话    {session_count} 个{'（当前第 ' + str(current_idx) + '）' if current_idx else ''}",
-        "",
-        "── 当前会话 ──",
-        f"  当前模型:     {get_current_model_name()}（{get_current_model_id()}）",
-        f"  上下文用量:    {used_tokens:,} / {MAX_CONTEXT_TOKENS:,} token ({usage_pct:.1f}%)",
-        f"  工具循环阈值:   {TOOL_LOOP_THRESHOLD:.0%}",
-        f"  工具结果预算:   {TOOL_RESULT_BUDGET:.0%}",
-        f"  Token/字符:     {TOKEN_PER_CHAR}",
-        f"  最大重试:       {MAX_RETRIES} 次",
-        "",
-        "── 路径 ──",
-        f"  工作目录: {os.getcwd()}",
-        f"  插件目录: {PLUGINS_DIR}",
-    ]
-
-    r.message = "\n".join(lines)
-
-
 
 # ═══════════════════════════════════════════════════════════════
 # Auto Mode 指令
@@ -333,46 +228,6 @@ def _cmd_trust(r: CmdResult, _ctx, args, _sid) -> None:
         r.message = revoke_trust(name)
     else:
         r.message = trust_tool(args[0])
-
-
-@builtin("/compact", description="压缩旧对话，释放 token 空间（append-only，不破坏缓存）", usage="/compact")
-def _cmd_compact(r: CmdResult, ctx, args, _sid) -> None:
-    """手动压缩旧对话。Append-only：在 log 末尾追加摘要，不删改历史。
-
-    设计原则（对齐 Reasonix 缓存优先策略）：
-      - 任何时候都不 mutate/delete log，只追加
-      - 删除历史 = 破坏后续所有请求的前缀缓存
-      - 自动压缩（70% token 阈值时）和手动压缩都是 append-only
-    """
-    from .llm import _make_brief_summary
-
-    original_len = len(ctx)
-    log = ctx.log
-
-    if args:
-        r.message = "用法: /compact（不支持参数，压缩总是 append-only）"
-        return
-
-    # 在 log 末尾追加摘要，不删历史
-    brief = _make_brief_summary(log, max_len=500)
-    if not brief:
-        r.message = "无可压缩内容"
-        return
-
-    log.append({
-        "role": "system",
-        "content": f"⏪ 对话摘要：{brief}",
-    })
-
-    from .config import MAX_CONTEXT_TOKENS
-    from .tools.tokens import count_messages_tokens
-    used = count_messages_tokens(ctx.all)
-
-    r.message = (
-        f"已追加摘要（append-only，不删历史）：{original_len} → {len(ctx.all)} 条消息\n"
-        f"当前 Token: {used:,} / {MAX_CONTEXT_TOKENS:,} ({used/MAX_CONTEXT_TOKENS*100:.1f}%)"
-    )
-    r.save = True
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -739,81 +594,6 @@ def _cmd_self(r: CmdResult, _ctx, _args, _sid) -> None:
 # 自跟踪 /stats — Agent 查看自己的工具调用统计
 # ═══════════════════════════════════════════════════════════════
 
-@builtin("/stats", description="查看自己的工具调用统计（最常用、最慢、失败率等）")
-def _cmd_stats(r: CmdResult, _ctx, args, _sid) -> None:
-    """显示工具调用统计（供 AI 读取，非人类 UI）。"""
-    from .tools.tracker import get_stats, get_recent, clear_stats
-
-    if args and args[0] == "--clear":
-        deleted = clear_stats()
-        r.message = f"已清空 {deleted} 条追踪记录"
-        return
-
-    stats = get_stats()
-    if not stats or stats.get("total", 0) == 0:
-        r.message = "暂无工具调用记录"
-        return
-
-    parts: list[str] = []
-
-    # 概览
-    parts.append(f"## 概览")
-    parts.append(f"总调用: {stats['total']} | 成功: {stats['success']} | 失败: {stats['fail']} | 成功率: {stats['success_rate']}%")
-    parts.append("")
-
-    # 按分类
-    parts.append("## 按分类")
-    for cat, info in sorted(stats.get("by_category", {}).items()):
-        parts.append(f"  [{cat}] {info.get('calls', 0)} 次调用, {info.get('fail', 0)} 次失败")
-    parts.append("")
-
-    # 最常用工具 top 10
-    parts.append("## 最常用工具 Top 10")
-    for t in stats.get("top_tools", []):
-        pct = t.get("success_rate", 0)
-        avg = t.get("avg_duration_ms", 0)
-        parts.append(f"  {t.get('name', '?'):<24} {t.get('calls', 0):>4}次  成功率{pct:>5}%  均耗时{avg:>6}ms")
-    parts.append("")
-
-    # 最慢工具 Top 5
-    slow = stats.get("slowest_tools", [])
-    if slow:
-        parts.append("## 最慢工具 Top 5（调用>=2次）")
-        for t in slow:
-            parts.append(f"  {t['name']:<24} 均耗时{t['avg_duration_ms']:>6}ms  ({t['calls']}次)")
-        parts.append("")
-
-    # 重复模式
-    repeated = stats.get("repeated_patterns", {})
-    if repeated:
-        parts.append("## 重复模式（相同参数key组合 >= 3次）")
-        for tool, patterns in sorted(repeated.items()):
-            for keys, count in sorted(patterns.items(), key=lambda x: -x[1]):
-                kstr = ", ".join(keys)
-                parts.append(f"  {tool}({kstr}) — {count}次")
-        parts.append("")
-
-    # 连续失败
-    fails = stats.get("consecutive_fails", [])
-    if fails:
-        parts.append("## 连续失败（最近）")
-        for f in fails:
-            parts.append(f"  {f}")
-        parts.append("")
-
-    # 最近 5 条
-    recent = get_recent(5)
-    if recent:
-        parts.append("## 最近调用")
-        for r_rec in reversed(recent):
-            t = r_rec.get("tool", "?")
-            ok = "✓" if r_rec.get("success", True) else "✗"
-            dur = r_rec.get("duration_ms", 0)
-            ts = r_rec.get("ts", "")[11:19]
-            parts.append(f"  [{ts}] {ok} {t}  ({dur}ms)")
-
-    r.message = "\n".join(parts)
-
 
 # ── 自进化命令 ──
 
@@ -837,28 +617,6 @@ def _cmd_evolve(r: CmdResult, ctx, args, session_id) -> None:
     r.retry = True
     r.save = True
     r.message = f"自进化已启动\n目标: {goal}\n\nAgent 将自主完成研究→综合→生成→验证的全流程。按 Esc 可中断。"
-
-
-def _cmd_watchdog(r: CmdResult, ctx, args, session_id) -> None:
-    """查看 watchdog 状态。"""
-    try:
-        from .watchdog import get_status
-        state = get_status()
-        if state is None:
-            r.message = "看门狗未运行（仅在本 session 内通过主进程启动时激活）"
-            return
-        lines = [
-            "═══ 看门狗状态 ═══",
-            f"  监控 PID: {state.get('parent_pid', 'N/A')}",
-            f"  复活次数: {state.get('resurrections', 0)}",
-            f"  崩溃记录: {len(state.get('crashes', []))} 次",
-            f"  启动时间: {state.get('started', 'N/A')}",
-        ]
-        if state.get("last_crash_reason"):
-            lines.append(f"  最近崩溃原因: {state['last_crash_reason']}")
-        r.message = "\n".join(lines)
-    except Exception as e:
-        r.message = f"无法读取看门狗状态: {e}"
 
 
 def dispatch(user_input: str, ctx: CacheContext, session_id: str | None) -> CmdResult:

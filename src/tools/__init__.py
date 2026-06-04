@@ -2,9 +2,12 @@
 
 import importlib
 import json
+import logging
 import sys
 import time
 from openai.types.chat import ChatCompletionMessageToolCall
+
+logger = logging.getLogger(__name__)
 
 # ── 内置模块清单（供热加载遍历）──
 # (模块路径, TOOLS_变量名, execute函数名)
