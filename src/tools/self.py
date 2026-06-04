@@ -62,7 +62,6 @@ SYSTEM_MAP = {
             "cache_context": "三段式上下文（prefix/log/scratch）传给 LLM",
             "tools/__init__": "获取工具列表序列化给 API，执行工具调用",
             "main": "被主循环调用 run_conversation()",
-            "subagent": "子代理通过 auto_select_model 获得 Flash 后端",
         },
     },
     "tools": {
@@ -168,17 +167,6 @@ SYSTEM_MAP = {
             "memory": "记忆变更后更新记忆索引",
         },
     },
-    "subagent": {
-        "name": "子代理系统",
-        "files": "src/tools/subagent.py",
-        "what": "Flash 驱动的独立探索代理——只读工具（读文件/搜代码/查网络），独立上下文不污染主会话，最多 5 轮，返回结构化摘要",
-        "why": "探索任务不需要 Pro 的决策能力，用 Flash 并行多个子代理同时探索不同方向——省 token 且上下文隔离",
-        "tools": ["subagent"],
-        "connections": {
-            "llm": "使用 auto_select_model（默认 Flash），独立 CacheContext",
-            "tools/__init__": "只读工具白名单（_READONLY_TOOLS）限制能力",
-        },
-    },
     "safety": {
         "name": "安全系统",
         "files": "src/safety.py",
@@ -200,8 +188,6 @@ CONNECTION_GRAPH = [
     ("main", "guard", "崩溃时 analyze_crash() → execute_rollback() → 重试"),
     ("llm", "cache_context", "ctx.send() 序列化消息 → API 调用"),
     ("llm", "tools/__init__", "get_tools() → API tool definitions"),
-    ("llm", "subagent", "子代理独立 CacheContext + Flash 后端"),
-    ("tools/__init__", "rag", "写入 src/*.py → index_project()"),
     ("tools/__init__", "coverage_gate", "写入 src/*.py → clear_cache()"),
     ("tools/__init__", "plugin_mgr", "写入 plugins/*.py → reload_plugins()"),
     ("tools/__init__", "storm", "同轮重复调用 → 返回缓存结果"),

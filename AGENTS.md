@@ -142,7 +142,7 @@
 |------|------|
 | `scan_project`/`check_project` | 扫描/检查项目 |
 | `generate_agents_md`/`docs_sync_check` | AGENTS.md/文档同步 |
-| `subagent`/`think` | 子代理/策略规划 |
+| `think` | 策略规划 |
 | `run_python`/`run_command` | 执行代码/命令 |
 
 ### 插件与能力

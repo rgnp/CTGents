@@ -166,12 +166,6 @@ class TestStickyModel:
 class TestToolRegistry:
     """关键工具必须在注册表中且可执行。"""
 
-    def test_subagent_registered(self):
-        from src.tools import get_tools
-        tools = get_tools()
-        names = [t["function"]["name"] for t in tools]
-        assert "subagent" in names
-
     def test_evolve_tools_registered(self):
         from src.tools import get_tools
         tools = get_tools()
@@ -202,19 +196,6 @@ class TestToolRegistry:
         for name in ["rag_query", "rag_status", "rag_browse", "rag_read"]:
             assert name in names, f"{name} 未注册"
 
-    def test_subagent_tool_executable(self):
-        """subagent 工具不仅注册了，还要能执行（返回错误也算执行成功）。"""
-        from src.tools.subagent import execute
-        result = execute("subagent", {"task": "列出项目中的所有Python文件"})
-        assert result is not None
-        # 可能因为 LLM 调用失败，但至少工具被执行了而不是报"未知工具"
-
-
-# ═══════════════════════════════════════════════════════════════
-# 6. 命令系统
-# ═══════════════════════════════════════════════════════════════
-
-class TestCommands:
     """关键命令必须可执行且正确接线。"""
 
     def test_evolve_command_injects_prompt(self):

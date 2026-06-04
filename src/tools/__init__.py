@@ -22,7 +22,6 @@ _BUILTIN_MODULES: list[tuple[str, str, str]] = [
     (".lint",      "TOOLS_LINT",   "execute"),
     (".mcp",       "TOOLS_MCP",    "execute"),
     (".rag",       "TOOLS_RAG",    "execute"),
-    (".subagent",  "TOOLS_SUBAGENT", "execute"),
     (".evolve",    "TOOLS_EVOLVE",  "execute"),
     (".research",  "TOOLS_RESEARCH", "execute"),
 ]
