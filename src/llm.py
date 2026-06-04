@@ -323,8 +323,8 @@ AVAILABLE_MODELS: dict[str, LLMBackend] = {
     )),
 }
 
-# 当前选中的模型（默认 Flash）
-_current_backend: LLMBackend = AVAILABLE_MODELS["flash"]
+# 当前选中的模型（开发阶段固定 Pro — 你在自己开发自己，复杂任务多）
+_current_backend: LLMBackend = AVAILABLE_MODELS["pro"]
 
 # ── 模型切换滞后计数器（避免 flash↔pro ping-pong 破坏前缀缓存） ──
 # DeepSeek KV 缓存按模型独立 — flash 和 pro 各有自己的缓存。
