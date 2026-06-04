@@ -335,84 +335,41 @@ def _cmd_trust(r: CmdResult, _ctx, args, _sid) -> None:
         r.message = trust_tool(args[0])
 
 
-@builtin("/compact", description="手动压缩旧对话，释放 token 空间", usage="/compact [all|keep=N]")
+@builtin("/compact", description="压缩旧对话，释放 token 空间（append-only，不破坏缓存）", usage="/compact")
 def _cmd_compact(r: CmdResult, ctx, args, _sid) -> None:
-    """手动压缩旧对话。"""
-    from .llm import _compact_context, _make_brief_summary
+    """手动压缩旧对话。Append-only：在 log 末尾追加摘要，不删改历史。
 
-    keep = 5  # 默认保留最近 5 轮对话
-
-    if args:
-        if args[0] == "all":
-            keep = 0
-        elif args[0].startswith("keep="):
-            try:
-                keep = int(args[0].split("=")[1])
-                if keep < 0:
-                    r.message = "无效参数: keep 必须 >= 0，用法: /compact [all|keep=N]"
-                    return
-            except ValueError:
-                r.message = f"无效参数: {args[0]}，用法: /compact [all|keep=N]"
-                return
-        else:
-            r.message = f"无效参数: {args[0]}，用法: /compact [all|keep=N]"
-            return
+    设计原则（对齐 Reasonix 缓存优先策略）：
+      - 任何时候都不 mutate/delete log，只追加
+      - 删除历史 = 破坏后续所有请求的前缀缓存
+      - 自动压缩（70% token 阈值时）和手动压缩都是 append-only
+    """
+    from .llm import _make_brief_summary
 
     original_len = len(ctx)
+    log = ctx.log
 
-    if keep == 0:
-        # /compact all：保留 prefix，log 替换为摘要
-        user_input = "换个话题，重新开始"
-        result = _compact_context(ctx.all, user_input)
-        # result 是一个扁平列表，prefix 部分（最前面的 system 消息）保留，
-        # 其余放入 log
-        pfx_end = 0
-        for m in result:
-            if m.get("role") != "system":
-                break
-            pfx_end += 1
-        # 只保留与当前 prefix 匹配的 system 消息数
-        pfx_count = min(pfx_end, len(ctx.prefix))
-        if pfx_count > 0:
-            ctx.rebuild_prefix(result[:pfx_count])
-        ctx.log[:] = result[pfx_count:]
-    else:
-        # /compact 或 /compact keep=N：按轮数保留
-        log = ctx.log
+    if args:
+        r.message = "用法: /compact（不支持参数，压缩总是 append-only）"
+        return
 
-        # 从后往前数 keep 个 user 消息
-        user_found = 0
-        retain_start = len(log)
-        for i in range(len(log) - 1, -1, -1):
-            if log[i].get("role") == "user":
-                user_found += 1
-                if user_found == keep:
-                    retain_start = i
-                    break
+    # 在 log 末尾追加摘要，不删历史
+    brief = _make_brief_summary(log, max_len=500)
+    if not brief:
+        r.message = "无可压缩内容"
+        return
 
-        if retain_start <= 0 or user_found < keep:
-            # 保留起点回退到开头 或 总轮数不够 → 不压缩
-            result_log = list(log)
-        else:
-            # 前半部分压缩为摘要
-            to_archive = log[:retain_start]
-            brief = _make_brief_summary(to_archive)
-            result_log = []
-            if brief:
-                result_log.append({
-                    "role": "system",
-                    "content": f"⏪ 对话摘要：{brief}",
-                })
-            result_log.extend(log[retain_start:])
-
-        ctx.log[:] = result_log
+    log.append({
+        "role": "system",
+        "content": f"⏪ 对话摘要：{brief}",
+    })
 
     from .config import MAX_CONTEXT_TOKENS
     from .tools.tokens import count_messages_tokens
     used = count_messages_tokens(ctx.all)
 
     r.message = (
-        f"已压缩：{original_len} → {len(ctx.all)} 条消息\n"
+        f"已追加摘要（append-only，不删历史）：{original_len} → {len(ctx.all)} 条消息\n"
         f"当前 Token: {used:,} / {MAX_CONTEXT_TOKENS:,} ({used/MAX_CONTEXT_TOKENS*100:.1f}%)"
     )
     r.save = True
