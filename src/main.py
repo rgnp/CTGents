@@ -98,12 +98,22 @@ def _make_project_context() -> dict | None:
 logger = logging.getLogger(__name__)
 
 
-def _make_env_message() -> dict:
-    """生成环境上下文系统消息 — 极小化，不浪费缓存前缀 token。"""
+def _make_agents_message() -> dict:
+    """从 AGENTS.md 构建 Agent 总纲系统消息（不可变前缀成员）。
+
+    AGENTS.md 是 Agent 的完整操作手册——行为协议、工具清单、架构规则。
+    每次会话启动时加载到 immutable prefix，确保 DeepSeek 前缀缓存 100% 命中。
+    参考：Reasonix 的 cache-first loop 设计——系统提示必须 byte-stable。
+    """
+    agents_path = Path(__file__).parent.parent / "AGENTS.md"
+    if agents_path.exists():
+        content = agents_path.read_text(encoding="utf-8")
+    else:
+        content = "你是一个终端编程助手，可以读写文件、执行命令、搜索代码、操作 git。"
     return {
         "role": "system",
-        "content": "你是一个终端编程助手，可以读写文件、执行命令、搜索代码、操作 git。",
-        "_volatile": True,
+        "content": content,
+        "_volatile": True,  # 每次启动重建，不持久化到会话文件
     }
 
 
@@ -329,7 +339,7 @@ def main() -> None:
     if ctx is None:
         ctx = CacheContext()
     prefix_msgs = []
-    prefix_msgs.append(_make_env_message())
+    prefix_msgs.append(_make_agents_message())
     proj_ctx = _make_project_context()
     if proj_ctx:
         prefix_msgs.append(proj_ctx)
