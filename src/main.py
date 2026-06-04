@@ -117,27 +117,53 @@ def _make_agents_message() -> dict:
     }
 
 
-def _make_memory_context() -> dict | None:
-    """读取记忆索引，生成简洁的记忆上下文（缓存版，不反复读文件）。"""
-    from .tools.memory import get_context
-    ctx_str = get_context()
-    if not ctx_str:
-        return None
-    return {"role": "system", "content": ctx_str, "_volatile": True}
+def _append_volatile_context(ctx: CacheContext) -> None:
+    """向 log 末尾追加所有 volatile 系统消息（记忆/安全/RAG/反思）。
 
-
-def _upsert_log_system(ctx: CacheContext, marker: str, msg: dict) -> None:
-    """在 log 中查找含 marker 的 system 消息，找到则原地替换，否则追加。
-
-    防止安全模式等动态 system 消息在 log 中累积。
-    替换发生在 log 末尾区域，不影响对话前缀缓存。
+    设计原则（对齐 Reasonix cache-first loop）：
+      - **绝不在 prefix 中放动态内容** — prefix 必须 byte-stable
+      - **log 只追加不修改** — 任何原地编辑都会破坏 DeepSeek 前缀缓存
+      - volatile 消息放 log 末尾，不影响主体对话历史的缓存命中
+      - 每次会话启动/重载时调用，旧 volatile 保留在历史中但新消息排在最后
     """
-    for i in range(len(ctx.log) - 1, -1, -1):
-        m = ctx.log[i]
-        if m.get("role") == "system" and marker in m.get("content", ""):
-            ctx.log[i] = msg
-            return
-    ctx.log.append(msg)
+    # ── 记忆上下文 ──
+    mem_ctx = _make_memory_context()
+    if mem_ctx:
+        ctx.log.append(mem_ctx)
+
+    # ── 安全模式 ──
+    from .safety import get_mode_summary
+    ctx.log.append({"role": "system", "content": get_mode_summary(), "_volatile": True})
+
+    # ── RAG 索引状态（移出 prefix，避免索引变→prefix碎→缓存全丢） ──
+    try:
+        from .tools.rag import get_index_status, _load_doc_index
+        rag_info = get_index_status()
+        has_code = "未建立" not in rag_info
+        has_research = _load_doc_index("research") is not None
+
+        if has_code and has_research:
+            hint = "RAG 已就绪：rag_query(scope='code') 搜代码，rag_query(scope='research') 搜论文笔记。研究知识库可用 search_knowledge 或 RAG 语义搜索。"
+        elif has_code:
+            hint = "RAG 代码索引已就绪。研究知识库可用 search_papers 搜论文、save_note 记笔记。用 rag_index_research 将知识库接入 RAG 语义搜索。"
+        elif has_research:
+            hint = "RAG 研究索引已就绪。rag_index 可建立代码索引。"
+        else:
+            hint = ""
+
+        if hint:
+            ctx.log.append({"role": "system", "content": hint, "_volatile": True})
+    except Exception:
+        pass
+
+    # ── 反思摘要 ──
+    try:
+        from .tools.reflect import get_summary as _reflect_summary
+        ref = _reflect_summary()
+        if ref:
+            ctx.log.append({"role": "system", "content": ref, "_volatile": True})
+    except Exception:
+        pass
 
 
 # ── UI 辅助 ──
@@ -343,44 +369,9 @@ def main() -> None:
     proj_ctx = _make_project_context()
     if proj_ctx:
         prefix_msgs.append(proj_ctx)
-    try:
-        from .tools.rag import get_index_status, _load_doc_index
-        rag_info = get_index_status()
-        has_code = "未建立" not in rag_info
-        has_research = _load_doc_index("research") is not None
-
-        if has_code and has_research:
-            hint = "RAG 已就绪：rag_query(scope='code') 搜代码，rag_query(scope='research') 搜论文笔记。研究知识库可用 search_knowledge 或 RAG 语义搜索。"
-        elif has_code:
-            hint = "RAG 代码索引已就绪。研究知识库可用 search_papers 搜论文、save_note 记笔记。用 rag_index_research 将知识库接入 RAG 语义搜索。"
-        elif has_research:
-            hint = "RAG 研究索引已就绪。rag_index 可建立代码索引。"
-        else:
-            hint = ""
-
-        if hint:
-            prefix_msgs.append({
-                "role": "system",
-                "content": hint,
-                "_volatile": True,
-            })
-    except Exception:
-        pass
     ctx.rebuild_prefix(prefix_msgs)
-    # ── 动态上下文（log 区，不影响前缀缓存） ──
-    mem_ctx = _make_memory_context()
-    if mem_ctx:
-        ctx.log.append(mem_ctx)
-    from .safety import get_mode_summary
-    _upsert_log_system(ctx, "模式:",
-                       {"role": "system", "content": get_mode_summary(), "_volatile": True})
-    try:
-        from .tools.reflect import get_summary as _reflect_summary
-        ref = _reflect_summary()
-        if ref:
-            ctx.log.append({"role": "system", "content": ref, "_volatile": True})
-    except Exception:
-        pass
+    # ── volatile 系统消息（log 末尾，仅追加不修改） ──
+    _append_volatile_context(ctx)
 
     print("Agent 已启动，输入 /help 查看指令列表\n")
 
@@ -456,39 +447,14 @@ def main() -> None:
                     _print_recent(ctx.all)
                 if r.clear:
                     ctx.clear_log()
-                    # 重建 prefix（环境上下文 + 项目感知）
-                    prefix = []
-                    try:
-                        from .tools.rag import get_index_status, _load_doc_index
-                        rag_info = get_index_status()
-                        if "未建立" not in rag_info:
-                            prefix.append({
-                                "role": "system",
-                                "content": "RAG 代码索引已就绪。研究知识库可用 search_papers 搜论文、save_note 记笔记。",
-                                "_volatile": True,
-                            })
-                        if _load_doc_index("research") is not None:
-                            prefix.append({
-                                "role": "system",
-                                "content": "RAG 研究索引已就绪。rag_query(scope='research') 可语义搜索论文和笔记。",
-                                "_volatile": True,
-                            })
-                    except Exception:
-                        pass
-                    if r.save:   # /new: 同时重置 session
-                        session_id = None
-                    prefix.append(_make_env_message())
+                    # 重建 prefix（仅 AGENTS.md + 项目上下文）
+                    prefix = [_make_agents_message()]
                     proj_ctx = _make_project_context()
                     if proj_ctx:
                         prefix.append(proj_ctx)
                     ctx.rebuild_prefix(prefix)
-                    # ── 动态上下文（log 区，不影响前缀缓存） ──
-                    mem_ctx = _make_memory_context()
-                    if mem_ctx:
-                        ctx.log.append(mem_ctx)
-                    from .safety import get_mode_summary
-                    _upsert_log_system(ctx, "安全模式",
-                                       {"role": "system", "content": get_mode_summary(), "_volatile": True})
+                    # ── volatile 系统消息（log 末尾，仅追加不修改） ──
+                    _append_volatile_context(ctx)
                 if r.retry:
                     last_user = ctx.last_user_content() or ""
                     if last_user:
