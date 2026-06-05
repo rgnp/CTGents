@@ -308,6 +308,9 @@ class ProjectAnalyzer:
             return True
         if d.kind == "method" and d.is_public:
             return True
+        # 类内私有方法（通过 self._xxx 调用，AST 无法追踪）
+        if d.kind == "method" and not d.is_public:
+            return True
         if d.file.endswith("__init__.py") and d.is_public:
             return True
         return False
