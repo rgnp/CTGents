@@ -8,8 +8,135 @@
   evolve_suggest_tests— 获取解锁修改权限的测试建议
 """
 
-import json
+import ast
+import subprocess
+import time
 from pathlib import Path
+
+# ═══════════════════════════════════════════════════════════════
+# 关联测试查找：变更文件 → 测试文件
+# ═══════════════════════════════════════════════════════════════
+
+_PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
+
+
+def _file_to_module(filepath: str) -> str | None:
+    """文件路径 → Python 模块名。"""
+    fp = Path(filepath).resolve()
+    try:
+        rel = fp.relative_to(_PROJECT_ROOT)
+    except ValueError:
+        return None
+    parts = list(rel.parts)
+    if parts[-1] == "__init__.py":
+        parts = parts[:-1]
+    elif parts[-1].endswith(".py"):
+        parts[-1] = parts[-1][:-3]
+    else:
+        return None
+    return ".".join(parts)
+
+
+def _parse_test_imports() -> dict[str, set[str]]:
+    """解析所有 test_*.py 的 import，返回 {test_path: {imported_modules}}。"""
+    tests_dir = _PROJECT_ROOT / "tests"
+    if not tests_dir.is_dir():
+        return {}
+    cache: dict[str, set[str]] = {}
+    for tf in sorted(tests_dir.glob("test_*.py")):
+        try:
+            tree = ast.parse(tf.read_text(encoding="utf-8"))
+        except (SyntaxError, OSError):
+            continue
+        imports: set[str] = set()
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Import):
+                for alias in node.names:
+                    imports.add(alias.name)
+            elif isinstance(node, ast.ImportFrom):
+                if node.module:
+                    imports.add(node.module)
+        cache[str(tf)] = imports
+    return cache
+
+
+def _find_related_tests(changed_files: list[str]) -> tuple[list[str], str]:
+    """根据变更文件找到相关测试文件。
+
+    Returns:
+        (related_test_paths, info_message)
+    """
+    target_modules: set[str] = set()
+    for f in changed_files:
+        mod = _file_to_module(f)
+        if mod:
+            target_modules.add(mod)
+            parts = mod.split(".")
+            for i in range(1, len(parts)):
+                target_modules.add(".".join(parts[:i]))
+
+    if not target_modules:
+        return [], "无法将变更文件映射到模块名。"
+
+    test_imports = _parse_test_imports()
+    related: list[str] = []
+    for test_path, imports in test_imports.items():
+        if imports & target_modules:
+            related.append(test_path)
+
+    zero_cov: list[str] = []
+    for f in changed_files:
+        mod = _file_to_module(f)
+        if mod and not any(mod in imps for imps in test_imports.values()):
+            zero_cov.append(Path(f).name)
+
+    parts: list[str] = []
+    if related:
+        parts.append(f"找到 {len(related)} 个相关测试文件")
+    else:
+        parts.append("未找到任何相关测试文件")
+    if zero_cov:
+        parts.append(f"⚠️ 零覆盖文件: {', '.join(zero_cov)}")
+
+    return sorted(related), "。".join(parts)
+
+
+def _run_related_tests(test_files: list[str], timeout: int = 120) -> tuple[bool, str, float]:
+    """只运行指定的测试文件，带覆盖率。"""
+    t0 = time.perf_counter()
+    try:
+        result = subprocess.run(
+            ["py", "-m", "pytest", "--cov=src", "--cov-report=json",
+             "-p", "no:cacheprovider", "-q", "--tb=short", *test_files],
+            cwd=str(_PROJECT_ROOT),
+            capture_output=True,
+            timeout=timeout,
+            encoding="utf-8", errors="replace",
+        )
+        output = result.stdout + "\n" + result.stderr
+        output = result.stdout + "\n" + result.stderr
+        duration = (time.perf_counter() - t0) * 1000
+        if result.returncode == 0:
+            return True, output, duration
+        failed = [ln.strip() for ln in output.split("\n")
+                  if "FAILED" in ln and "::" in ln][:10]
+        prefix = ""
+        if failed:
+            prefix = "失败测试:\n" + "\n".join(f"  - {t}" for t in failed) + "\n\n"
+        tail = output[-3000:] if len(output) > 3000 else output
+        return False, f"exit={result.returncode}\n{prefix}{tail}", duration
+    except subprocess.TimeoutExpired:
+        return False, f"测试超时（>{timeout}s）", (time.perf_counter() - t0) * 1000
+    except FileNotFoundError:
+        return False, "pytest 不可用", 0.0
+    except Exception as e:
+        return False, f"测试异常: {e}", (time.perf_counter() - t0) * 1000
+
+
+# ═══════════════════════════════════════════════════════════════
+# 工具定义
+# ═══════════════════════════════════════════════════════════════
+
 TOOLS_EVOLVE: list[dict] = [
     {
         "_meta": {"label": "进化查询"},
@@ -114,6 +241,14 @@ TOOLS_EVOLVE: list[dict] = [
                         "default": 120,
                         "description": "测试超时秒数",
                     },
+                    "related_only": {
+                        "type": "boolean",
+                        "default": False,
+                        "description": (
+                            "True=只跑与变更文件相关的测试（通过 import 匹配），秒级反馈。"
+                            "False=跑全量测试+完整三阶段验证。"
+                        ),
+                    },
                 },
                 "required": ["changed_files"],
             },
@@ -179,7 +314,7 @@ def execute(name: str, args: dict) -> str | None:
 
 
 def _cmd_query(args: dict) -> str:
-    from ..evolve import query, find_similar
+    from ..evolve import query
     keywords = args.get("goal_keywords", [])
     outcome = args.get("outcome")
     tags = args.get("tags")
@@ -233,11 +368,19 @@ def _cmd_coverage(args: dict) -> str:
 
 
 def _cmd_validate(args: dict) -> str:
-    from ..validate import validate as run_validate, format_report
     changed_files = args.get("changed_files", [])
     timeout = args.get("timeout", 120)
+    related_only = args.get("related_only", False)
+
     if not changed_files:
         return "请提供 changed_files 参数。"
+
+    # ── 关联测试快速通道 ──
+    if related_only:
+        return _validate_related_only(changed_files, timeout)
+
+    # ── 全量验证 ──
+    from ..validate import validate as run_validate, format_report
     report = run_validate(changed_files, timeout=timeout)
     result = format_report(report)
     if report.overall.value != "pass":
@@ -245,12 +388,65 @@ def _cmd_validate(args: dict) -> str:
     return result
 
 
+def _validate_related_only(changed_files: list[str], timeout: int) -> str:
+    """仅运行相关测试的快速验证模式。"""
+    from ..validate import pre_commit_checks
+
+    pre = pre_commit_checks(changed_files)
+
+    lines = [
+        "═" * 50,
+        "关联测试模式 — 仅运行与变更相关的测试",
+        f"变更文件: {len(changed_files)} 个",
+        "",
+    ]
+    icon = {"pass": "✅", "fail": "❌", "timeout": "⏱️", "skip": "⏭️"}.get(
+        pre.result.value, "❓")
+    lines.append(f"  {icon} 静态检查: {pre.details[:200]}")
+
+    if pre.result.value == "fail":
+        lines.append("═" * 50)
+        return "\n".join(lines)
+
+    related, info = _find_related_tests(changed_files)
+    lines.append(f"\n  🔍 {info}")
+
+    if not related:
+        lines.append("\n⛔ 变更文件无任何测试保护，拒绝继续。")
+        for f in changed_files:
+            lines.append(f"     - {Path(f).name}")
+        lines.append("═" * 50)
+        return "\n".join(lines)
+
+    lines.append(f"\n  相关测试 ({len(related)} 个):")
+    for t in related:
+        lines.append(f"    - {Path(t).name}")
+
+    lines.append("\n  执行中...")
+    passed, output, duration = _run_related_tests(related, timeout)
+
+    if passed:
+        lines.append(f"  ✅ 相关测试全部通过 ({duration:.0f}ms)")
+        lines.append("")
+        lines.append("  💡 提交前用 related_only=False 做全量验证。")
+    else:
+        lines.append(f"  ❌ 相关测试失败 ({duration:.0f}ms)")
+        for line in output.split("\n"):
+            stripped = line.strip()
+            if any(kw in stripped for kw in (
+                "FAILED", "ERROR", "AssertionError",
+                "ImportError", "NameError", "TypeError",
+            )):
+                lines.append(f"     {stripped[:150]}")
+
+    lines.append("═" * 50)
+    return "\n".join(lines)
+
+
 def _extract_error_patterns(test_output: str) -> list[str]:
     """从 pytest 输出中提取可识别的错误模式。"""
     patterns: list[str] = []
-    lines = test_output.split("\n")
-
-    for line in lines:
+    for line in test_output.split("\n"):
         if "ImportError" in line or "ModuleNotFoundError" in line:
             patterns.append(f"导入错误 — 检查依赖或 import 路径: {line.strip()[:120]}")
         elif "AssertionError" in line:
@@ -265,50 +461,38 @@ def _extract_error_patterns(test_output: str) -> list[str]:
             patterns.append(f"语法错误 — 代码无法解析: {line.strip()[:120]}")
         elif "FAILED" in line and "::" in line:
             patterns.append(f"测试失败 — {line.strip()[:150]}")
-
-    return patterns[:5]  # 最多 5 条，避免过多
+    return patterns[:5]
 
 
 def _build_failure_guidance(report, changed_files: list[str]) -> str:
-    """测试失败时自动生成修复指导：查询历史教训 + 建议下一步。"""
+    """测试失败时自动生成修复指导。"""
     parts: list[str] = []
-
-    # 提取错误模式
     patterns = _extract_error_patterns(getattr(report, "test_output", ""))
     if patterns:
         parts.append("\n── 检测到的错误模式 ──")
         for i, p in enumerate(patterns, 1):
             parts.append(f"  {i}. {p}")
 
-    # 查询历史进化记录中类似错误的修复方案
     try:
         from ..evolve import find_similar
-        # 用第一个错误模式或变更文件名作为关键词搜索
-        keywords = []
-        for f in changed_files[:2]:
-            keywords.append(Path(f).stem)
+        keywords = [Path(f).stem for f in changed_files[:2]]
         if patterns:
             keywords.append(patterns[0][:50])
-
-        if keywords:
-            similar = find_similar(keywords, limit=3)
-            if similar:
-                parts.append("\n── 历史上类似修复（来自进化档案）──")
-                for rec, score in similar:
-                    outcome = rec.get("outcome", "?")
-                    goal = rec.get("goal", "")[:100]
-                    parts.append(f"  [{outcome}] {goal} (相似度: {score:.2f})")
+        similar = find_similar(keywords, limit=3)
+        if similar:
+            parts.append("\n── 历史上类似修复（来自进化档案）──")
+            for rec in similar:
+                outcome = rec.get("outcome", "?")
+                goal = rec.get("goal", "")[:100]
+                parts.append(f"  [{outcome}] {goal}")
     except Exception:
         pass
 
-    # 建议下一步
     parts.append("\n── 建议下一步 ──")
     parts.append("  1. 根据错误模式定位问题文件")
     parts.append("  2. 调用 think 分析根因而非症状")
     parts.append("  3. 先补测试再改代码")
     parts.append("  4. 修复后重新调用 evolve_validate 验证")
-    parts.append(f"  5. 如需研究类似问题的解决方案，调用 search_web 搜索")
-
     return "\n".join(parts)
 
 
