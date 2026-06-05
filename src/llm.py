@@ -504,11 +504,10 @@ def _update_cache_stats(model_key: str, messages: list[dict], session_id: str = 
         _save_cache_stats(_current_session_id)
         return
 
-    # 后备：无 API 返回的 usage 数据时不估算 cache hit（不准），只记总量
+    # 后备：API 未返回 usage 时不估算 hit/miss，只记 prompt_tokens 总量
     from .tools.tokens import count_messages_tokens
     total = count_messages_tokens(messages)
     stats["prompt_tokens"] += total
-    stats["cache_miss_tokens"] += total
     _save_cache_stats(_current_session_id)
 
 
