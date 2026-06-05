@@ -550,6 +550,10 @@ def write_file(path: str, content: str) -> str:
     from ..guard import is_protected
     if is_protected(filepath):
         return f"⛔ 受保护文件，禁止修改: {path}"
+    from ..coverage_gate import can_modify
+    allowed, reason = can_modify(str(filepath))
+    if not allowed:
+        return f"⛔ 覆盖率门禁未通过: {reason}"
     try:
         filepath.parent.mkdir(parents=True, exist_ok=True)
         filepath.write_text(content, encoding="utf-8")
@@ -570,6 +574,10 @@ def edit_file_lines(path: str, action: str, start_line: int,
     from ..guard import is_protected
     if is_protected(filepath):
         return f"⛔ 受保护文件，禁止修改: {path}\n该文件是系统自愈模块，修改它可能导致系统无法自动恢复。"
+    from ..coverage_gate import can_modify
+    allowed, reason = can_modify(str(filepath))
+    if not allowed:
+        return f"⛔ 覆盖率门禁未通过: {reason}"
 
     # 读取原文件
     try:

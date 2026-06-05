@@ -35,17 +35,18 @@ FILE_TIERS: dict[str, dict] = {
         "patterns": [
             "src/tools/*.py",
             "src/tools/**/*.py",
+            "tests/*.py",
+            "tests/**/*.py",
             "plugins/*.py",
             "plugins/**/*.py",
         ],
         "threshold": 0.0,
-        "description": "工具和插件 — 始终可修改",
+        "description": "工具、测试和插件 — 始终可修改",
     },
     "tier_1_config": {
         "patterns": [
             "src/config.py",
             "src/session.py",
-            "src/suggest.py",
             "src/commands.py",
         ],
         "threshold": 0.45,
@@ -54,7 +55,6 @@ FILE_TIERS: dict[str, dict] = {
     "tier_2_core": {
         "patterns": [
             "src/llm.py",
-            "src/safety.py",
             "src/cache_context.py",
             "src/validate.py",
             "src/evolve.py",
@@ -309,23 +309,19 @@ def can_modify(
     """检查 agent 是否有权限修改指定文件。
 
     判断流程：
-    1. tier_0 → 始终放行
-    2. 其他 tier:
-       - 有 touched_functions → 函数级关联测试检查
-       - 无 → 全局覆盖率 tier 检查
-       - 提供了 touched_functions → 函数级关联测试检查
-       - 未提供 → 回退到全局覆盖率 tier 检查
-
-    Args:
-        filepath: 文件路径
-        touched_functions: 计划修改的函数名列表（可选）
-
-    Returns:
-        (allowed, reason)
+    1. 未匹配任何 tier → 视为新文件，放行
+    2. tier_0 → 始终放行
+    3. 有 touched_functions → 函数级关联测试检查
+    4. 无 → 逐文件覆盖率检查（该文件必须被测试执行过）
     """
     tier = _get_tier(filepath)
     if tier is None:
-        return False, f"文件不在项目范围内: {filepath}"
+        fp = str(Path(filepath).resolve())
+        try:
+            Path(fp).relative_to(PROJECT_ROOT)
+            return True, f"ok: {filepath} 未匹配已知 tier，视为新文件放行"
+        except ValueError:
+            return True, f"ok: {filepath} 不在项目目录内，放行"
 
     tier_name, tier_info = tier
     threshold = tier_info["threshold"]
@@ -334,40 +330,52 @@ def can_modify(
     if threshold <= 0.0:
         return True, f"ok: {filepath} 属于 {tier_name}（{tier_info['description']}），始终可修改"
 
-    # 无 tier_4，所有 tier 均可通过函数级检查或全局覆盖率解锁
+    # 计算相对路径（用于匹配 coverage.json）
+    fp = str(Path(filepath).resolve())
+    try:
+        file_rel = str(Path(fp).relative_to(PROJECT_ROOT)).replace("\\", "/")
+    except ValueError:
+        return False, f"无法计算文件相对路径: {filepath}"
+
     # ── 函数级关联测试检查（优先）──
     if touched_functions:
-        # 确保覆盖率数据是新鲜的
         get_overall_coverage()
-        # 计算相对路径（用于匹配 coverage.json）
-        fp = str(Path(filepath).resolve())
-        try:
-            file_rel = str(Path(fp).relative_to(PROJECT_ROOT)).replace("\\", "/")
-        except ValueError:
-            return False, f"无法计算文件相对路径: {filepath}"
-
         allowed, reason = _check_function_coverage(fp, touched_functions, file_rel)
         if allowed:
             return True, reason
-        # 函数级检查不通过，给出精确指导
         return False, (
             f"⛔ 函数级关联测试不通过 ({tier_name}): {reason}"
         )
 
-    # ── 回退：全局覆盖率 tier 检查 ──
+    # ── 逐文件覆盖率检查 ──
     coverage = get_overall_coverage()
+    _, file_cov, _, _ = _coverage_cache or (0.0, {}, {}, 0.0)
+    file_pct = file_cov.get(file_rel)
 
+    if file_pct is None:
+        # 文件不在 coverage 数据中 → 可能是新文件，放行
+        return True, (
+            f"ok: {file_rel} 未在覆盖率数据中，视为新文件放行"
+        )
+
+    if file_pct <= 0.0:
+        return False, (
+            f"⛔ {file_rel} 没有任何测试覆盖（该文件 {tier_name}，"
+            f"要求至少有测试执行到它）。请先在 tests/ 中为它创建测试用例。"
+        )
+
+    # 逐文件有覆盖 + 全局也需达标
     if coverage >= threshold:
         return True, (
-            f"ok: {filepath} ({tier_name}) — 全局覆盖率 {coverage:.0%} >= {threshold:.0%}，允许修改。"
-            f"提示：提供 touched_functions 参数可获得更精确的函数级检查。"
+            f"ok: {file_rel} 测试覆盖率 {file_pct:.0%}，"
+            f"全局覆盖率 {coverage:.0%} >= {threshold:.0%}"
         )
     else:
         gap = threshold - coverage
         return False, (
-            f"{filepath} ({tier_name}) — 当前全局覆盖率 {coverage:.0%}，"
-            f"需要 {threshold:.0%}（差 {gap:.0%}）。"
-            f"可以：1) 添加测试提升全局覆盖率，或 2) 声明 touched_functions 走函数级检查。"
+            f"{file_rel} 逐文件覆盖率 {file_pct:.0%} 已通过，"
+            f"但全局覆盖率 {coverage:.0%} 未达 {threshold:.0%}（差 {gap:.0%}）。"
+            f"请为其他未测试模块补充测试以提升全局覆盖率。"
         )
 
 

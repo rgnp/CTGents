@@ -68,10 +68,12 @@ class TestCanModify:
     """can_modify 测试（mock 覆盖率）。"""
 
     @staticmethod
-    def _mock_coverage(pct):
+    def _mock_coverage(pct, file_cov=None):
         clear_cache()
         import src.coverage_gate as cg
-        cg._coverage_cache = (pct, {}, {}, 9999999999)
+        if file_cov is None:
+            file_cov = {}
+        cg._coverage_cache = (pct, file_cov, {}, 9999999999)
 
     def test_tier_0_always_modifiable(self):
         self._mock_coverage(0.10)
@@ -80,38 +82,52 @@ class TestCanModify:
         assert allowed, reason
 
     def test_tier_1_modifiable_with_50pct(self):
-        self._mock_coverage(0.50)
+        self._mock_coverage(0.50, {"src/config.py": 0.50})
         fp = str(Path(__file__).parent.parent / "src" / "config.py")
         allowed, reason = can_modify(fp)
         assert allowed, f"覆盖率 50% >= 45% 应允许: {reason}"
 
     def test_tier_2_blocked_at_50pct(self):
-        self._mock_coverage(0.50)
+        self._mock_coverage(0.50, {"src/llm.py": 0.50})
         fp = str(Path(__file__).parent.parent / "src" / "llm.py")
         allowed, reason = can_modify(fp)
         assert not allowed, f"覆盖率 50% < 60% 应拒绝，实际: {reason}"
 
     def test_tier_2_unlocked_at_60pct(self):
-        self._mock_coverage(0.60)
+        self._mock_coverage(0.60, {"src/llm.py": 0.60})
         fp = str(Path(__file__).parent.parent / "src" / "llm.py")
         allowed, reason = can_modify(fp)
         assert allowed, f"覆盖率 60% >= 60% 应允许: {reason}"
 
     def test_tier_3_blocked_at_60pct(self):
-        self._mock_coverage(0.60)
+        self._mock_coverage(0.60, {"src/guard.py": 0.60})
         fp = str(Path(__file__).parent.parent / "src" / "guard.py")
         allowed, reason = can_modify(fp)
         assert not allowed, f"覆盖率 60% < 75% 应拒绝: {reason}"
 
     def test_tier_3_unlocked_at_80pct(self):
-        self._mock_coverage(0.80)
+        self._mock_coverage(0.80, {"src/guard.py": 0.80})
         fp = str(Path(__file__).parent.parent / "src" / "guard.py")
         allowed, reason = can_modify(fp)
         assert allowed, f"覆盖率 80% >= 75% 应允许: {reason}"
 
     def test_non_project_file(self):
         allowed, reason = can_modify("/tmp/x.py")
-        assert not allowed
+        assert allowed, f"项目外文件不在门禁管辖范围，应放行: {reason}"
+
+    def test_file_not_in_coverage_data_allowed(self):
+        """文件不在覆盖率数据中（新文件）→ 放行。"""
+        self._mock_coverage(0.80)  # file_cov 为空
+        fp = str(Path(__file__).parent.parent / "src" / "llm.py")
+        allowed, reason = can_modify(fp)
+        assert allowed, f"新文件（不在覆盖率数据中）应放行: {reason}"
+
+    def test_file_zero_coverage_blocked(self):
+        """文件有 0% 逐文件覆盖率 → 拒绝。"""
+        self._mock_coverage(0.80, {"src/llm.py": 0.0})
+        fp = str(Path(__file__).parent.parent / "src" / "llm.py")
+        allowed, reason = can_modify(fp)
+        assert not allowed, f"逐文件覆盖率 0% 应拒绝: {reason}"
 
 
 class TestTierSummary:

@@ -63,49 +63,53 @@ class TestCompressToolResult:
     """测试 _compress_tool_result：阈值压缩 + 工具类型提示语。"""
 
     def test_short_result_not_compressed(self):
-        assert _compress_tool_result("read_file", "hello") == "hello"
+        assert _compress_tool_result("grep_code", "hello") == "hello"
 
     def test_empty_not_compressed(self):
-        assert _compress_tool_result("read_file", "") == ""
+        assert _compress_tool_result("grep_code", "") == ""
 
     def test_exact_boundary(self):
         text = "x" * _TOOL_RESULT_COMPRESS_THRESHOLD
-        assert _compress_tool_result("read_file", text) == text
+        assert _compress_tool_result("grep_code", text) == text
 
     def test_one_over_boundary_has_hint(self):
         text = "y" * (_TOOL_RESULT_COMPRESS_THRESHOLD + 1)
-        compressed = _compress_tool_result("read_file", text)
+        compressed = _compress_tool_result("grep_code", text)
         assert "已压缩" in compressed
         assert str(_TOOL_RESULT_COMPRESS_THRESHOLD + 1) in compressed
 
     def test_large_result_truncated(self):
         text = "z" * 5000
-        compressed = _compress_tool_result("read_file", text)
+        compressed = _compress_tool_result("grep_code", text)
         assert len(compressed) < len(text)
         assert "已压缩" in compressed
 
-    def test_read_file_hint(self):
-        text = "z" * 5000
-        compressed = _compress_tool_result("read_file", text)
-        assert "read_file" in compressed
-
-    def test_read_file_lines_hint(self):
+    def test_read_file_exempt_from_compression(self):
+        """read_file 豁免硬截断：即使超过阈值也不压缩。"""
         text = "a" * 5000
-        compressed = _compress_tool_result("read_file_lines", text)
-        assert "read_file" in compressed
+        result = _compress_tool_result("read_file", text)
+        assert result == text
+        assert "已压缩" not in result
+
+    def test_read_file_lines_exempt_from_compression(self):
+        """read_file_lines 豁免硬截断。"""
+        text = "b" * 5000
+        result = _compress_tool_result("read_file_lines", text)
+        assert result == text
+        assert "已压缩" not in result
 
     def test_search_web_hint(self):
-        text = "b" * 5000
+        text = "c" * 5000
         compressed = _compress_tool_result("search_web", text)
         assert "搜索" in compressed or "search" in compressed
 
     def test_read_page_hint(self):
-        text = "c" * 5000
+        text = "d" * 5000
         compressed = _compress_tool_result("read_page", text)
-        assert "搜索" in compressed or "搜索" in compressed
+        assert "搜索" in compressed or "search" in compressed
 
     def test_generic_tool_hint(self):
-        text = "d" * 5000
+        text = "e" * 5000
         compressed = _compress_tool_result("other_tool", text)
         assert "已压缩" in compressed
         assert "read_file" not in compressed

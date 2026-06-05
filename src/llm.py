@@ -581,31 +581,25 @@ def _invoke_llm(
 # 压缩阈值（字符数，约等于 token 数）
 _TOOL_RESULT_COMPRESS_THRESHOLD = 1200
 
-# 不压缩的工具（这些工具的结果通常短小或结构重要）
-# 全部工具都压缩，无例外
+# 不压缩的工具 — 读文件类工具豁免硬截断，仅受 token 预算动态控制
+_SKIP_COMPRESS_TOOLS: frozenset[str] = frozenset({"read_file", "read_file_lines"})
 
 
 def _compress_tool_result(tool_name: str, result: str) -> str:
     """压缩过大的工具结果，减少后续轮次的 token 消耗。
 
     策略：
+    - read_file / read_file_lines → 不压缩（仅受 token 预算动态截断）
     - 小于阈值 → 不压缩
     - 大于阈值 → 保留前 N 字符 + 截断提示
-    - 特定工具（read_file 等）→ 额外提示可重新读取
     """
-    if len(result) <= _TOOL_RESULT_COMPRESS_THRESHOLD:
+    if tool_name in _SKIP_COMPRESS_TOOLS or len(result) <= _TOOL_RESULT_COMPRESS_THRESHOLD:
         return result
 
     head = result[:_TOOL_RESULT_COMPRESS_THRESHOLD]
     total = len(result)
 
-    # 根据工具类型决定提示语
-    if tool_name in ("read_file", "read_file_lines"):
-        hint = (
-            f"\n\n[已压缩：原始结果 {total} 字符，仅显示前 {_TOOL_RESULT_COMPRESS_THRESHOLD} 字符。"
-            f"如需完整内容，可使用 read_file 重新读取]"
-        )
-    elif tool_name in ("search_web", "read_page"):
+    if tool_name in ("search_web", "read_page"):
         hint = (
             f"\n\n[已压缩：搜索结果 {total} 字符，仅显示前 {_TOOL_RESULT_COMPRESS_THRESHOLD} 字符。"
             f"如需完整内容，可重新搜索或阅读页面]"
@@ -773,13 +767,11 @@ def _update_safe_stats(n_parallel: int, n_serial: int) -> None:
 
 
 def _execute_tool_batch(approved: list[tuple]) -> list[str]:
-    """执行一批已批准的工具调用，并行分发只读工具。
+    """按序分块并行执行工具 — 保留 LLM 原始调用顺序。
 
-    Args:
-        approved: [(tc_data, tool_name, args, tc), ...] 已批准按原始顺序
-
-    Returns:
-        list[str] 与 approved 一一对应的执行结果
+    连续 SAFE 工具 → 并行（同批内顺序无关）
+    非 SAFE 工具 → 等待前一批完成后单独执行
+    确保 [read(A), run_cmd(改A), read(A)] 中第二个 read 看到改后的 A。
     """
     from concurrent.futures import ThreadPoolExecutor, as_completed
 
@@ -788,40 +780,59 @@ def _execute_tool_batch(approved: list[tuple]) -> list[str]:
 
     # 先处理有预置结果（跳过）的工具
     for i in range(n):
-        pre = approved[i][4]  # pre_result
+        pre = approved[i][4]
         if pre is not None:
             results[i] = pre
 
-    # 剩余需要实际执行的，拆分为并行组和串行组
-    parallel_idxs = [i for i in range(n) if approved[i][4] is None and approved[i][1] in _PARALLEL_SAFE]
-    serial_idxs = [i for i in range(n) if approved[i][4] is None and approved[i][1] not in _PARALLEL_SAFE]
+    total_parallel = 0
+    total_serial = 0
+    i = 0
 
-    # ── 并行执行只读工具 ──
-    if parallel_idxs:
-        names = [approved[i][1] for i in parallel_idxs]
-        print(f"  ⚡ [SAFE] 并行执行 {len(parallel_idxs)} 个工具: {', '.join(names)}")
-        with ThreadPoolExecutor(max_workers=min(len(parallel_idxs), 8)) as pool:
-            fut_map: dict = {}
-            for i in parallel_idxs:
-                tc = approved[i][3]  # (tc_data, tool_name, args, tc, pre_result)[3]
-                fut = pool.submit(execute_tool, tc)
-                fut_map[fut] = i
-            for fut in as_completed(fut_map):
-                idx = fut_map[fut]
-                try:
-                    results[idx] = fut.result()
-                except Exception as e:
-                    results[idx] = json.dumps({"error": f"并行执行失败: {e}"}, ensure_ascii=False)
+    while i < n:
+        if approved[i][4] is not None:
+            i += 1
+            continue
 
-    # ── 串行执行有副作用的工具 ──
-    for i in serial_idxs:
-        tc = approved[i][3]  # (tc_data, tool_name, args, tc, pre_result)[3]
-        try:
-            results[i] = execute_tool(tc)
-        except Exception as e:
-            results[i] = json.dumps({"error": f"执行失败: {e}"}, ensure_ascii=False)
+        if approved[i][1] not in _PARALLEL_SAFE:
+            # 非 SAFE：串行执行
+            tc = approved[i][3]
+            try:
+                results[i] = execute_tool(tc)
+            except Exception as e:
+                results[i] = json.dumps({"error": f"执行失败: {e}"}, ensure_ascii=False)
+            total_serial += 1
+            i += 1
+        else:
+            # 收集连续 SAFE 工具成一批
+            batch: list[int] = []
+            while i < n:
+                if approved[i][4] is not None:
+                    i += 1
+                    continue
+                if approved[i][1] in _PARALLEL_SAFE:
+                    batch.append(i)
+                    i += 1
+                else:
+                    break
 
-    _update_safe_stats(len(parallel_idxs), len(serial_idxs))
+            if batch:
+                names = [approved[j][1] for j in batch]
+                print(f"  ⚡ [SAFE] 并行执行 {len(batch)} 个工具: {', '.join(names)}")
+                with ThreadPoolExecutor(max_workers=min(len(batch), 8)) as pool:
+                    fut_map: dict = {}
+                    for j in batch:
+                        tc = approved[j][3]
+                        fut = pool.submit(execute_tool, tc)
+                        fut_map[fut] = j
+                    for fut in as_completed(fut_map):
+                        idx = fut_map[fut]
+                        try:
+                            results[idx] = fut.result()
+                        except Exception as e:
+                            results[idx] = json.dumps({"error": f"并行执行失败: {e}"}, ensure_ascii=False)
+                total_parallel += len(batch)
+
+    _update_safe_stats(total_parallel, total_serial)
     return results
 
 
