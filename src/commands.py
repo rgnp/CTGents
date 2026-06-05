@@ -98,6 +98,7 @@ def _cmd_help(r: CmdResult, _ctx, _args, _sid) -> None:
 def _cmd_clear(r: CmdResult, ctx, _args, _sid) -> None:
     ctx.clear_log()
     r.save = True
+    r.clear = True
     r.message = "上下文已清除"
 
 
