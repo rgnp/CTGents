@@ -591,7 +591,21 @@ def git_commit(message: str | None = None, auto_stage: bool = True, path: str | 
     # 提交后触发变更追踪：提醒需要同步的文档
     from .file import _track_changes
     track = _track_changes("(git_commit)")
-    return f"✅ 提交成功\n\n{message}\n\n{r2['stdout'].strip()}{track}"
+    runner_note = _complete_active_runner_after_commit(message)
+    return f"✅ 提交成功\n\n{message}\n\n{r2['stdout'].strip()}{track}{runner_note}"
+
+
+def _complete_active_runner_after_commit(message: str) -> str:
+    """Close the active evolution runner after a successful commit."""
+    try:
+        from ..evolution_runner import RunnerStatus, complete_evolution_run, load_active_evolution_run
+        run = load_active_evolution_run()
+        if run is None:
+            return ""
+        complete_evolution_run(run.run_id, RunnerStatus.PASSED, note=message)
+        return f"\n\nEvolution runner: {run.run_id} marked passed."
+    except Exception as e:
+        return f"\n\nEvolution runner close failed: {e}"
 
 
 def _generate_commit_message(repo_path: str) -> str:

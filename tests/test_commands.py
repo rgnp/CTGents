@@ -53,9 +53,6 @@ class TestDispatch:
 
     def test_sessions_registered(self):
         r = cmds.dispatch("/sessions", self.ctx, None)
-        assert len(r.message) >= 0  # 可能为空（无历史会话）
-    def test_sessions_registered(self):
-        r = cmds.dispatch("/sessions", self.ctx, None)
         assert len(r.message) >= 0
         assert len(r.message) > 0
 
@@ -72,7 +69,15 @@ class TestDispatch:
         r = cmds.dispatch("/evolve", self.ctx, None)
         assert "用法" in r.message
 
-    def test_evolve_with_goal(self):
+    def test_evolve_with_goal(self, tmp_path, monkeypatch):
+        import src.evolution_runner as runner
+        run_root = tmp_path / "evolution"
+        monkeypatch.setattr(runner, "RUN_ROOT", run_root)
+        monkeypatch.setattr(runner, "RUNS_DIR", run_root / "runs")
+        monkeypatch.setattr(runner, "ACTIVE_RUN_FILE", run_root / "active.json")
+
         r = cmds.dispatch("/evolve 优化性能", self.ctx, "test")
         assert r.retry is True
         assert r.save is True
+        assert "runner" in r.message
+        assert runner.load_active_evolution_run() is not None

@@ -349,7 +349,9 @@ def _cmd_validate(args: dict) -> str:
 
     # ── 关联测试快速通道 ──
     if related_only:
-        return _validate_related_only(changed_files, timeout)
+        result = _validate_related_only(changed_files, timeout)
+        passed = "相关测试全部通过" in result
+        return _record_runner_validation(changed_files, result, passed)
 
     # ── 全量验证 ──
     from ..validate import format_report
@@ -358,7 +360,25 @@ def _cmd_validate(args: dict) -> str:
     result = format_report(report)
     if report.overall.value != "pass":
         result += _build_failure_guidance(report, changed_files)
-    return result
+    return _record_runner_validation(changed_files, result, report.overall.value == "pass")
+
+
+def _record_runner_validation(changed_files: list[str], result: str, passed: bool) -> str:
+    """Mirror evolve_validate results into the active evolution runner."""
+    try:
+        from ..evolution_runner import record_validation_result
+        run = record_validation_result(changed_files, result, passed)
+    except Exception as e:
+        return f"{result}\n\n── Runner 记录 ──\n  记录失败: {e}"
+    if run is None:
+        return result
+    return (
+        f"{result}\n\n"
+        "── Runner 记录 ──\n"
+        f"  run_id: {run.run_id}\n"
+        f"  phase: {run.phase}\n"
+        f"  validation_passed: {passed}"
+    )
 
 
 def _validate_related_only(changed_files: list[str], timeout: int) -> str:
@@ -480,6 +500,7 @@ def _cmd_suggest_tests(args: dict) -> str:
 
 def _cmd_status(args: dict) -> str:
     from ..coverage_gate import get_tier_summary
+    from ..evolution_runner import describe_active_evolution_run
     from ..evolve import get_last_n, get_stats
 
     stats = get_stats()
@@ -502,6 +523,7 @@ def _cmd_status(args: dict) -> str:
         lines.append("  暂无进化记录")
 
     lines.extend(["", tier])
+    lines.extend(["", "── Active Runner ──", describe_active_evolution_run()])
 
     if recent:
         lines.extend(["", "── 最近进化 ──"])

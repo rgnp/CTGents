@@ -92,7 +92,7 @@ SYSTEM_MAP = {
         "why": "@builtin 装饰器注册模式，CmdResult 控制后续行为（retry/save/clear）",
         "tools": [],
         "connections": {
-            "evolution_loop": "/evolve 注入进化 prompt",
+            "evolution_runner": "/evolve 创建 run/state/patch，并注入本轮运行契约",
             "llm": "/model 切换模型，/clear 重置",
             "self": "/self 调用 build_self_portrait()",
             "evolve": "/stats 读取进化统计",
@@ -110,9 +110,9 @@ SYSTEM_MAP = {
     },
     "evolution": {
         "name": "进化系统",
-        "files": "src/evolution_loop.py + src/evolve.py + src/validate.py",
-        "what": "研究→综合→生成→验证→合入/修复 闭环。JSONL 进化档案支持 TF-IDF 相似搜索和学习",
-        "why": "agent 能在网上研究更好的设计、生成候选方案、落地代码、跑测试验证、失败时修复或停止并记录教训",
+        "files": "src/evolution_runner.py + src/evolution_loop.py + src/evolve.py + src/validate.py",
+        "what": "runner 管理 run/state/patch，研究→综合→生成→验证→合入/修复 闭环。JSONL 档案支持相似搜索",
+        "why": "agent 的自修改需要可追踪运行态，而不是只靠一次性 prompt；runner 记录基线、验证和收口状态",
         "tools": [
             "evolve_query",
             "evolve_status",
@@ -125,6 +125,7 @@ SYSTEM_MAP = {
             "validate": "三阶段验证（AST→pytest→覆盖率/lint）",
             "coverage_gate": "改文件前检查权限，覆盖率不足时建议测试",
             "git": "git_commit 使用具体文件暂存，提交前强制 ruff + pytest",
+            "evolution_runner": "/evolve 启动 active run，evolve_validate/git_commit 回写状态",
             "evolve": "每次尝试写入 JSONL 进化档案",
             "llm": "委托 LLM 执行代码修改",
         },
@@ -169,8 +170,8 @@ CONNECTION_GRAPH = [
     ("evolution", "validate", "改完后跑三阶段验证"),
     ("evolution", "coverage_gate", "改前检查 can_modify()"),
     ("evolution", "evolve", "结果记录到 JSONL 档案"),
-    ("evolution", "git", "改前 commit 快照，失败 reset"),
-    ("commands", "evolution_loop", "/evolve → 进化 prompt"),
+    ("evolution", "git", "成功提交后关闭 active runner"),
+    ("commands", "evolution_runner", "/evolve → run/state/patch + 进化 prompt"),
     ("commands", "self", "/self → build_self_portrait()"),
 ]
 

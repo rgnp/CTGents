@@ -3,13 +3,7 @@
 这些测试不测单个函数逻辑，只测 A→B 的调用链是否正确连接。
 """
 
-import json
-import sys
 from pathlib import Path
-from types import SimpleNamespace
-from unittest.mock import MagicMock, patch
-
-import pytest
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
@@ -21,7 +15,7 @@ class TestGuardCoverageGate:
     """guard.is_protected() 保护关键文件不被修改。"""
 
     def test_is_protected_always_blocks_guard_itself(self):
-        from src.guard import is_protected, _GUARD_FILE
+        from src.guard import _GUARD_FILE, is_protected
         assert is_protected(str(_GUARD_FILE)) is True
 
     def test_is_protected_allows_outside_project(self, tmp_path):
@@ -49,7 +43,7 @@ class TestEvolveSystem:
         import src.evolve
         monkeypatch.setattr(src.evolve, "EVOLVE_DIR", tmp_path)
         monkeypatch.setattr(src.evolve, "EVOLVE_LOG", tmp_path / "evolution.jsonl")
-        from src.evolve import EvolutionRecord, record_attempt, query
+        from src.evolve import EvolutionRecord, query, record_attempt
         record = EvolutionRecord(
             id="test-001", goal="测试进化目标", outcome="merged",
             files_changed=["src/test.py"], diff_summary="test",
@@ -64,7 +58,7 @@ class TestEvolveSystem:
         import src.evolve
         monkeypatch.setattr(src.evolve, "EVOLVE_DIR", tmp_path)
         monkeypatch.setattr(src.evolve, "EVOLVE_LOG", tmp_path / "evolution.jsonl")
-        from src.evolve import EvolutionRecord, record_attempt, find_similar
+        from src.evolve import EvolutionRecord, find_similar, record_attempt
         record_attempt(EvolutionRecord(
             id="sim-001", goal="优化文件搜索性能", outcome="merged",
             tags=["performance"], duration_total_ms=100,
@@ -120,9 +114,15 @@ class TestToolRegistry:
 
     """关键命令必须可执行且正确接线。"""
 
-    def test_evolve_command_injects_prompt(self):
+    def test_evolve_command_injects_prompt(self, tmp_path, monkeypatch):
+        import src.evolution_runner as runner
         from src.cache_context import CacheContext
         from src.commands import dispatch
+
+        run_root = tmp_path / "evolution"
+        monkeypatch.setattr(runner, "RUN_ROOT", run_root)
+        monkeypatch.setattr(runner, "RUNS_DIR", run_root / "runs")
+        monkeypatch.setattr(runner, "ACTIVE_RUN_FILE", run_root / "active.json")
 
         ctx = CacheContext()
         ctx.log = []
@@ -130,7 +130,8 @@ class TestToolRegistry:
         assert result.retry is True
         system_msgs = [m["content"] for m in ctx.log if m.get("role") == "system"]
         system_text = " ".join(system_msgs)
-        assert "自进化" in system_text or "进化" in system_text
+        assert "Runner" in system_text
+        assert runner.load_active_evolution_run() is not None
 
     def test_model_command_switches(self):
         from src.cache_context import CacheContext

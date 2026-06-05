@@ -461,6 +461,7 @@ def _cmd_self(r: CmdResult, _ctx, _args, _sid) -> None:
     parts.append("  cache_context.py  — 三段式上下文 CacheContext（prefix/log/scratch）")
     parts.append("  session.py        — 会话持久化（保存/加载/列表）")
     parts.append("  guard.py          — 自我保护：is_protected() 保护关键文件")
+    parts.append("  evolution_runner.py — 自进化运行器：run/state/patch/验证回写")
     parts.append("  tools/")
     parts.append("    __init__.py     — 工具注册表、execute_tool() 调度、热加载")
     parts.append("    file.py         — 文件类：read_file/write_file/edit_file_lines...")
@@ -550,10 +551,10 @@ def _cmd_self(r: CmdResult, _ctx, _args, _sid) -> None:
 
 # ── 自进化命令 ──
 
-@builtin("/evolve", description="触发自进化：研究→综合→生成→验证→合入/回滚",
+@builtin("/evolve", description="启动自进化 runner：preflight→研究→综合→生成→验证→合入",
          usage="/evolve <目标描述>")
 def _cmd_evolve(r: CmdResult, ctx, args, session_id) -> None:
-    """启动自进化流程。注入进化系统 prompt 驱动 LLM 自主完成。"""
+    """启动自进化 runner，并注入本轮运行契约。"""
     if not args:
         r.message = (
             "用法: /evolve <目标描述>\n"
@@ -564,12 +565,12 @@ def _cmd_evolve(r: CmdResult, ctx, args, session_id) -> None:
         )
         return
     goal = " ".join(args)
-    from .evolution_loop import build_evolution_system_prompt
-    prompt = build_evolution_system_prompt(goal)
-    ctx.log.append({"role": "system", "content": prompt, "_volatile": True})
+    from .evolution_runner import start_evolution_run
+    start = start_evolution_run(goal)
+    ctx.log.append({"role": "system", "content": start.prompt, "_volatile": True})
     r.retry = True
     r.save = True
-    r.message = f"自进化已启动\n目标: {goal}\n\nAgent 将自主完成研究→综合→生成→验证的全流程。按 Esc 可中断。"
+    r.message = start.summary + "\n\nAgent 将从 runner 状态继续推进。按 Esc 可中断。"
 
 
 def dispatch(user_input: str, ctx: CacheContext, session_id: str | None) -> CmdResult:
