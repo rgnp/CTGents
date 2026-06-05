@@ -18,6 +18,7 @@ from .commands import dispatch as dispatch_cmd
 from .config import SESSION_DIR
 from .llm import TokenCallback, TOOL_LABELS, clear_interrupt, request_interrupt, run_conversation
 from .session import list_sessions, load_session, save_session
+from .tools import is_plan_mode, set_plan_mode
 
 # ═══════════════════════════════════════════════════════════════
 # Esc 打断监听（Windows msvcrt 后台线程）
@@ -362,6 +363,10 @@ def main() -> None:
 
             if not user_input:
                 continue
+
+            if is_plan_mode() and not user_input.startswith("/"):
+                set_plan_mode(False)
+                print("🔓 收到任务 — Plan Mode 已退出，写工具已恢复。\n")
 
             if user_input.startswith("/"):
                 # ── 热加载：拦截 /reload，不经过旧 dispatch ──

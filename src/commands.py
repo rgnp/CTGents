@@ -406,6 +406,27 @@ def _cmd_context(r: CmdResult, ctx, _args, _sid) -> None:
     r.message = "\n".join(lines)
 
 
+
+
+# ═══════════════════════════════════════════════════════════════
+# Plan Mode — 只读门：模型只能读/分析，不能写
+# ═══════════════════════════════════════════════════════════════
+
+@builtin("/plan", description="切换 Plan Mode：只读探索，写工具禁用，批准后才解锁")
+def _cmd_plan(r: CmdResult, _ctx, _args, _sid) -> None:
+    from .tools import is_plan_mode, set_plan_mode
+    if is_plan_mode():
+        set_plan_mode(False)
+        r.message = "🔓 Plan Mode 已退出 — 写工具已恢复。"
+    else:
+        set_plan_mode(True)
+        r.message = (
+            "📋 Plan Mode 已激活 — 写工具已禁用。\n"
+            "   可用: 读文件/搜索/分析/思考\n"
+            "   禁用: write_file / edit / delete / git_commit\n"
+            "   输入非指令内容或再次 /plan 退出。"
+        )
+
 # ═══════════════════════════════════════════════════════════════
 # 自省 /self — Agent 查看自己的架构、工具、命令、插件
 # ═══════════════════════════════════════════════════════════════

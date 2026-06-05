@@ -51,15 +51,36 @@ def _init_registry():
 _init_registry()
 
 
-# ── 工具列表构建 ──
-
-
 # ── 工具列表缓存 ──
 _tools_cache: list[dict] | None = None
 
+# ── Plan Mode ──
+_plan_mode: bool = False
+
+# Plan mode 下禁用的写工具
+_PLAN_BLOCKED: frozenset[str] = frozenset({
+    "write_file", "edit_file_lines", "delete_file",
+    "git_commit", "git_push", "git_pr",
+    "remember", "forget",  # 记忆写入也禁掉，保持 plan 纯粹
+})
+
+
+def set_plan_mode(enabled: bool) -> None:
+    """切换 Plan Mode。只读模式：禁用写工具，仅保留读/分析工具。
+
+    不修改消息结构、不改变 prefix —— 纯粹的工具列表过滤。
+    """
+    global _plan_mode, _tools_cache
+    _plan_mode = enabled
+    _tools_cache = None  # 强制重建工具列表
+
+
+def is_plan_mode() -> bool:
+    return _plan_mode
+
 
 def get_tools() -> list[dict]:
-    """返回工具列表。
+    """返回工具列表。plan mode 下过滤写工具。
 
     结果缓存复用，确保每轮返回的 tools 是同一个 list 对象，
     OpenAI SDK 序列化后字节一致，保障 DeepSeek 前缀缓存命中。
@@ -71,11 +92,13 @@ def get_tools() -> list[dict]:
     tools: list[dict] = []
     for src in _TOOL_SOURCES:
         tools.extend(src)
+
+    if _plan_mode:
+        tools = [t for t in tools
+                 if t.get("function", {}).get("name") not in _PLAN_BLOCKED]
+
     _tools_cache = tools
     return tools
-
-
-
 # ── 工具执行 ──
 
 
