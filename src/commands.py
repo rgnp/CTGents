@@ -411,9 +411,13 @@ def _cmd_context(r: CmdResult, ctx, _args, _sid) -> None:
     r.message = "\n".join(lines)
 
 
-
-
 # ═══════════════════════════════════════════════════════════════
+# Plan Mode — 只读门：模型只能读/分析，不能写
+# ═══════════════════════════════════════════════════════════════
+
+@builtin("/reload", description="热加载代码改动（指令+工具），无需重启")
+def _cmd_reload(r: CmdResult, _ctx, _args, _sid) -> None:
+    r.message = "reload 由 main.py 拦截处理，此 handler 仅供 /help 注册。"
 # Plan Mode — 只读门：模型只能读/分析，不能写
 # ═══════════════════════════════════════════════════════════════
 
