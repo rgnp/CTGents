@@ -821,6 +821,42 @@ def _execute_tool_batch(approved: list[tuple]) -> list[str]:
 
     _update_safe_stats(len(parallel_idxs), len(serial_idxs))
     return results
+
+
+# ═══════════════════════════════════════════════════════════════
+# Tool-call JSON 修复 — DeepSeek 常见格式错误
+# ═══════════════════════════════════════════════════════════════
+
+def _repair_json(raw: str) -> str:
+    """尝试修复 DeepSeek 常见的 JSON 格式错误。
+
+    只做低风险修复（不改变语义）：
+      1. 尾部逗号 → 移除    {"a": 1,} → {"a": 1}
+      2. 缺闭合大括号 → 补全  {"a": 1 → {"a": 1}
+      3. 尾部多余字符 → 截断  {"a": 1}xxx → {"a": 1}
+    """
+    import re
+    s = raw.strip()
+
+    # 1. 截断到最后一个 } 之后
+    last_brace = s.rfind("}")
+    if last_brace != -1 and last_brace < len(s) - 1:
+        s = s[:last_brace + 1]
+
+    # 2. 移除尾部逗号: {"a": 1,} → {"a": 1}
+    s = re.sub(r",\s*([}\]])", r"\1", s)
+
+    # 3. 补全缺失的闭合括号
+    if s.startswith("{") and not s.endswith("}"):
+        attempt = s + "}"
+        try:
+            json.loads(attempt)
+            return attempt
+        except json.JSONDecodeError:
+            pass
+
+    return s
+
 def run_conversation(
     ctx: CacheContext,
     user_input: str,
@@ -893,11 +929,16 @@ def run_conversation(
                     try:
                         args = json.loads(tc_data["function"]["arguments"])
                     except json.JSONDecodeError:
-                        approved.append((tc_data, tool_name, {},
-                                         SimpleNamespace(function=SimpleNamespace(name=tool_name, arguments="{}")),
-                                         json.dumps({"error": f"JSON 解析失败: {tc_data['function']['arguments'][:100]}"},
-                                                    ensure_ascii=False)))
-                        continue
+                        repaired = _repair_json(tc_data["function"]["arguments"])
+                        try:
+                            args = json.loads(repaired)
+                            logger.info("工具调用 JSON 已修复: %s", tool_name)
+                        except json.JSONDecodeError:
+                            approved.append((tc_data, tool_name, {},
+                                             SimpleNamespace(function=SimpleNamespace(name=tool_name, arguments="{}")),
+                                             json.dumps({"error": f"JSON 解析失败: {tc_data['function']['arguments'][:100]}"},
+                                                        ensure_ascii=False)))
+                            continue
                     tc = SimpleNamespace(
                         function=SimpleNamespace(
                             name=tool_name,
