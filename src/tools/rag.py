@@ -24,7 +24,6 @@ import re
 import time
 from collections import Counter
 from pathlib import Path
-from typing import Any
 
 # ═══════════════════════════════════════════════════════════════
 # 配置
@@ -1327,7 +1326,7 @@ def query_research(query: str, top_k: int = 5) -> str:
         src = r["source"]
         lines.append(f"{icon} [{src}] {r['title'][:80]}  (相关度 {r['score']})")
         lines.append(f"   {r['content'][:150]}")
-        lines.append(f"用 read_file 查看详细内容")
+        lines.append("用 read_file 查看详细内容")
     return "\n".join(lines)
 
 

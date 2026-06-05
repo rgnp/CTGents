@@ -8,7 +8,6 @@ _add_meta 到 TOOLS_* 列表 → 此模块自动收编 → 消费者导入即可
 
 import importlib
 import logging
-import sys
 
 logger = logging.getLogger(__name__)
 

@@ -210,7 +210,7 @@ def _capabilities_section() -> str:
     try:
         from . import get_tools
         tools = get_tools()
-        lines.append(f"---")
+        lines.append("---")
         lines.append(f"当前运行时: {len(tools)} 个工具已注册")
     except Exception:
         pass
