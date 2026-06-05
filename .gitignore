@@ -1,7 +1,4 @@
 # ── Python ──
-# ── 旧 agent 目录（已迁移到根目录）──
-agent/
-
 __pycache__/
 *.py[cod]
 *.pyo
@@ -21,7 +18,7 @@ ENV/
 env.bak/
 venv.bak/
 
-# ── 环境变量（含密钥！）──
+# ── 环境变量（含密钥）──
 .env
 *.env.local
 *.env.production
@@ -58,22 +55,8 @@ htmlcov/
 .tox/
 .mypy_cache/
 .ruff_cache/
-.rag-index/                   # RAG 代码索引缓存（自动生成）
+.rag-index/
 *.cover
-
-# ── 调试/测试临时文件 ──
-_debug*.txt
-_a.txt
-_c.txt
-_test_*.py
-test*.txt
-R.txt
-X.txt
-_cr.txt
-_cres.txt
-_check_*.txt
-_c.txt
-!.coveragerc
 
 # ── Jupyter ──
 .ipynb_checkpoints/
@@ -90,8 +73,24 @@ temp/
 *.bak
 *.orig
 
-# ── 项目内部（自动生成，不提交）──
-sessions/
+# ── 调试临时文件 ──
+_debug*.txt
+_a.txt
+_c.txt
+_test_*.py
+test*.txt
+R.txt
+X.txt
+_cr.txt
+_cres.txt
+_check_*.txt
+!.coveragerc
+
+# ── 已废弃目录 ──
+agent/
 plugins/
+
+# ── 运行时数据（自动生成，不提交）──
+sessions/
 stats/
 .agent_backups/
