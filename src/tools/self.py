@@ -11,6 +11,7 @@ from pathlib import Path
 
 TOOLS_SELF = [
     {
+        "_meta": {"label": "自我认知"},
         "type": "function",
         "function": {
             "name": "self",

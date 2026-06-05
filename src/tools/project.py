@@ -9,6 +9,7 @@ from pathlib import Path
 
 TOOLS_PROJECT = [
     {
+        "_meta": {"label": "扫描项目", "parallel_safe": True},
         "type": "function",
         "function": {
             "name": "scan_project",

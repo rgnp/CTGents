@@ -18,6 +18,7 @@ from pathlib import Path
 
 TOOLS_LINT = [
     {
+        "_meta": {"label": "规范检查", "parallel_safe": True},
         "type": "function",
         "function": {
             "name": "check_project",
@@ -44,6 +45,7 @@ TOOLS_LINT = [
         },
     },
     {
+        "_meta": {"label": "生成规范", "parallel_safe": True},
         "type": "function",
         "function": {
             "name": "generate_agents_md",
@@ -70,6 +72,7 @@ TOOLS_LINT = [
         },
     },
     {
+        "_meta": {"label": "文档同步检查", "parallel_safe": True},
         "type": "function",
         "function": {
             "name": "docs_sync_check",

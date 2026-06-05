@@ -223,12 +223,20 @@ def sandbox_tests(timeout: int = 120) -> PhaseResult:
                 duration_ms=duration,
             )
         else:
-            # 提取失败摘要（最后 1000 字符）
-            fail_summary = output[-1000:] if len(output) > 1000 else output
+            # 提取失败摘要：优先保留包含 FAILED/ERROR/AssertionError 的行
+            fail_lines = output.split("\n")
+            # 取尾部 3000 字符（而不是 1000），确保包含完整错误信息
+            tail = output[-3000:] if len(output) > 3000 else output
+            # 额外提取所有 "FAILED" 行放在前面
+            failed_tests = [l.strip() for l in fail_lines
+                          if "FAILED" in l and "::" in l][:10]
+            prefix = ""
+            if failed_tests:
+                prefix = "失败测试:\n" + "\n".join(f"  - {t}" for t in failed_tests) + "\n\n"
             return PhaseResult(
                 phase=Phase.SANDBOX_TEST,
                 result=Result.FAIL,
-                details=f"测试失败 (exit={result.returncode})\n{fail_summary}",
+                details=f"测试失败 (exit={result.returncode}, {len(failed_tests)} 个失败)\n{prefix}{tail}",
                 duration_ms=duration,
             )
     except subprocess.TimeoutExpired:

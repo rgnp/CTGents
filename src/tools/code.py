@@ -2,6 +2,7 @@ import subprocess
 
 TOOLS_CODE = [
     {
+        "_meta": {"label": "搜索代码", "parallel_safe": True},
         "type": "function",
         "function": {
             "name": "grep_code",

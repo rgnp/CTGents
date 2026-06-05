@@ -8,6 +8,7 @@ from pathlib import Path
 
 TOOLS_GIT = [
     {
+        "_meta": {"label": "Git 状态", "parallel_safe": True},
         "type": "function",
         "function": {
             "name": "git_status",
@@ -29,6 +30,7 @@ TOOLS_GIT = [
         },
     },
     {
+        "_meta": {"label": "Git 差异", "parallel_safe": True},
         "type": "function",
         "function": {
             "name": "git_diff",
@@ -58,6 +60,7 @@ TOOLS_GIT = [
         },
     },
     {
+        "_meta": {"label": "Git 日志", "parallel_safe": True},
         "type": "function",
         "function": {
             "name": "git_log",
@@ -83,6 +86,7 @@ TOOLS_GIT = [
         },
     },
     {
+        "_meta": {"label": "Git 审查"},
         "type": "function",
         "function": {
             "name": "git_review",
@@ -104,6 +108,7 @@ TOOLS_GIT = [
         },
     },
     {
+        "_meta": {"label": "Git 提交", "plan_blocked": True, "dedup_blacklist": True},
         "type": "function",
         "function": {
             "name": "git_commit",
@@ -134,6 +139,7 @@ TOOLS_GIT = [
         },
     },
     {
+        "_meta": {"label": "Git 推送", "plan_blocked": True, "dedup_blacklist": True},
         "type": "function",
         "function": {
             "name": "git_push",
@@ -167,6 +173,7 @@ TOOLS_GIT = [
         },
     },
     {
+        "_meta": {"label": "Git PR", "plan_blocked": True, "dedup_blacklist": True},
         "type": "function",
         "function": {
             "name": "git_pr",
@@ -201,6 +208,7 @@ TOOLS_GIT = [
         },
     },
     {
+        "_meta": {"label": "Git 分支", "parallel_safe": True},
         "type": "function",
         "function": {
             "name": "git_branch",

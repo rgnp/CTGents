@@ -85,6 +85,7 @@ def get_web_cache_stats() -> dict:
 
 TOOLS_WEB = [
     {
+        "_meta": {"label": "搜索", "parallel_safe": True},
         "type": "function",
         "function": {
             "name": "search_web",
@@ -105,6 +106,7 @@ TOOLS_WEB = [
         },
     },
     {
+        "_meta": {"label": "阅读网页", "parallel_safe": True},
         "type": "function",
         "function": {
             "name": "read_page",

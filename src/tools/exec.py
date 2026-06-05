@@ -28,6 +28,7 @@ MAX_OUTPUT_LENGTH = 100_000
 
 TOOLS_EXEC = [
     {
+        "_meta": {"label": "执行代码", "dedup_blacklist": True},
         "type": "function",
         "function": {
             "name": "run_python",
@@ -51,6 +52,7 @@ TOOLS_EXEC = [
         },
     },
     {
+        "_meta": {"label": "执行命令", "dedup_blacklist": True},
         "type": "function",
         "function": {
             "name": "run_command",

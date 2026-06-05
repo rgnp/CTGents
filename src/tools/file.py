@@ -197,6 +197,7 @@ def _track_changes(just_modified: str) -> str:
 
 TOOLS_FILE = [
     {
+        "_meta": {"label": "读取文件", "parallel_safe": True, "skip_compress": True},
         "type": "function",
         "function": {
             "name": "read_file",
@@ -222,6 +223,7 @@ TOOLS_FILE = [
         },
     },
     {
+        "_meta": {"label": "写入文件", "plan_blocked": True, "dedup_blacklist": True},
         "type": "function",
         "function": {
             "name": "write_file",
@@ -246,6 +248,7 @@ TOOLS_FILE = [
         },
     },
     {
+        "_meta": {"label": "行级编辑", "plan_blocked": True, "dedup_blacklist": True},
         "type": "function",
         "function": {
             "name": "edit_file_lines",
@@ -281,6 +284,7 @@ TOOLS_FILE = [
         },
     },
     {
+        "_meta": {"label": "浏览目录", "parallel_safe": True},
         "type": "function",
         "function": {
             "name": "list_files",
@@ -298,6 +302,7 @@ TOOLS_FILE = [
         },
     },
     {
+        "_meta": {"label": "删除文件", "plan_blocked": True, "dedup_blacklist": True},
         "type": "function",
         "function": {
             "name": "delete_file",
@@ -315,6 +320,7 @@ TOOLS_FILE = [
         },
     },
     {
+        "_meta": {"label": "统计行数", "parallel_safe": True},
         "type": "function",
         "function": {
             "name": "count_lines",
@@ -714,6 +720,13 @@ def delete_file(path: str) -> str:
     """删除文件。删除前会告知用户。不可恢复。"""
     filepath = _resolve(path)
     _ensure_in_workspace(filepath)
+    from ..guard import is_protected
+    if is_protected(filepath):
+        return f"⛔ 受保护文件，禁止删除: {path}"
+    from ..coverage_gate import can_modify
+    allowed, reason = can_modify(str(filepath))
+    if not allowed:
+        return f"⛔ 覆盖率门禁未通过: {reason}"
     if not filepath.exists():
         return f"文件不存在: {path}"
     if not filepath.is_file():

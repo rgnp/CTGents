@@ -9,9 +9,10 @@
 """
 
 import json
-
+from pathlib import Path
 TOOLS_EVOLVE: list[dict] = [
     {
+        "_meta": {"label": "进化查询"},
         "type": "function",
         "function": {
             "name": "evolve_query",
@@ -48,6 +49,7 @@ TOOLS_EVOLVE: list[dict] = [
         },
     },
     {
+        "_meta": {"label": "权限检查"},
         "type": "function",
         "function": {
             "name": "evolve_check_access",
@@ -78,6 +80,7 @@ TOOLS_EVOLVE: list[dict] = [
         },
     },
     {
+        "_meta": {"label": "覆盖率报告"},
         "type": "function",
         "function": {
             "name": "evolve_coverage",
@@ -89,6 +92,7 @@ TOOLS_EVOLVE: list[dict] = [
         },
     },
     {
+        "_meta": {"label": "进化验证"},
         "type": "function",
         "function": {
             "name": "evolve_validate",
@@ -116,6 +120,7 @@ TOOLS_EVOLVE: list[dict] = [
         },
     },
     {
+        "_meta": {"label": "测试建议"},
         "type": "function",
         "function": {
             "name": "evolve_suggest_tests",
@@ -145,6 +150,7 @@ TOOLS_EVOLVE: list[dict] = [
         },
     },
     {
+        "_meta": {"label": "进化状态"},
         "type": "function",
         "function": {
             "name": "evolve_status",
@@ -233,7 +239,77 @@ def _cmd_validate(args: dict) -> str:
     if not changed_files:
         return "请提供 changed_files 参数。"
     report = run_validate(changed_files, timeout=timeout)
-    return format_report(report)
+    result = format_report(report)
+    if report.overall.value != "pass":
+        result += _build_failure_guidance(report, changed_files)
+    return result
+
+
+def _extract_error_patterns(test_output: str) -> list[str]:
+    """从 pytest 输出中提取可识别的错误模式。"""
+    patterns: list[str] = []
+    lines = test_output.split("\n")
+
+    for line in lines:
+        if "ImportError" in line or "ModuleNotFoundError" in line:
+            patterns.append(f"导入错误 — 检查依赖或 import 路径: {line.strip()[:120]}")
+        elif "AssertionError" in line:
+            patterns.append(f"断言失败 — 预期与实际值不符: {line.strip()[:120]}")
+        elif "AttributeError" in line:
+            patterns.append(f"属性错误 — 对象缺少方法或参数: {line.strip()[:120]}")
+        elif "NameError" in line:
+            patterns.append(f"名称错误 — 变量或函数未定义: {line.strip()[:120]}")
+        elif "TypeError" in line:
+            patterns.append(f"类型错误 — 参数或返回值类型不匹配: {line.strip()[:120]}")
+        elif "SyntaxError" in line:
+            patterns.append(f"语法错误 — 代码无法解析: {line.strip()[:120]}")
+        elif "FAILED" in line and "::" in line:
+            patterns.append(f"测试失败 — {line.strip()[:150]}")
+
+    return patterns[:5]  # 最多 5 条，避免过多
+
+
+def _build_failure_guidance(report, changed_files: list[str]) -> str:
+    """测试失败时自动生成修复指导：查询历史教训 + 建议下一步。"""
+    parts: list[str] = []
+
+    # 提取错误模式
+    patterns = _extract_error_patterns(getattr(report, "test_output", ""))
+    if patterns:
+        parts.append("\n── 检测到的错误模式 ──")
+        for i, p in enumerate(patterns, 1):
+            parts.append(f"  {i}. {p}")
+
+    # 查询历史进化记录中类似错误的修复方案
+    try:
+        from ..evolve import find_similar
+        # 用第一个错误模式或变更文件名作为关键词搜索
+        keywords = []
+        for f in changed_files[:2]:
+            keywords.append(Path(f).stem)
+        if patterns:
+            keywords.append(patterns[0][:50])
+
+        if keywords:
+            similar = find_similar(keywords, limit=3)
+            if similar:
+                parts.append("\n── 历史上类似修复（来自进化档案）──")
+                for rec, score in similar:
+                    outcome = rec.get("outcome", "?")
+                    goal = rec.get("goal", "")[:100]
+                    parts.append(f"  [{outcome}] {goal} (相似度: {score:.2f})")
+    except Exception:
+        pass
+
+    # 建议下一步
+    parts.append("\n── 建议下一步 ──")
+    parts.append("  1. 根据错误模式定位问题文件")
+    parts.append("  2. 调用 think 分析根因而非症状")
+    parts.append("  3. 先补测试再改代码")
+    parts.append("  4. 修复后重新调用 evolve_validate 验证")
+    parts.append(f"  5. 如需研究类似问题的解决方案，调用 search_web 搜索")
+
+    return "\n".join(parts)
 
 
 def _cmd_suggest_tests(args: dict) -> str:

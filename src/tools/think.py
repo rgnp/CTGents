@@ -1,5 +1,6 @@
 TOOLS_THINK = [
     {
+        "_meta": {"label": "思考", "dedup_blacklist": True},
         "type": "function",
         "function": {
             "name": "think",

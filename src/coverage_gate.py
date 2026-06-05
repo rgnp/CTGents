@@ -37,8 +37,6 @@ FILE_TIERS: dict[str, dict] = {
             "src/tools/**/*.py",
             "tests/*.py",
             "tests/**/*.py",
-            "plugins/*.py",
-            "plugins/**/*.py",
         ],
         "threshold": 0.0,
         "description": "工具、测试和插件 — 始终可修改",

@@ -16,7 +16,8 @@ logging.basicConfig(
 from .cache_context import CacheContext
 from .commands import dispatch as dispatch_cmd
 from .config import SESSION_DIR
-from .llm import TokenCallback, TOOL_LABELS, clear_interrupt, request_interrupt, run_conversation
+from .llm import TokenCallback, clear_interrupt, request_interrupt, run_conversation
+from .tools._tool_meta import TOOL_LABELS
 from .session import list_sessions, load_session, save_session
 from .tools import is_plan_mode, set_plan_mode
 

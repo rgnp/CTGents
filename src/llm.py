@@ -30,47 +30,7 @@ from .cache_context import CacheContext
 
 
 # 工具显示标签（安全确认 + 终端回显共用）
-TOOL_LABELS: dict[str, str] = {
-    "search_web":    "搜索",
-    "read_page":     "阅读网页",
-    "read_file":     "读取文件",
-    "write_file":    "写入文件",
-    "edit_file_lines": "行级编辑",
-    "list_files":    "浏览目录",
-    "delete_file":   "删除文件",
-    "count_lines":   "统计行数",
-    "run_python":    "执行代码",
-    "run_command":   "执行命令",
-    "grep_code":     "搜索代码",
-    "think":         "思考",
-    "remember":      "记住",
-    "recall":        "回忆",
-    "forget":        "忘记",
-    "git_status":    "Git 状态",
-    "git_diff":      "Git 差异",
-    "git_log":       "Git 日志",
-    "git_review":    "Git 审查",
-    "git_commit":    "Git 提交",
-    "git_push":      "Git 推送",
-    "git_pr":        "Git PR",
-    "git_branch":    "Git 分支",
-    "scan_project":  "扫描项目",
-    "check_project": "规范检查",
-    "generate_agents_md": "生成规范",
-    "docs_sync_check": "文档同步检查",
-    "rag_index":     "RAG 索引",
-    "rag_query":     "RAG 搜索",
-    "rag_status":    "RAG 状态",
-    "rag_index_research": "研究索引",
-    "rag_search":    "研究搜索",
-    "evolve_query":    "进化查询",
-    "evolve_check_access": "权限检查",
-    "evolve_coverage": "覆盖率报告",
-    "evolve_validate": "进化验证",
-    "evolve_suggest_tests": "测试建议",
-    "evolve_status":  "进化状态",
-    "self":          "自我认知",
-}
+from .tools._tool_meta import TOOL_LABELS, PARALLEL_SAFE as _PARALLEL_SAFE, SKIP_COMPRESS_TOOLS as _SKIP_COMPRESS_TOOLS
 
 logger = logging.getLogger(__name__)
 
@@ -581,9 +541,6 @@ def _invoke_llm(
 # 压缩阈值（字符数，约等于 token 数）
 _TOOL_RESULT_COMPRESS_THRESHOLD = 1200
 
-# 不压缩的工具 — 读文件类工具豁免硬截断，仅受 token 预算动态控制
-_SKIP_COMPRESS_TOOLS: frozenset[str] = frozenset({"read_file", "read_file_lines"})
-
 
 def _compress_tool_result(tool_name: str, result: str) -> str:
     """压缩过大的工具结果，减少后续轮次的 token 消耗。
@@ -615,8 +572,10 @@ def _compress_tool_result(tool_name: str, result: str) -> str:
 # 对话上下文优化（Append-Only — 对齐 Reasonix 缓存优先策略）
 # ═══════════════════════════════════════════════════════════════
 
-# 触发优化的上下文比例（达到 85% 时触发 — 追加摘要，不删历史）
-_COMPACT_THRESHOLD = 0.85
+# 触发滑窗压缩的上下文比例（达到 80% 时触发 — 驱旧消息，换出空间）
+_COMPACT_THRESHOLD = 0.80
+# 保留比例：滑窗压缩后保留最近 N% 的消息
+_COMPACT_KEEP_RATIO = 0.50
 # 话题切换关键词（检测到后追加边界标记）
 _TOPIC_SWITCH_KEYWORDS = [
     "换个", "换一", "不谈", "不说", "跳过", "算了",
@@ -641,7 +600,6 @@ def _compact_context(ctx, user_input: str):
     if isinstance(ctx, CacheContext):
         _compact_cache_context(ctx, user_input)
     else:
-        # Legacy: flat list — build temp CacheContext, compact, return result
         prefix = [m for m in ctx if m.get("role") == "system"]
         log = [m for m in ctx if m.get("role") != "system"]
         tmp = CacheContext(prefix_msgs=prefix, log_msgs=log)
@@ -650,42 +608,67 @@ def _compact_context(ctx, user_input: str):
 
 
 def _compact_cache_context(ctx, user_input: str) -> None:
-    """Append-only compaction — 永不删除旧消息，只追加摘要到末尾。
+    """滑窗压缩：超阈值时驱旧消息，替换为摘要。
 
-    设计原则（对齐 Reasonix 的缓存优先策略）：
-      - log 是只追加的，任何 mutate/delete 都会破坏 DeepSeek 前缀缓存
-      - 压缩内容以 system 消息形式追加到末尾（send() 保持在末尾，不扰动前缀）
-      - 话题切换只加分隔标记，不删历史
-      - 旧工具结果在入口处已压缩（_compress_tool_result），不再二次处理
+    固定前缀保持不变（保障 DeepSeek 缓存命中）。
+    log 区旧消息被摘要替代，释放空间供新对话继续。
     """
+    from .tools.tokens import count_messages_tokens
+
     log = ctx.log
     if not log:
         return
 
-    brief = _make_brief_summary(log, max_len=300)
-    if not brief:
-        return
+    # 估算当前 token 用量
+    all_msgs = ctx.prefix + log
+    used = count_messages_tokens(all_msgs)
+    limit = MAX_CONTEXT_TOKENS * _COMPACT_THRESHOLD
 
+    if used < limit and not _is_topic_switch(user_input):
+        return  # 不需要压缩
+
+    # ── 话题切换：加标记，不驱旧 ──
     if _is_topic_switch(user_input):
-        log.append({
-            "role": "system",
-            "content": f"⏪ 前一话题已结束。{brief}",
-        })
-        logger.info("话题切换：追加边界标记（保留 %d 条历史）", len(log))
+        brief = _make_brief_summary(log, max_len=200)
+        if brief:
+            log.append({
+                "role": "system",
+                "content": f"⏪ 前一话题已结束。{brief}",
+            })
+            logger.info("话题切换：标记边界（log 共 %d 条）", len(log))
         return
 
-    # 常规压缩：追加运行中摘要。检查是否已有最近摘要，避免重复追加
-    recent_summary = False
-    for m in reversed(log[-6:]):  # 只看最近 6 条
-        if m.get("role") == "system" and "⏪ 对话摘要" in m.get("content", ""):
-            recent_summary = True
+    # ── 滑窗压缩：驱旧消息 ──
+    keep_start = int(len(log) * _COMPACT_KEEP_RATIO)
+    if keep_start < 2:
+        return  # log 太短，不压缩
+
+    evicted = log[:keep_start]
+    kept = log[keep_start:]
+
+    summary = _make_brief_summary(evicted, max_len=500)
+    if not summary:
+        return
+
+    # 替换：摘要 + 保留的消息
+    new_log = [{
+        "role": "system",
+        "content": f"⏪ 对话归档：{summary}（已驱 {len(evicted)} 条旧消息）",
+    }]
+    new_log.extend(kept)
+
+    # 检查是否有遗留的 volatile 内存消息，移到新 log 最前面
+    for m in evicted:
+        if m.get("_volatile") and "记忆" in m.get("content", ""):
+            new_log.insert(0, m)
             break
-    if not recent_summary:
-        log.append({
-            "role": "system",
-            "content": f"⏪ 对话摘要：{brief}",
-        })
-        logger.info("上下文优化：追加摘要（保留 %d 条历史，完整缓存前缀）", len(log))
+
+    ctx.log.clear()
+    ctx.log.extend(new_log)
+    logger.info(
+        "滑窗压缩：驱 %d 条旧消息，保留 %d 条（释放约 %d%% 空间）",
+        len(evicted), len(kept), int((1 - _COMPACT_KEEP_RATIO) * 100),
+    )
 
 
 def _make_brief_summary(messages: list[dict], max_len: int = 300) -> str:
@@ -727,19 +710,6 @@ def _make_brief_summary(messages: list[dict], max_len: int = 300) -> str:
 
 # ═══════════════════════════════════════════════════════════════
 # SAFE — 工具并行分发
-# ═══════════════════════════════════════════════════════════════
-
-# 并行安全白名单：纯读取工具，无副作用，可在同批次内同时执行
-_PARALLEL_SAFE: frozenset[str] = frozenset({
-    "read_file", "read_file_lines", "list_files", "count_lines",
-    "grep_code",
-    "search_web", "read_page",
-    "git_status", "git_diff", "git_log", "git_branch",
-    "rag_query", "rag_status", "rag_search",
-    "recall",
-    "scan_project", "check_project", "docs_sync_check", "generate_agents_md",
-})
-
 # SAFE 运行统计（用于 /context 展示）
 _safe_stats: dict = {"batches": 0, "parallel_tools": 0, "serial_tools": 0}
 _safe_stats_lock = threading.Lock()
@@ -843,32 +813,91 @@ def _execute_tool_batch(approved: list[tuple]) -> list[str]:
 def _repair_json(raw: str) -> str:
     """尝试修复 DeepSeek 常见的 JSON 格式错误。
 
-    只做低风险修复（不改变语义）：
-      1. 尾部逗号 → 移除    {"a": 1,} → {"a": 1}
-      2. 缺闭合大括号 → 补全  {"a": 1 → {"a": 1}
-      3. 尾部多余字符 → 截断  {"a": 1}xxx → {"a": 1}
+    修复策略（按顺序）：
+      1. Python 字面量转换: True/False/None → true/false/null
+      2. 单引号 → 双引号（JSON 标准）
+      3. 尾部逗号移除（多轮，直到干净）
+      4. 缺闭合括号 → 按括号计数补全
+      5. 尾部多余字符 → 在最后一个合法括号位置截断
     """
     import re
     s = raw.strip()
 
-    # 1. 截断到最后一个 } 之后
-    last_brace = s.rfind("}")
-    if last_brace != -1 and last_brace < len(s) - 1:
-        s = s[:last_brace + 1]
+    # 1. Python bool/None → JSON
+    s = re.sub(r'\bTrue\b', 'true', s)
+    s = re.sub(r'\bFalse\b', 'false', s)
+    s = re.sub(r'\bNone\b', 'null', s)
 
-    # 2. 移除尾部逗号: {"a": 1,} → {"a": 1}
-    s = re.sub(r",\s*([}\]])", r"\1", s)
+    # 2. 单引号键/值 → 双引号（仅在 JSON 上下文安全的情况）
+    # 先试原始版本，失败再尝试替换
+    if not _try_parse(s):
+        s_single = _replace_single_quotes(s)
+        if _try_parse(s_single):
+            return s_single
 
-    # 3. 补全缺失的闭合括号
-    if s.startswith("{") and not s.endswith("}"):
-        attempt = s + "}"
-        try:
-            json.loads(attempt)
-            return attempt
-        except json.JSONDecodeError:
-            pass
+    # 3. 多轮尾部逗号移除
+    for _ in range(3):
+        new_s = re.sub(r",\s*([}\]])", r"\1", s)
+        if new_s == s:
+            break
+        s = new_s
 
+    # 4. 缺闭合括号：按括号计数补全
+    open_braces = s.count("{") - s.count("}")
+    open_brackets = s.count("[") - s.count("]")
+    if open_braces > 0 or open_brackets > 0:
+        s = s + "]" * open_brackets + "}" * open_braces
+
+    # 5. 尾部多余字符：从最后一个有效括号位置截断
+    # 使用括号计数找到最后一个平衡点，而不是简单的 rfind("}")
+    try:
+        json.loads(s)
+        return s
+    except json.JSONDecodeError:
+        # 找到最后一个 } 或 ] 且括号计数平衡的位置
+        best_end = _find_valid_truncation_point(s)
+        if best_end < len(s):
+            s = s[:best_end + 1]
+        return s
+
+
+def _try_parse(s: str) -> bool:
+    try:
+        json.loads(s)
+        return True
+    except json.JSONDecodeError:
+        return False
+
+
+def _replace_single_quotes(s: str) -> str:
+    """将 JSON 键和值的单引号替换为双引号。只替换顶层，不处理嵌套。"""
+    import re
+    # 键: 'key': → "key":
+    s = re.sub(r"'([^']*)'(\s*:)", r'"\1"\2', s)
+    # 值: : 'value' → : "value"
+    s = re.sub(r":\s*'([^']*)'", r': "\1"', s)
     return s
+
+
+def _find_valid_truncation_point(s: str) -> int:
+    """找到最后一个括号计数平衡的 } 或 ] 位置。"""
+    brace_depth = 0
+    bracket_depth = 0
+    last_valid = -1
+    for i, ch in enumerate(s):
+        if ch == "{":
+            brace_depth += 1
+        elif ch == "}":
+            brace_depth -= 1
+            if brace_depth == 0 and bracket_depth == 0:
+                last_valid = i
+        elif ch == "[":
+            bracket_depth += 1
+        elif ch == "]":
+            bracket_depth -= 1
+            if brace_depth == 0 and bracket_depth == 0:
+                last_valid = i
+    return last_valid
 
 
 # ═══════════════════════════════════════════════════════════════

@@ -151,7 +151,7 @@ class TestStormBlacklist:
 
     def test_blacklist_contains_all_write_tools(self):
         bl = get_blacklist()
-        for tool in ("write_file", "edit_file_lines", "undo_edit", "delete_file"):
+        for tool in ("write_file", "edit_file_lines", "delete_file"):
             assert tool in bl, f"{tool} 应在黑名单中"
 
     def test_blacklist_contains_git_mutation_tools(self):
@@ -164,13 +164,12 @@ class TestStormBlacklist:
         for tool in ("remember", "forget"):
             assert tool in bl, f"{tool} 应在黑名单中"
 
-    def test_blacklist_contains_install_plugin(self):
-        assert "install_plugin" in get_blacklist()
-
-    def test_blacklist_contains_mcp_connect_disconnect(self):
+    def test_blacklist_excludes_dead_tools(self):
+        """验证已删除的工具不在黑名单中。"""
         bl = get_blacklist()
-        assert "mcp_connect" in bl
-        assert "mcp_disconnect" in bl
+        dead = {"undo_edit", "install_plugin", "mcp_connect", "mcp_disconnect", "mcp_save_config"}
+        for tool in dead:
+            assert tool not in bl, f"已删除的工具 {tool} 不应在黑名单中"
 
     def test_common_read_tools_not_in_blacklist(self):
         bl = get_blacklist()

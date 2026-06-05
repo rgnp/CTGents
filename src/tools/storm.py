@@ -19,27 +19,8 @@
 import json
 import threading
 
-# ── 黑名单：有副作用的工具，永远不去重 ──
-_DEDUP_BLACKLIST: frozenset[str] = frozenset({
-    # 文件修改
-    "write_file", "edit_file_lines", "undo_edit", "delete_file",
-    # 命令执行
-    "run_command", "run_python",
-    # Git 变更
-    "git_commit", "git_push", "git_pr",
-    # 记忆系统
-    "remember", "forget",
-    # 插件系统
-    "install_plugin",
-    # MCP 连接管理
-    "mcp_connect", "mcp_disconnect",
-    # RAG 索引变更
-    "rag_index",
-    # 策略思考（重复意味着场景已变，需要重新评估）
-    "think",
-    # MCP 配置持久化
-    "mcp_save_config",
-})
+# ── 黑名单：有副作用的工具，永远不去重（从工具元数据自动派生）──
+from ._tool_meta import DEDUP_BLACKLIST as _DEDUP_BLACKLIST
 
 # 窗口大小
 _WINDOW_SIZE = 64

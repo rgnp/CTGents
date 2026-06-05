@@ -131,6 +131,7 @@ SOURCE_EXTENSIONS: dict[str, str] = {
 
 TOOLS_RAG = [
     {
+        "_meta": {"label": "RAG 索引", "dedup_blacklist": True},
         "type": "function",
         "function": {
             "name": "rag_index",
@@ -156,6 +157,7 @@ TOOLS_RAG = [
         },
     },
     {
+        "_meta": {"label": "RAG 搜索", "parallel_safe": True},
         "type": "function",
         "function": {
             "name": "rag_query",
@@ -182,6 +184,7 @@ TOOLS_RAG = [
         },
     },
     {
+        "_meta": {"label": "RAG 状态", "parallel_safe": True},
         "type": "function",
         "function": {
             "name": "rag_status",
@@ -190,6 +193,7 @@ TOOLS_RAG = [
         },
     },
     {
+        "_meta": {"label": "研究索引"},
         "type": "function",
         "function": {
             "name": "rag_index_research",
@@ -198,6 +202,7 @@ TOOLS_RAG = [
         },
     },
     {
+        "_meta": {"label": "研究搜索", "parallel_safe": True},
         "type": "function",
         "function": {
             "name": "rag_search",

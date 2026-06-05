@@ -22,9 +22,17 @@ def test_write_to_guard_blocked():
     assert "受保护" in result, f"应拒绝修改 guard.py，实际: {result[:100]}"
 
 
+def test_critical_files_protected():
+    """关键基础文件在受保护列表中。"""
+    for name in ("guard.py", "coverage_gate.py", "main.py",
+                 "validate.py", "tools/__init__.py"):
+        path = Path(__file__).parent.parent / "src" / name
+        assert is_protected(path), f"{name} 应在受保护列表中"
+
+
 def test_regular_file_not_protected():
-    """普通文件不在受保护列表中。"""
-    assert not is_protected(Path(__file__).parent.parent / "src" / "main.py")
+    """普通工具文件不在受保护列表中。"""
+    assert not is_protected(Path(__file__).parent.parent / "src" / "tools" / "file.py")
 
 
 def test_resolution_error_returns_false():

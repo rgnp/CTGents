@@ -9,22 +9,7 @@ from openai.types.chat import ChatCompletionMessageToolCall
 
 logger = logging.getLogger(__name__)
 
-# ── 内置模块清单（供热加载遍历）──
-# (模块路径, TOOLS_变量名, execute函数名)
-_BUILTIN_MODULES: list[tuple[str, str, str]] = [
-    (".web",       "TOOLS_WEB",    "execute"),
-    (".file",      "TOOLS_FILE",   "execute"),
-    (".exec",      "TOOLS_EXEC",   "execute"),
-    (".code",      "TOOLS_CODE",   "execute"),
-    (".think",     "TOOLS_THINK",  "execute"),
-    (".memory",    "TOOLS_MEMORY", "execute"),
-    (".git",       "TOOLS_GIT",    "execute"),
-    (".project",   "TOOLS_PROJECT","execute"),
-    (".lint",      "TOOLS_LINT",   "execute"),
-    (".rag",       "TOOLS_RAG",    "execute"),
-    (".evolve",    "TOOLS_EVOLVE",  "execute"),
-    (".self",      "TOOLS_SELF",   "execute"),
-]
+from ._tool_meta import _BUILTIN_MODULES, PLAN_BLOCKED as _PLAN_BLOCKED
 
 _TOOL_SOURCES: list[list[dict]] = []
 _EXECUTORS: list = []
@@ -42,11 +27,16 @@ def _init_registry():
 
     for mod_path, tools_attr, exec_attr in _BUILTIN_MODULES:
         full = f"src.tools{mod_path}"
+        if full in sys.modules:
+            importlib.reload(sys.modules[full])
         mod = importlib.import_module(full)
         tools_list = getattr(mod, tools_attr, [])
         exec_fn = getattr(mod, exec_attr, None)
         if tools_list or exec_fn:
             _register_builtin(tools_list, exec_fn)
+
+    from . import _tool_meta
+    _tool_meta._refresh_globals()
 
 _init_registry()
 
@@ -56,13 +46,6 @@ _tools_cache: list[dict] | None = None
 
 # ── Plan Mode ──
 _plan_mode: bool = False
-
-# Plan mode 下禁用的写工具
-_PLAN_BLOCKED: frozenset[str] = frozenset({
-    "write_file", "edit_file_lines", "delete_file",
-    "git_commit", "git_push", "git_pr",
-    "remember", "forget",  # 记忆写入也禁掉，保持 plan 纯粹
-})
 
 
 def set_plan_mode(enabled: bool) -> None:
@@ -82,6 +65,7 @@ def is_plan_mode() -> bool:
 def get_tools() -> list[dict]:
     """返回工具列表。plan mode 下过滤写工具。
 
+    剥离 _meta 后缓存——API 不可见元数据。
     结果缓存复用，确保每轮返回的 tools 是同一个 list 对象，
     OpenAI SDK 序列化后字节一致，保障 DeepSeek 前缀缓存命中。
     """
@@ -96,6 +80,9 @@ def get_tools() -> list[dict]:
     if _plan_mode:
         tools = [t for t in tools
                  if t.get("function", {}).get("name") not in _PLAN_BLOCKED]
+
+    # 剥离 _meta（API 不可见）
+    tools = [{k: v for k, v in t.items() if k != "_meta"} for t in tools]
 
     _tools_cache = tools
     return tools

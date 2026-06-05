@@ -10,52 +10,54 @@ from src.llm import (
 
 
 class TestCompactContext:
-    """测试 _compact_context：对话历史压缩。"""
+    """测试 _compact_context：滑窗压缩（超阈值驱旧，短上下文不动）。"""
 
     def test_only_system_not_compressed(self):
         msgs = [{"role": "system", "content": "规则"}]
         assert len(_compact_context(msgs, "hello")) == 1
 
     def test_short_not_compressed(self):
+        """短上下文不压缩——无需追加摘要，消息数不变。"""
         msgs = [
             {"role": "system", "content": "规则"},
             {"role": "user", "content": "问题"},
             {"role": "assistant", "content": "回答"},
         ]
-        # append-only: 3 + 1 summary = 4
-        assert len(_compact_context(msgs, "继续")) == 4
+        assert len(_compact_context(msgs, "继续")) == 3
 
-    def test_topic_switch_compresses_all(self):
+    def test_topic_switch_adds_boundary(self):
         msgs = [
             {"role": "system", "content": "规则"},
             {"role": "user", "content": "旧话题"},
             {"role": "assistant", "content": "旧回答"},
         ]
         result = _compact_context(msgs, "换个话题")
-        # append-only: 3 + 1 boundary marker = 4
-        assert len(result) == 4
+        assert len(result) >= 4  # 话题切换追加边界标记
         assert any("前一话题已结束" in m.get("content", "") for m in result)
 
-    def test_topic_switch_not_triggered(self):
+    def test_regular_topic_no_boundary(self):
+        """非话题切换 + 短上下文 → 消息数不变。"""
         msgs = [
             {"role": "system", "content": "规则"},
             {"role": "user", "content": "继续讨论同一个话题"},
             {"role": "assistant", "content": "好的"},
         ]
         result = _compact_context(msgs, "继续讨论同一个话题")
-        # append-only: 3 + 1 summary = 4
-        assert len(result) == 4
+        assert len(result) == 3  # 短上下文无操作
 
-    def test_large_messages_truncated(self):
-        big = "X" * 100000
+    def test_large_context_evicts_old_messages(self):
+        """大型上下文触发滑窗压缩：旧消息被驱替为摘要，总数减少。"""
+        big = "X" * 300000  # 足够大以触发 80% 阈值
         msgs = [{"role": "system", "content": "规则"}]
         for i in range(5):
             msgs.append({"role": "user", "content": f"问题{i} " + big})
             msgs.append({"role": "assistant", "content": f"回答{i} " + big})
             msgs.append({"role": "tool", "content": big[:100]})
         result = _compact_context(msgs, "继续做")
-        # append-only: 不会减少消息，只追加摘要
-        assert len(result) >= len(msgs)
+        # 滑窗压缩：旧消息被驱替，总数应明显减少
+        assert len(result) < len(msgs), (
+            f"压缩应减少消息: {len(result)} vs {len(msgs)}"
+        )
         assert any("⏪" in m.get("content", "") for m in result if m["role"] == "system")
 
 
