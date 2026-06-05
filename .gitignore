@@ -93,4 +93,6 @@ plugins/
 # ── 运行时数据（自动生成，不提交）──
 sessions/
 stats/
+memory/
+knowledge/
 .agent_backups/

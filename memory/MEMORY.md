@@ -1,2 +1,0 @@
-- [session-start-checklist](session-start-checklist.md) — 每次会话开始时，先运行 `py src/self_portr
-- [user-preferences](user-preferences.md) — 用户偏好协议 v3 (2026-06-03)，整合所有效率/
