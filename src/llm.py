@@ -857,6 +857,28 @@ def _repair_json(raw: str) -> str:
 
     return s
 
+
+# ═══════════════════════════════════════════════════════════════
+# 自动 Plan Mode — 复杂任务自动只读分析
+# ═══════════════════════════════════════════════════════════════
+
+_COMPLEX_KEYWORDS = [
+    "重构", "架构", "迁移", "设计", "重写", "改造",
+    "实现一个", "写一个", "添加新功能", "模块", "系统",
+    "refactor", "architecture", "migrate", "redesign", "rewrite",
+]
+
+_AUTO_PLAN_MIN_CHARS = 150  # 短于这个不触发（简单查询）
+
+
+def _should_auto_plan(user_input: str) -> bool:
+    """判断任务是否需要自动进入只读分析模式。"""
+    text = user_input.lower()
+    if len(text) < _AUTO_PLAN_MIN_CHARS:
+        return False
+    return any(kw in text for kw in _COMPLEX_KEYWORDS)
+
+
 def run_conversation(
     ctx: CacheContext,
     user_input: str,
@@ -890,6 +912,14 @@ def run_conversation(
     backend = auto_select_model(user_input)
     model_name = backend.info.name
     logger.info("路由: '%s...' → %s", user_input[:30], model_name)
+
+    # ── 自动 Plan Mode：复杂任务先只读分析 ──
+    auto_plan = False
+    if _should_auto_plan(user_input) and not is_plan_mode():
+        from .tools import set_plan_mode
+        set_plan_mode(True)
+        auto_plan = True
+        on_token("📋 任务较复杂，先进入只读分析…\n\n")
 
     # 模型变了 → 通知用户
     if backend is not prev_backend:
@@ -1002,4 +1032,6 @@ def run_conversation(
             ctx.log.append({"role": "assistant", "content": content or ""})
             if on_progress:
                 on_progress()
+            if auto_plan:
+                set_plan_mode(False)
             return content or ""
