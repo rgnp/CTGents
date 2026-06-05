@@ -72,12 +72,15 @@ class EvolutionRun:
 @dataclass
 class EvolutionRunStart:
     run: EvolutionRun
-    prompt: str
     summary: str
 
 
 def start_evolution_run(goal: str, root: Path | None = None) -> EvolutionRunStart:
-    """Create a persistent evolution run and return the prompt to inject."""
+    """Create a persistent evolution run. Returns summary for display.
+
+    The runner records state in background. The agent works as normal —
+    it receives the goal as a regular user message, not a special prompt.
+    """
     project_root = (root or PROJECT_ROOT).resolve()
     run_id = _new_run_id()
     run_dir = RUNS_DIR / run_id
@@ -104,53 +107,7 @@ def start_evolution_run(goal: str, root: Path | None = None) -> EvolutionRunStar
     _save_run(run)
     _write_active_run(run)
 
-    prompt = build_evolution_system_prompt(goal, run)
-    return EvolutionRunStart(run=run, prompt=prompt, summary=_format_start_summary(run))
-
-
-def build_evolution_system_prompt(goal: str, run: EvolutionRun | None = None) -> str:
-    """Build the evolution prompt; with a run, include runner state."""
-    run_lines = _render_run_block(run) if run else _render_preview_block()
-    parts = [
-        "## 自进化 Runner 已启动",
-        "",
-        f"**目标**: {goal}",
-        "",
-        run_lines,
-        "",
-        "### Runner 阶段契约",
-        "流程: 研究 -> 综合 -> 生成 -> 验证 -> 合入/修复",
-        "1. preflight: 读取 runner 状态、检查 git 基线、查询历史经验",
-        "2. research: 多源搜索/自省/代码检索，确认目标和风险",
-        "3. synthesis: 生成候选方案并选择最小可验证方案",
-        "4. generation: 修改代码，先检查权限，再按当前任务计划推进",
-        "5. verification: 调用 `evolve_validate`，必要时补跑 ruff/pytest",
-        "6. decision: 成功则 `git_commit`，失败则修复；无法修复时停止并记录原因",
-        "",
-        "### 关键工具",
-        "- `self` — 查看实时架构和子系统连接",
-        "- `grep_code` / `read_file` — 定位现有实现和测试",
-        "- `search_web` / `read_page` — 需要外部资料时多源验证",
-        "- `evolve_query` — 查询历史进化记录，避免重复踩坑",
-        "- `evolve_check_access` — 检查文件修改权限",
-        "- `evolve_coverage` / `evolve_suggest_tests` — 判断测试保护缺口",
-        "- `evolve_validate` — 记录验证结果并推动 runner 进入 decision",
-        "- `git_status` / `git_diff` / `git_commit` — 用具体文件完成最终合入",
-        "",
-        "### 安全规则",
-        "1. 修改前必须确认 `git_status` 与 runner preflight 基线一致，脏文件只能处理本轮相关项",
-        "2. Runner 已保存非破坏性的 `git diff --binary HEAD` 快照；不要使用破坏性 reset",
-        "3. 改完后必须 `evolve_validate`；最终 `git_commit` 会强制运行 ruff + pytest",
-        "4. 验证失败先修复；无法修复时停止并写明原因，不要扩大修改范围",
-        "5. 不修改 `src/guard.py`，不绕过保护层，不用裸 except 或存根实现",
-        "",
-        "### 输出规范",
-        "每个阶段结束时写明 `阶段完成: <phase>`、证据、下一步。",
-        "最终总结包含修改文件、验证结果、学到的模式，并提交本轮变更。",
-        "",
-        "现在开始。先调用 `self` 和 `evolve_status`，再进入 research。",
-    ]
-    return "\n".join(parts)
+    return EvolutionRunStart(run=run, summary=_format_start_summary(run))
 
 
 def advance_evolution_phase(run_id: str, phase: EvolutionPhase | str, note: str = "") -> EvolutionRun:
@@ -316,33 +273,6 @@ def _read_active_run_id() -> str:
         return ""
     run_id = data.get("run_id", "")
     return run_id if isinstance(run_id, str) else ""
-
-
-def _render_run_block(run: EvolutionRun) -> str:
-    warnings = run.preflight.get("warnings", [])
-    warning_text = "；".join(warnings) if warnings else "无"
-    dirty = run.preflight.get("dirty_files", [])
-    dirty_text = "\n".join(f"- {item}" for item in dirty) if dirty else "- 无"
-    return "\n".join([
-        "### Runner 状态",
-        f"- run_id: `{run.run_id}`",
-        f"- run_dir: `{run.run_dir}`",
-        f"- patch_snapshot: `{run.patch_path}`",
-        f"- git_head: `{run.preflight.get('head', '')}`",
-        f"- git_branch: `{run.preflight.get('branch', '')}`",
-        f"- preflight_warnings: {warning_text}",
-        "",
-        "启动时工作区改动:",
-        dirty_text,
-    ])
-
-
-def _render_preview_block() -> str:
-    return "\n".join([
-        "### Runner 状态",
-        "- 兼容预览模式：未创建持久化 run。",
-        "- 真实运行请通过 `/evolve <目标>` 启动，会生成 run_dir/state/patch 快照。",
-    ])
 
 
 def _format_start_summary(run: EvolutionRun) -> str:

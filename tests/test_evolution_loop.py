@@ -1,62 +1,80 @@
-"""evolution_runner.py prompt tests."""
-
+"""evolution_runner.py tests — persistent run state."""
 import sys
+import tempfile
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from src.evolution_runner import build_evolution_system_prompt
+from src.evolution_runner import (
+    EvolutionPhase,
+    RunnerStatus,
+    EvolutionRun,
+    start_evolution_run,
+    complete_evolution_run,
+    load_active_evolution_run,
+    load_evolution_run,
+    _format_start_summary,
+    PROJECT_ROOT,
+    RUN_ROOT,
+    RUNS_DIR,
+)
 
 
-class TestEvolutionSystemPrompt:
-    """系统 prompt 构建测试。"""
+class TestEvolutionRunStart:
+    """start_evolution_run 测试 — 不生成 prompt，只做后台记录。"""
 
-    def test_contains_goal(self):
-        prompt = build_evolution_system_prompt("优化文件搜索性能")
-        assert "优化文件搜索性能" in prompt
+    def test_start_creates_run_dir(self):
+        start = start_evolution_run("测试目标: 补 docstring")
+        run = start.run
+        assert Path(run.run_dir).is_dir(), f"run_dir 应存在: {run.run_dir}"
+        assert Path(run.state_path).exists(), f"state_path 应存在: {run.state_path}"
 
-    def test_contains_flow_diagram(self):
-        prompt = build_evolution_system_prompt("test")
-        assert "研究" in prompt
-        assert "综合" in prompt
-        assert "生成" in prompt
-        assert "验证" in prompt
+    def test_start_records_goal(self):
+        start = start_evolution_run("补 file.py 的 count_lines docstring")
+        assert start.run.goal == "补 file.py 的 count_lines docstring"
 
-    def test_contains_key_tools(self):
-        prompt = build_evolution_system_prompt("test")
-        assert "evolve_query" in prompt
-        assert "evolve_check_access" in prompt
-        assert "evolve_validate" in prompt
-        assert "evolve_status" in prompt
+    def test_start_returns_summary(self):
+        start = start_evolution_run("test goal")
+        assert start.run.run_id in start.summary
+        assert "runner 已启动" in start.summary
 
-    def test_contains_safety_rules(self):
-        prompt = build_evolution_system_prompt("test")
-        assert "git_commit" in prompt
-        assert "修复" in prompt
-        assert "reset" in prompt
+    def test_start_no_prompt_field(self):
+        """EvolutionRunStart 不应有 prompt 字段。"""
+        start = start_evolution_run("test")
+        assert not hasattr(start, "prompt"), "EvolutionRunStart 不应包含 prompt"
 
-    def test_markdown_formatting(self):
-        prompt = build_evolution_system_prompt("test")
-        assert prompt.startswith("##")
+    def test_active_run_persists(self):
+        start = start_evolution_run("测试持久化")
+        active = load_active_evolution_run()
+        assert active is not None
+        assert active.run_id == start.run.run_id
 
 
-if __name__ == "__main__":
-    tests = []
-    instance = TestEvolutionSystemPrompt()
-    for name in dir(instance):
-        if name.startswith("test_"):
-            tests.append((f"TestEvolutionSystemPrompt.{name}", getattr(instance, name)))
+class TestEvolutionRunLifecycle:
+    """Runner 生命周期测试。"""
 
-    passed = 0
-    for name, fn in tests:
-        try:
-            fn()
-            print(f"  ✅ {name}")
-            passed += 1
-        except AssertionError as e:
-            print(f"  ❌ {name}: {e}")
-        except Exception as e:
-            print(f"  💥 {name}: {type(e).__name__}: {e}")
+    def test_complete_run_finalizes(self):
+        start = start_evolution_run("测试完成")
+        run = complete_evolution_run(start.run.run_id, RunnerStatus.PASSED, "成功")
+        assert run.status == "passed"
+        assert run.phase == "complete"
 
-    print(f"\n{'═' * 40}")
-    print(f"  结果: {passed}/{len(tests)} 通过")
+    def test_complete_run_clears_active(self):
+        start = start_evolution_run("测试清除 active")
+        complete_evolution_run(start.run.run_id, RunnerStatus.PASSED)
+        assert load_active_evolution_run() is None
+
+    def test_phase_enum(self):
+        assert EvolutionPhase.RESEARCH.value == "research"
+        assert EvolutionPhase.VERIFICATION.value == "verification"
+
+
+class TestStartSummary:
+    """_format_start_summary 测试。"""
+
+    def test_summary_contains_key_info(self):
+        start = start_evolution_run("给 count_lines 补 docstring")
+        summary = _format_start_summary(start.run)
+        assert "runner 已启动" in summary
+        assert start.run.run_id in summary
+        assert "给 count_lines 补 docstring" in summary

@@ -24,10 +24,10 @@ def test_start_evolution_run_creates_state_and_prompt(tmp_path, monkeypatch):
     patch_path = Path(start.run.patch_path)
     assert state_path.exists()
     assert patch_path.exists()
-    assert start.run.run_id in start.prompt
-    assert "研究" in start.prompt
-    assert "evolve_validate" in start.prompt
-    assert "reset" in start.prompt
+    # runner 不再注入 prompt，只返回值摘要
+    assert hasattr(start, "summary")
+    assert "runner 已启动" in start.summary
+    assert not hasattr(start, "prompt"), "EvolutionRunStart 不应有 prompt 字段"
     assert runner.load_active_evolution_run().run_id == start.run.run_id
 
 

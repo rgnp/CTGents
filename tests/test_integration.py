@@ -128,9 +128,9 @@ class TestToolRegistry:
         ctx.log = []
         result = dispatch("/evolve 测试目标", ctx, "test-session")
         assert result.retry is True
-        system_msgs = [m["content"] for m in ctx.log if m.get("role") == "system"]
-        system_text = " ".join(system_msgs)
-        assert "Runner" in system_text
+        user_msgs = [m for m in ctx.log if m.get("role") == "user"]
+        assert len(user_msgs) == 1
+        assert "测试目标" in user_msgs[0]["content"]
         assert runner.load_active_evolution_run() is not None
 
     def test_model_command_switches(self):

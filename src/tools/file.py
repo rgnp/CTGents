@@ -646,7 +646,18 @@ def undo_edit(path: str) -> str:
     return "⛔ undo_edit 已废弃"
 
 def count_lines(path: str) -> str:
-    """统计文件行数、字符数、单词数。"""
+    """统计文件的文本度量：行数、字符数、单词数。
+
+    Args:
+        path: 文件路径（支持 ~ 和相对路径）
+
+    Returns:
+        格式化的统计结果字符串，包含行数/字符数/单词数
+
+    Raises:
+        FileNotFoundError: 文件不存在
+        ValueError: 路径不是文件
+    """
     filepath = _resolve(path)
     _assert_file(filepath)
     try:

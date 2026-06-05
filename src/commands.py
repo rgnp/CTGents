@@ -551,10 +551,14 @@ def _cmd_self(r: CmdResult, _ctx, _args, _sid) -> None:
 
 # ── 自进化命令 ──
 
-@builtin("/evolve", description="启动自进化 runner：preflight→研究→综合→生成→验证→合入",
+@builtin("/evolve", description="启动自进化 runner：后台记录，agent 正常执行任务",
          usage="/evolve <目标描述>")
 def _cmd_evolve(r: CmdResult, ctx, args, session_id) -> None:
-    """启动自进化 runner，并注入本轮运行契约。"""
+    """启动自进化 runner，把目标作为普通消息交给 agent。
+
+    agent 不需要知道自己在"进化模式"里——像正常任务一样读代码、
+    想方案、改文件、跑测试、提交。runner 在后台默默记录。
+    """
     if not args:
         r.message = (
             "用法: /evolve <目标描述>\n"
@@ -567,7 +571,7 @@ def _cmd_evolve(r: CmdResult, ctx, args, session_id) -> None:
     goal = " ".join(args)
     from .evolution_runner import start_evolution_run
     start = start_evolution_run(goal)
-    ctx.log.append({"role": "system", "content": start.prompt, "_volatile": True})
+    ctx.log.append({"role": "user", "content": goal})
     r.retry = True
     r.save = True
     r.message = start.summary + "\n\nAgent 将从 runner 状态继续推进。按 Esc 可中断。"
