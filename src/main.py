@@ -390,36 +390,16 @@ def main() -> None:
                     _print_recent(ctx.all)
                 if r.clear:
                     ctx.clear_log()
-                    # 重建 prefix（环境上下文 + 项目感知）
-                    prefix = []
-                    try:
-                        from .tools.rag import get_index_status, _load_doc_index
-                        rag_info = get_index_status()
-                        if "未建立" not in rag_info:
-                            prefix.append({
-                                "role": "system",
-                                "content": "RAG 代码索引已就绪。研究知识库可用 search_papers 搜论文、save_note 记笔记。",
-                                "_volatile": True,
-                            })
-                        if _load_doc_index("research") is not None:
-                            prefix.append({
-                                "role": "system",
-                                "content": "RAG 研究索引已就绪。rag_query(scope='research') 可语义搜索论文和笔记。",
-                                "_volatile": True,
-                            })
-                    except Exception:
-                        pass
-                    if r.save:   # /new: 同时重置 session
-                        session_id = None
-                    prefix.append(_make_agents_message())
+                    # 重建 prefix 并追加 volatile 上下文（与 session start 一致）
+                    prefix_msgs = []
+                    prefix_msgs.append(_make_agents_message())
                     proj_ctx = _make_project_context()
                     if proj_ctx:
-                        prefix.append(proj_ctx)
-                    ctx.rebuild_prefix(prefix)
-                    # ── 动态上下文（log 区，不影响前缀缓存） ──
-                    mem_ctx = _make_memory_context()
-                    if mem_ctx:
-                        ctx.log.append(mem_ctx)
+                        prefix_msgs.append(proj_ctx)
+                    ctx.rebuild_prefix(prefix_msgs)
+                    if r.save:   # /new: 同时重置 session
+                        session_id = None
+                    _append_volatile_context(ctx)
                 if r.retry:
                     last_user = ctx.last_user_content() or ""
                     if last_user:
