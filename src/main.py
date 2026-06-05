@@ -129,17 +129,6 @@ def _append_volatile_context(ctx: CacheContext) -> None:
     except Exception:
         pass
 
-    # ── 近期工具失败记录（供 LLM 避免重复踩坑） ──
-    try:
-        from .tools import get_recent_failures
-        failures = get_recent_failures()
-        if failures:
-            lines = ["近期工具失败记录（供参考，避免重复踩坑）:"]
-            for f in failures:
-                lines.append(f"  - {f['time']} {f['tool']}: {f['error']}")
-            ctx.log.append({"role": "system", "content": "\n".join(lines), "_volatile": True})
-    except Exception:
-        pass
 
 # ── UI 辅助 ──
 

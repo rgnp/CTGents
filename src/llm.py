@@ -1005,12 +1005,7 @@ def run_conversation(
                     clear_dirty()
                 if on_progress:
                     on_progress()
-            except Exception as exc:
-                # 记录失败到工具失败追踪
-                from .tools import _record_failure
-                for tc_data in tool_calls:
-                    _record_failure(tc_data["function"]["name"],
-                                   f"{type(exc).__name__}: {exc}")
+            except Exception:
                 # 异常时补上 tool 结果消息，防止下次 API 调用因缺少 tool 消息而 400
                 for tc_data in tool_calls:
                     already_saved = any(

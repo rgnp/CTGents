@@ -51,26 +51,6 @@ def _init_registry():
 _init_registry()
 
 
-# ── 工具失败记录（环形缓冲区，volatile 消息注入时消费） ──
-_FAILURE_RECORDS_MAX = 5
-_failure_records: list[dict] = []  # [{tool, error, time}]
-
-
-def _record_tool_failure(tool_name: str, error: str) -> None:
-    _failure_records.append({
-        "tool": tool_name,
-        "error": error[:120],
-        "time": time.strftime("%m-%d %H:%M"),
-    })
-    if len(_failure_records) > _FAILURE_RECORDS_MAX:
-        _failure_records.pop(0)
-
-
-def get_recent_failures() -> list[dict]:
-    """返回最近 N 条工具失败记录（供上下文注入）。"""
-    return list(_failure_records)
-
-
 # ── 工具列表缓存 ──
 _tools_cache: list[dict] | None = None
 
@@ -147,13 +127,10 @@ def execute_tool(tool_call: ChatCompletionMessageToolCall) -> str:
         storm_record(name, args, result)
         elapsed = time.perf_counter() - t0
         logger.debug("工具调用: %s (%.2f秒)", name, elapsed)
-        # 检测工具返回的错误（JSON 格式的 error 或 "Error:" 开头）
-        if isinstance(result, str) and ('"error"' in result[:50] or result.startswith("Error:")):
-            _record_tool_failure(name, result[:120])
         return result
+
     error_msg = f"未注册的工具: {name}"
     logger.error(error_msg)
-    _record_tool_failure(name, error_msg)
     return error_msg
 
 # ── 热加载 ──
