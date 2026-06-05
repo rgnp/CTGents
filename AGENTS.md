@@ -1,5 +1,7 @@
 # AGENTS.md
 
+This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+
 ## 常用命令
 
 ```
@@ -7,83 +9,117 @@ py -m pytest tests/              # 全部测试
 py -m pytest tests/xxx.py -v     # 单个文件
 py -m pytest tests/ -k "关键词"   # 筛选
 py src/main.py                   # 启动 agent
-py src/self_portrait.py          # 自画像（架构/工具/测试/覆盖率）
-py src/self_portrait.py --short  # 一行摘要
-py src/self_portrait.py --health # 坏代码检测
 ruff check src/                  # lint
 ruff format src/                 # 格式化
 ```
 
 ## 项目结构
 
-用 `py src/self_portrait.py` 查看实时结构。关键文件：
+```
+llm.py              对话循环、模型路由、工具调度 (Pro only)
+cache_context.py    三段式上下文 (prefix/log/scratch)
+commands.py         指令系统 (/help /save /load /self /evolve /model /context)
+guard.py            自我保护 (is_protected 阻止修改 guard.py 自身)
+config.py           配置 (API key、模型、路径)
+session.py          会话持久化
+coverage_gate.py    覆盖率门禁 (tier_0/1/2/3: 0%/45%/60%/75%)
+evolve.py           进化档案 (JSONL 存储 + TF-IDF 查询)
+evolution_loop.py   进化编排器 (研究→综合→生成→验证 闭环)
+validate.py         三阶段验证 (AST→pytest→覆盖率)
+tools/              12 个工具模块 (web/file/exec/code/think/memory/git/project/lint/rag/evolve/self)
+```
 
-```
-llm.py              对话循环、模型路由、工具调度
-coverage_gate.py    函数级关联测试门禁（tier_0/1/2/3: 0%/45%/60%/75%）
-guard.py            崩溃自愈 + 文件保护
-cache_context.py    三段式上下文
-commands.py         指令系统
-safety.py           工具安全等级 + auto/manual 模式 + 会话信任
-evolve.py           进化档案
-validate.py         三阶段验证（AST→pytest→覆盖率）
-tools/              17 个工具模块
-```
+用 `self` 工具查看实时架构和运行时状态。
 
 ## Git
 
-- 提交前: `ruff check src/` + `docs_sync_check`
+- 提交前: `ruff check src/`
 - 推送前: 测试全绿
 
 ---
 
-## AI 行为约束
+## 宪章约束 (Constitutional — 永远不可违反)
 
-> 每条规则都必须是可执行、可验证的操作指令，不是建议。
+> 每条约束都附带 **验证标准** —— 一个零上下文的初级工程师也能机械判断是否合规。
 
-### 修改代码前
+### 安全
 
-1. **先读后改** — 调用 `write_file` 或 `edit_file_lines` 前，必须先用 `read_file` 读取目标文件当前内容。文件可能被之前的编辑改变。
+| # | 规则 | 验证标准 |
+|---|------|---------|
+| C1 | **禁止裸 except** — 不允许 `except:` 或 `except Exception: pass` | 任何 `except` 必须指定具体异常类型；如果确实需要吞掉，至少写 `logger.warning(...)` |
+| C2 | **禁止硬编码密钥** — 不允许 API key、token、密码出现在源码中 | grep `sk-` `api_key` `token` `password` 命中 → 违规 |
+| C3 | **文件修改限工作目录** — 所有写操作只能在 `Path.cwd()` 下 | 路径解析后调用 `.relative_to(cwd)`，`ValueError` → 拒绝 |
+| C4 | **输入不拼接到 Shell** — `run_command` 不接受用户输入拼接到命令字符串 | grep `f".*{.*}.*"` 在 run_command 调用中 → 违规 |
 
-2. **理解全貌** — 修改函数前查引用：`grep_code` 找调用者，`rag_query` 搜相关逻辑。
+### 质量
 
-3. **并行读取** — 多个不相关的文件一次发出多个 `read_file`，系统自动并行。
+| # | 规则 | 验证标准 |
+|---|------|---------|
+| C5 | **禁止存根/占位** — 不允许 `pass`、`...`、`# TODO`、`raise NotImplementedError` 作为功能实现 | grep `pass` `# TODO` `NotImplementedError` 在非抽象方法中 → 违规 |
+| C6 | **公开函数必须有类型注解** — 所有非 `_` 前缀的函数必须有完整参数和返回类型 | `ruff check --select ANN` 对公开函数报错 → 违规 |
+| C7 | **函数 ≤ 50 行** — 超过则必须拆分 | `ruff check --select PLR0915` 命中 → 违规 |
+| C8 | **禁止魔法数字** — 数字常量必须是模块级命名常量 | 函数体内出现 `> 300` `sleep(5)` `timeout=30` → 违规（0, 1, -1, 100 除外） |
+| C9 | **DRY** — 相同逻辑出现 ≥3 次必须提取为公共函数 | 3 个以上函数包含相同的 4+ 行代码块 → 违规 |
 
-### 修改代码后
+### 操作
 
-4. **必须 git commit** — 每次代码修改完成后立即提交，不等用户提醒：
-   - `git add <改动的文件>`
-   - `git commit -m "<简明描述修改内容>"`
-   - 每完成一个独立任务就 commit 一次，保持粒度细
+| # | 规则 | 验证标准 |
+|---|------|---------|
+| C10 | **读后写** — 调用 `write_file` 或 `edit_file_lines` 前必须先用 `read_file` 读过目标文件 | 同一次工具调用批次中 write_file 出现在 read_file 之前 → 违规 |
+| C11 | **改后即测** — 代码修改完成后立即跑相关测试 | write_file/edit_file_lines 之后没有 pytest 调用 → 违规 |
+| C12 | **改后即 commit** — 每个独立任务完成后立即 git commit | 会话中有代码修改但没有 git commit → 违规 |
+| C13 | **lint 零错误** — `ruff check src/` 零错误再提交 | commit 前 ruff 有 F/E 类错误 → 违规 |
 
-5. **自动跑测试** — 改完立即跑，不等用户提醒：
-   - 单文件 → `py -m pytest tests/test_xxx.py -v`
-   - 多文件 → 跑全量 `py -m pytest tests/`
+---
 
-6. **lint 干净** — `ruff check src/` 零错误再提交。
+## 行为准则 (Operational — 冲突时优先于默认行为)
 
-6. **覆盖率不降** — 新增代码用 `evolve_check_access(filepath, touched_functions=[...])` 验证有测试保护。
+### 代码修改
 
-### 外部 API
-
-7. **不凭记忆调 API** — 训练数据是 6-18 个月前的。调任何外部 API 前先用 `search_web` 查最新文档。
-
-### 编码硬约束
-
-8. **禁止裸 except** — 不允许 `except:` 或 `except Exception: pass`。指定异常类型，至少记日志。
-
-9. **禁止魔法数字** — 数字常量用模块级命名常量（如 `TIMEOUT = 30`，不是 `timeout=30` 到处散落）。
-
-10. **类型提示** — 所有公开函数必须有完整的参数和返回类型注解。
-
-11. **函数 ≤ 50 行** — 超过则拆分。
-
-12. **DRY** — 相同逻辑出现两次以上，提取为公共函数。
+1. **最小变更** — 只改任务要求的部分。不顺手重构无关代码，不修不相关的 lint 警告，不添加未要求的功能。
+2. **复用现有模式** — 新增代码前先用 `grep_code` 查项目中类似的实现，模仿其风格。不引入新的依赖或模式除非别无选择。
+3. **保留已有注释** — 不删除或修改文件中已存在的注释，除非注释内容确实错误。
+4. **禁止过度抽象** — 一个调用者不需要 interface；两个调用者不需要 factory。等到第三个用例出现再抽象。
 
 ### 沟通
 
-13. **不提工具名** — 对用户说"我修改了文件"，不说"我用 write_file 写了文件"。
+5. **简洁优先** — 回复保持简短（通常 1-3 句）。不写多行 docstring，不写段落注释，不总结刚刚做过的事。
+6. **用代码说话** — 说"我修改了 `llm.py:120`"而不是"我用 write_file 写了文件"。说"运行 `py -m pytest tests/`"而不是"让我运行测试"。
+7. **不确定就查** — 不编造 API 参数、文件路径、版本号。用 `search_web` 查最新文档，用 `grep_code` 验证函数是否存在。
+8. **不等用户提醒** — 改完自动跑测试、自动 commit、自动 lint。只有真正需要用户决策时才停下来问。
 
-14. **不知道就查** — 不编造 API 参数或路径。不确定时 `search_web` 或 `grep_code`。
+### 任务分解
 
-15. **完成三问** — 每个任务结束前自问：测试通过？lint 干净？覆盖率没降？全满足再说"好了"。
+9. **复杂任务先计划** — 涉及 3+ 文件或架构决策时，先用 `think` 工具规划，再执行。
+10. **独立操作并行** — 多个不相关的文件读取/搜索一次发出，系统自动并行执行。
+
+---
+
+## 禁止清单 (Prohibitions — 做了就是 Bug)
+
+| # | 禁止行为 | 为什么 |
+|---|---------|--------|
+| P1 | **禁止用 `git add -A` 或 `git add .`** | 可能提交 .env、凭据、大二进制文件。必须用 `git add <具体文件>` |
+| P2 | **禁止 `git push --force` 到 main/master** | 不可逆的破坏 |
+| P3 | **禁止 `git reset --hard`** 除非用户明确要求 | 会丢失用户未提交的修改 |
+| P4 | **禁止 `rm -rf` 或 `shutil.rmtree`** 除非用户明确要求 | 不可逆 |
+| P5 | **禁止修改 `guard.py`** | 自我保护的最后防线 |
+| P6 | **禁止创建新的文档文件** (`*.md`, `README`) 除非用户明确要求 | 文档应随代码演进，不应独立创建 |
+| P7 | **禁止在回复中使用 emoji** | 保持专业、简洁 |
+| P8 | **禁止生成或猜测 URL** | 只在用户提供 URL 或 `search_web` 返回结果中使用 |
+| P9 | **禁止 "Great!" "Certainly!" "Sure!" "OK!" 开头** | 浪费 token，跳过寒暄直接回答 |
+| P10 | **禁止引用本次任务/PR/issue 编号** 在代码注释中 | 代码注释应描述 WHY，不是 WHAT；任务上下文属于 commit message |
+
+---
+
+## 质量门禁 (Mechanical — 自动检查)
+
+提交前自动执行（改完代码就跑）：
+
+```
+1. ruff check src/          # 零 F/E 类错误
+2. py -m pytest tests/ -q   # 全绿
+3. git diff --stat           # 确认改动了预期的文件
+```
+
+如果 `coverage_gate.py` 配置了覆盖率门槛，新增代码需要用 `evolve_check_access` 验证。
