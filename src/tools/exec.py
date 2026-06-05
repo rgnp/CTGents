@@ -14,6 +14,9 @@ BLOCKED_COMMANDS = [
     "shutdown", "reboot", "poweroff",        # 关机
     "wget ", "curl ",                        # 下载（改成白名单模式，允许某些）
     "sudo ",                                 # 提权
+    # 文件破坏操作 — 必须走 write_file/delete_file/edit_file_lines 门禁
+    "rm ", "del ", "rd ", "rmdir ",          # 删除文件/目录
+    "move ", "ren ", "copy ", "xcopy ",      # 移动/重命名/复制
 ]
 
 # 只允许这些命令（空列表 = 不限制，只用黑名单）

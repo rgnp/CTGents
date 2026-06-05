@@ -529,7 +529,7 @@ def git_review(path: str | None = None) -> str:
     result += f"## LLM 审查\n{llm_review or '（无结果）'}"
     return result
 def git_commit(message: str | None = None, auto_stage: bool = True, path: str | None = None) -> str:
-    """暂存变更并提交。"""
+    """暂存变更并提交。含 .py 文件的变更必须先通过测试才能提交。"""
     if not _is_git_repo(path):
         return "当前目录不是 Git 仓库（未找到 .git 目录）"
 
@@ -545,6 +545,32 @@ def git_commit(message: str | None = None, auto_stage: bool = True, path: str | 
     r_check = _git(["status", "--porcelain"], str(workdir))
     if not r_check["stdout"].strip():
         return "没有需要提交的变更"
+
+    # ── 提交前验证：有 .py 变更时必须先通过测试 ──
+    changed = r_check["stdout"]
+    has_py_changes = any(
+        line.strip() and (line.split()[-1].endswith(".py") if len(line.split()) > 1 else False)
+        for line in changed.split("\n")
+    )
+    if has_py_changes:
+        import subprocess as sp
+        try:
+            test_result = sp.run(
+                ["py", "-m", "pytest", "-q", "--tb=line", "-p", "no:cacheprovider"],
+                cwd=str(workdir),
+                capture_output=True,
+                timeout=120,
+                encoding="utf-8", errors="replace",
+            )
+            if test_result.returncode != 0:
+                return (
+                    f"⛔ 提交被拒绝：测试未通过。请修复后重试。\n\n"
+                    f"{test_result.stdout[-1500:]}{test_result.stderr[-500:]}"
+                )
+        except sp.TimeoutExpired:
+            return "⛔ 提交被拒绝：测试超时（>120s）。请修复性能问题后重试。"
+        except FileNotFoundError:
+            pass  # pytest 不可用，跳过检查
 
     # 如果没有提供 message，自动分析变更生成
     if not message:
