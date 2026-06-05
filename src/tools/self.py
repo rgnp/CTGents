@@ -131,14 +131,13 @@ SYSTEM_MAP = {
         "why": "agent 需要跨会话记住用户偏好和重要事实。不是存了就完——会衰减、会浮现、会关联",
         "tools": ["remember", "recall", "forget"],
         "connections": {
-            "rag": "写入/删除记忆后自动重建 RAG 记忆索引",
             "main": "启动时 get_context() 注入上下文",
         },
     },
     "rag": {
         "name": "RAG 语义搜索",
         "files": "src/tools/rag.py",
-        "what": "TF-IDF 索引——代码（src/*.py）、研究（knowledge/）、记忆（memory/）三库独立",
+        "what": "TF-IDF 索引——代码（src/*.py）、研究知识库（knowledge/）独立索引",
         "why": "大规模代码库不能全塞上下文。按需检索——先索引（rag_index），再搜索（rag_query），查看状态（rag_status）",
         "tools": ["rag_index", "rag_query", "rag_status"],
         "connections": {
@@ -160,7 +159,6 @@ CONNECTION_GRAPH = [
     ("evolution", "coverage_gate", "改前检查 can_modify()"),
     ("evolution", "evolve", "结果记录到 JSONL 档案"),
     ("evolution", "git", "改前 commit 快照，失败 reset"),
-    ("memory", "rag", "记忆变更 → RAG 索引更新"),
     ("commands", "evolution_loop", "/evolve → 进化 prompt"),
     ("commands", "self", "/self → build_self_portrait()"),
 ]
