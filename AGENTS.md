@@ -69,6 +69,27 @@ tools/              12 个工具模块 (web/file/exec/code/think/memory/git/proj
 | C11 | **改后即测** — 代码修改完成后立即跑相关测试 | write_file/edit_file_lines 之后没有 pytest 调用 → 违规 |
 | C12 | **改后即 commit** — 每个独立任务完成后立即 git commit | 会话中有代码修改但没有 git commit → 违规 |
 | C13 | **lint 零错误** — `ruff check src/` 零错误再提交 | commit 前 ruff 有 F/E 类错误 → 违规 |
+| C14 | **文件放对目录** — 新建文件必须按类型放到约定目录 | 文件创建在了错误目录 → 违规 |
+
+### 目录约定
+
+```
+src/            Python 源码（.py）
+src/tools/      工具模块（agent 可调用的工具定义）
+tests/          测试文件（test_*.py）
+docs/           项目文档（*.md）
+memory/         持久化记忆（*.md）
+knowledge/      研究知识库
+sessions/       会话存档（自动生成）
+stats/          统计存档（自动生成）
+```
+
+**判断规则：**
+- `.py` 源码 → `src/` 或 `src/tools/`（如果是工具模块）
+- 测试文件 → `tests/test_*.py`
+- `.md` 文档 → `docs/`，但 `AGENTS.md` 和 `README.md` 在根目录
+- 记忆文件 → `memory/`
+- 绝不在根目录新建 `.py` 或随意散落 `.md`
 
 ---
 
@@ -105,10 +126,11 @@ tools/              12 个工具模块 (web/file/exec/code/think/memory/git/proj
 | P4 | **禁止 `rm -rf` 或 `shutil.rmtree`** 除非用户明确要求 | 不可逆 |
 | P5 | **禁止修改 `guard.py`** | 自我保护的最后防线 |
 | P6 | **禁止创建新的文档文件** (`*.md`, `README`) 除非用户明确要求 | 文档应随代码演进，不应独立创建 |
-| P7 | **禁止在回复中使用 emoji** | 保持专业、简洁 |
-| P8 | **禁止生成或猜测 URL** | 只在用户提供 URL 或 `search_web` 返回结果中使用 |
-| P9 | **禁止 "Great!" "Certainly!" "Sure!" "OK!" 开头** | 浪费 token，跳过寒暄直接回答 |
-| P10 | **禁止引用本次任务/PR/issue 编号** 在代码注释中 | 代码注释应描述 WHY，不是 WHAT；任务上下文属于 commit message |
+| P7 | **禁止在项目根目录创建非标准文件** — 不在根目录新建 `.py` `.json` `.txt` `.log` | 根目录只有 `AGENTS.md` `README.md` `LICENSE` `Makefile` `pyproject.toml` `requirements.txt` `run.py` `.editorconfig` `.env.example` `.gitignore` `.pre-commit-config.yaml` |
+| P8 | **禁止在回复中使用 emoji** | 保持专业、简洁 |
+| P9 | **禁止生成或猜测 URL** | 只在用户提供 URL 或 `search_web` 返回结果中使用 |
+| P10 | **禁止 "Great!" "Certainly!" "Sure!" "OK!" 开头** | 浪费 token，跳过寒暄直接回答 |
+| P11 | **禁止引用本次任务/PR/issue 编号** 在代码注释中 | 代码注释应描述 WHY，不是 WHAT；任务上下文属于 commit message |
 
 ---
 
