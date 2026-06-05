@@ -19,7 +19,7 @@ class TestPlanModeTools:
 
     def test_normal_mode_all_tools(self):
         tools = get_tools()
-        assert len(tools) == 37, f"Expected 37 tools, got {len(tools)}"
+        assert len(tools) == 39, f"Expected 39 tools, got {len(tools)}"
         names = {t["function"]["name"] for t in tools}
         assert "write_file" in names
         assert "edit_file_lines" in names
@@ -28,7 +28,7 @@ class TestPlanModeTools:
     def test_plan_mode_filters_write_tools(self):
         set_plan_mode(True)
         tools = get_tools()
-        assert len(tools) == 29, f"Expected 29 tools, got {len(tools)}"
+        assert len(tools) == 31, f"Expected 31 tools, got {len(tools)}"
         names = {t["function"]["name"] for t in tools}
         assert "write_file" not in names
         assert "edit_file_lines" not in names
@@ -45,9 +45,9 @@ class TestPlanModeTools:
 
     def test_restore_after_plan_mode(self):
         set_plan_mode(True)
-        assert len(get_tools()) == 29
+        assert len(get_tools()) == 31
         set_plan_mode(False)
-        assert len(get_tools()) == 37
+        assert len(get_tools()) == 39
 
     def test_is_plan_mode_flag(self):
         assert not is_plan_mode()

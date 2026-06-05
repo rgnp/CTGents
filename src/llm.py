@@ -61,6 +61,8 @@ TOOL_LABELS: dict[str, str] = {
     "rag_index":     "RAG 索引",
     "rag_query":     "RAG 搜索",
     "rag_status":    "RAG 状态",
+    "rag_index_research": "研究索引",
+    "rag_search":    "研究搜索",
     "evolve_query":    "进化查询",
     "evolve_check_access": "权限检查",
     "evolve_coverage": "覆盖率报告",
@@ -739,7 +741,7 @@ _PARALLEL_SAFE: frozenset[str] = frozenset({
     "grep_code",
     "search_web", "read_page",
     "git_status", "git_diff", "git_log", "git_branch",
-    "rag_query", "rag_status",
+    "rag_query", "rag_status", "rag_search",
     "recall",
     "scan_project", "check_project", "docs_sync_check", "generate_agents_md",
 })

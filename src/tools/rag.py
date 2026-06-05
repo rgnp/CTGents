@@ -189,6 +189,35 @@ TOOLS_RAG = [
             "parameters": {"type": "object", "properties": {}, "required": []},
         },
     },
+    {
+        "type": "function",
+        "function": {
+            "name": "rag_index_research",
+            "description": "索引研究知识库：扫描 knowledge/ 目录中的所有 .md 文件，建立语义索引。论文笔记、研究idea、领域知识总结都应放在 knowledge/ 下，然后调用此工具索引。之后用 rag_search(query) 搜索。",
+            "parameters": {"type": "object", "properties": {}, "required": []},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "rag_search",
+            "description": "搜索研究知识库（论文笔记、idea、知识总结）。与 rag_query 不同——rag_query 搜代码，rag_search 搜研究内容。需先运行 rag_index_research 建立索引。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {
+                        "type": "string",
+                        "description": "搜索关键词，如 '轨迹预测'、'自注意力机制'",
+                    },
+                    "top_k": {
+                        "type": "integer",
+                        "description": "返回前 N 个结果，默认 5",
+                    },
+                },
+                "required": ["query"],
+            },
+        },
+    },
 ]
 
 # ═══════════════════════════════════════════════════════════════
@@ -1083,9 +1112,14 @@ def get_index_status(path: str | None = None) -> str:
     project_root = _find_project_root(path)
     meta = _load_meta(project_root)
     index = _load_index(project_root)
+    research_idx = _load_doc_index("research")
 
     if index is None:
-        return "📭 RAG 索引状态：未建立\n\n请运行 `rag_index()` 建立索引。"
+        parts = ["📭 RAG 索引状态：代码索引未建立\n\n请运行 `rag_index()` 建立索引。"]
+        if research_idx:
+            n_docs = len(research_idx.get("documents", []))
+            parts.append(f"研究索引已存在 ({n_docs} 个文档块)。用 rag_search 搜索。")
+        return "\n".join(parts)
 
     updated = meta.get("updated_at", 0)
     if updated:
@@ -1093,14 +1127,10 @@ def get_index_status(path: str | None = None) -> str:
     else:
         updated_str = "未知"
 
-    # 统计语言分布
-    lang_count: Counter = Counter()
-    for doc in index.documents:
-        lang_count[doc.language] += 1
-    lang_stats = "\n".join(
-        f"    {lang}: {count} 个块"
-        for lang, count in lang_count.most_common()
-    )
+    research_status = ""
+    if research_idx:
+        n_docs = len(research_idx.get("documents", []))
+        research_status = f"\n   📚 研究索引: {n_docs} 个文档块 (用 rag_search 搜索)"
 
     return (
         f"📊 RAG 索引状态\n"
@@ -1108,10 +1138,8 @@ def get_index_status(path: str | None = None) -> str:
         f"   📁 文件数: {meta.get('total_files', '?')}\n"
         f"   🧩 代码块: {index.num_docs}\n"
         f"   🌐 语言: {', '.join(meta.get('languages', []))}\n"
-        f"   ⏱️  上次更新: {updated_str}\n"
-        f"\n"
-        f"   📦 语言分布:\n"
-        f"{lang_stats}"
+        f"   ⏱️  上次更新: {updated_str}"
+        f"{research_status}"
     )
 
 
@@ -1232,86 +1260,49 @@ def _search_doc_index(index_data: dict, query: str, top_k: int = 5) -> list[dict
 
 
 def index_research_content() -> str:
-    """索引研究知识库（论文摘要 + 笔记）到 RAG。"""
-    try:
-        from .research import _get_db
-        import json as _json
-    except Exception:
-        return "研究知识库模块不可用。"
+    """索引研究知识库：扫描 knowledge/ 目录中的 .md 文件建立语义索引。
 
-    db = _get_db()
+    论文、笔记、idea 都以 markdown 文件存在 knowledge/ 下，
+    调用此工具后 RAG 就能搜索到它们。
+    """
     chunks: list[DocChunk] = []
 
-    # 索引论文摘要
-    papers = db.execute("SELECT id, title, abstract FROM papers WHERE abstract != ''").fetchall()
-    for p in papers:
-        if p["abstract"]:
-            chunks.append(DocChunk(p["id"], p["title"], p["abstract"], "paper"))
-
-    # 索引笔记
-    notes = db.execute("SELECT id, title, content FROM notes").fetchall()
-    for n in notes:
-        # 笔记按句子分块（每块最多 500 字符）
-        content = n["content"]
-        if len(content) > 500:
-            sentences = re.split(r'(?<=[。.!！?\n])\s*', content)
-            buf = ""
-            for sent in sentences:
-                if len(buf) + len(sent) > 500 and buf:
-                    chunks.append(DocChunk(f"note_{n['id']}", n["title"], buf.strip(), "note"))
-                    buf = sent
-                else:
-                    buf += sent
-            if buf.strip():
-                chunks.append(DocChunk(f"note_{n['id']}", n["title"], buf.strip(), "note"))
-        else:
-            chunks.append(DocChunk(f"note_{n['id']}", n["title"], content, "note"))
-
-    db.close()
-
-    # ── 索引 knowledge/ 目录中的研究笔记 ──
     knowledge_dir = Path(__file__).parent.parent.parent / "knowledge"
-    if knowledge_dir.exists():
-        for md_file in knowledge_dir.rglob("*.md"):
-            try:
-                content = md_file.read_text(encoding="utf-8")
-                if len(content) < 50:
+    if not knowledge_dir.exists():
+        return "knowledge/ 目录不存在。先用 write_file 创建研究笔记，再用此工具索引。"
+
+    for md_file in knowledge_dir.rglob("*.md"):
+        try:
+            content = md_file.read_text(encoding="utf-8")
+            if len(content) < 50:
+                continue
+            title = md_file.stem.replace("-", " ").replace("_", " ")
+            paragraphs = content.split("\n\n")
+            buf = ""
+            for para in paragraphs:
+                para = para.strip()
+                if not para:
                     continue
-                # 用文件名作为标题
-                title = md_file.stem.replace("-", " ").replace("_", " ")
-                # 按段落分块（每块最多 800 字符）
-                paragraphs = content.split("\n\n")
-                buf = ""
-                for para in paragraphs:
-                    para = para.strip()
-                    if not para:
-                        continue
-                    if len(buf) + len(para) > 800 and buf:
-                        chunks.append(DocChunk(
-                            f"knowledge:{md_file.relative_to(knowledge_dir)}",
-                            title, buf.strip(), "knowledge"))
-                        buf = para
-                    else:
-                        buf += ("\n\n" if buf else "") + para
-                if buf.strip():
+                if len(buf) + len(para) > 800 and buf:
                     chunks.append(DocChunk(
                         f"knowledge:{md_file.relative_to(knowledge_dir)}",
                         title, buf.strip(), "knowledge"))
-            except Exception:
-                pass
+                    buf = para
+                else:
+                    buf += ("\n\n" if buf else "") + para
+            if buf.strip():
+                chunks.append(DocChunk(
+                    f"knowledge:{md_file.relative_to(knowledge_dir)}",
+                    title, buf.strip(), "knowledge"))
+        except Exception:
+            continue
 
     if not chunks:
-        return "知识库为空，没有可索引的内容。先用 search_papers 添加论文，用 save_note 记录笔记。"
+        return "knowledge/ 目录为空或文件内容不足（需 ≥50 字符）。先用 write_file 在 knowledge/ 下创建研究笔记。"
 
     n = _index_doc_chunks(chunks, "research")
-    paper_n = sum(1 for c in chunks if c.doc_type == "paper")
-    note_n = sum(1 for c in chunks if c.doc_type == "note")
-    knowledge_n = sum(1 for c in chunks if c.doc_type == "knowledge")
-    parts = [f"已索引 {n} 个文档块"]
-    if paper_n: parts.append(f"{paper_n} 篇论文")
-    if note_n: parts.append(f"{note_n} 条笔记")
-    if knowledge_n: parts.append(f"{knowledge_n} 篇知识库文档")
-    return "（" + "、".join(parts) + "）。使用 rag_query(query, scope='research') 搜索。"
+    parts = [f"已索引 {n} 个文档块", f"{len(chunks)} 篇知识库文档"]
+    return "（" + "、".join(parts) + "）。使用 rag_search(query) 搜索，rag_query(query) 搜代码。"
 
 
 def query_research(query: str, top_k: int = 5) -> str:
@@ -1331,7 +1322,7 @@ def query_research(query: str, top_k: int = 5) -> str:
         src = r["source"]
         lines.append(f"{icon} [{src}] {r['title'][:80]}  (相关度 {r['score']})")
         lines.append(f"   {r['content'][:150]}")
-        lines.append(f"   用 rag_read('{src}') 查看完整内容")
+        lines.append(f"用 read_file 查看详细内容")
     return "\n".join(lines)
 
 
@@ -1367,7 +1358,7 @@ def browse_research() -> str:
                 lines.append(f"      {info['first_line']}")
         lines.append("")
 
-    lines.append("用 rag_query('关键词', scope='research') 搜索，rag_read('source_id') 查看全文。")
+    lines.append("用 rag_search(query) 搜索，read_file 查看详细内容。")
     return "\n".join(lines)
 
 
@@ -1411,4 +1402,11 @@ def execute(name: str, args: dict) -> str:
         )
     elif name == "rag_status":
         return get_index_status()
+    elif name == "rag_index_research":
+        return index_research_content()
+    elif name == "rag_search":
+        return query_research(
+            query=args["query"],
+            top_k=args.get("top_k", 5),
+        )
     return f"未知 RAG 工具: {name}"

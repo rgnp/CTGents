@@ -137,13 +137,12 @@ SYSTEM_MAP = {
     "rag": {
         "name": "RAG 语义搜索",
         "files": "src/tools/rag.py",
-        "what": "TF-IDF 索引——代码（src/*.py）、研究知识库（knowledge/）独立索引",
-        "why": "大规模代码库不能全塞上下文。按需检索——先索引（rag_index），再搜索（rag_query），查看状态（rag_status）",
-        "tools": ["rag_index", "rag_query", "rag_status"],
+        "what": "TF-IDF 索引——代码（src/*.py）和知识库（knowledge/*.md）双库独立。rag_index 索引代码，rag_index_research 索引研究笔记，rag_query/rag_search 分别搜索",
+        "why": "两套独立索引：代码和知识库数据量差异大，分开搜索更精准",
+        "tools": ["rag_index", "rag_query", "rag_status", "rag_index_research", "rag_search"],
         "connections": {
             "tools/__init__": "写入文件后增量更新代码索引",
-            "research": "论文/笔记写入后更新研究索引",
-            "memory": "记忆变更后更新记忆索引",
+            "knowledge": "knowledge/ 目录中的研究笔记通过 rag_index_research 建立索引",
         },
     },
 }
