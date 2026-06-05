@@ -639,6 +639,24 @@ def _cleanup_tool_results(ctx) -> None:
     if len(tool_names) > 10:
         summary += f" 等共 {len(tool_names)} 种工具"
 
+    # 找到发起这些工具调用的 assistant 消息，去掉 tool_calls 字段
+    for i in range(last_user, len(log)):
+        m = log[i]
+        if m.get("role") == "assistant" and m.get("tool_calls"):
+            tc_ids = {tc.get("id", "") for tc in m["tool_calls"]}
+            deleted_call_ids = {
+                log[idx].get("tool_call_id", "")
+                for idx in tool_indices
+            }
+            if tc_ids and tc_ids == deleted_call_ids:
+                # 只移除 tool_calls 字段，保留 content（如果有）
+                if m.get("content"):
+                    m.pop("tool_calls", None)
+                else:
+                    # 无文本 → 替换为归档摘要
+                    log[i] = {"role": "assistant", "content": summary}
+                break
+
     # 第一条工具结果替换为摘要，其余删除
     first_idx = tool_indices[0]
     log[first_idx] = {"role": "system", "content": summary, "_volatile": True}
