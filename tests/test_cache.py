@@ -1,77 +1,12 @@
 """测试 Phase 1-3 缓存优化：API消息构建 + 工具结果压缩 + 对话历史压缩。"""
 
 from src.llm import (
-    _build_api_messages,
     _compress_tool_result,
     _compact_context,
     _is_topic_switch,
     _make_brief_summary,
     _TOOL_RESULT_COMPRESS_THRESHOLD,
 )
-
-
-class TestBuildApiMessages:
-    """测试 _build_api_messages：系统消息排前，_volatile 过滤，非系统保持追加顺序。"""
-
-    def test_system_messages_first(self):
-        msgs = [
-            {"role": "user", "content": "1"},
-            {"role": "assistant", "content": "2"},
-            {"role": "system", "content": "s1"},
-        ]
-        api = _build_api_messages(msgs)
-        assert api[0]["role"] == "system"
-        assert api[1]["role"] == "user"
-        assert api[2]["role"] == "assistant"
-
-    def test_volatile_is_filtered(self):
-        msgs = [
-            {"role": "user", "content": "u"},
-            {"role": "system", "content": "mode", "_volatile": True},
-        ]
-        api = _build_api_messages(msgs)
-        volatile_in_api = [m for m in api if m.get("_volatile")]
-        assert len(volatile_in_api) == 0
-
-    def test_non_volatile_system_kept(self):
-        msgs = [
-            {"role": "user", "content": "u"},
-            {"role": "system", "content": "static rule"},
-        ]
-        api = _build_api_messages(msgs)
-        assert len(api) == 2
-        assert api[0]["role"] == "system"
-
-    def test_mixed_volatile_and_normal(self):
-        msgs = [
-            {"role": "user", "content": "1"},
-            {"role": "system", "content": "s1", "_volatile": True},
-            {"role": "assistant", "content": "2"},
-            {"role": "system", "content": "s2"},
-        ]
-        api = _build_api_messages(msgs)
-        roles = [m["role"] for m in api]
-        # _volatile 不影响 API 发送，仅影响持久化；两个 system 都发送
-        assert roles == ["system", "system", "user", "assistant"]
-
-    def test_non_system_order_preserved(self):
-        msgs = [
-            {"role": "user", "content": "u1"},
-            {"role": "assistant", "content": "a1", "tool_calls": []},
-            {"role": "tool", "content": "t1"},
-            {"role": "user", "content": "u2"},
-        ]
-        api = _build_api_messages(msgs)
-        non_system = [m for m in api if m["role"] != "system"]
-        assert [m["content"] for m in non_system] == ["u1", "a1", "t1", "u2"]
-
-    def test_all_system(self):
-        msgs = [
-            {"role": "system", "content": "s1"},
-            {"role": "system", "content": "s2"},
-        ]
-        api = _build_api_messages(msgs)
-        assert len(api) == 2
 
 
 class TestCompactContext:
@@ -122,10 +57,6 @@ class TestCompactContext:
         # append-only: 不会减少消息，只追加摘要
         assert len(result) >= len(msgs)
         assert any("⏪" in m.get("content", "") for m in result if m["role"] == "system")
-
-
-    def test_empty_input(self):
-        assert _build_api_messages([]) == []
 
 
 class TestCompressToolResult:

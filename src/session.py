@@ -43,21 +43,6 @@ def get_session_name(session_id: str) -> str:
         return session_id
 
 
-def rename_session(session_id: str, name: str) -> None:
-    """重命名会话。"""
-    meta = {}
-    meta_path = _meta_path(session_id)
-    if os.path.exists(meta_path):
-        try:
-            with open(meta_path, encoding="utf-8") as f:
-                meta = json.load(f)
-        except Exception:
-            pass
-    meta["name"] = name
-    os.makedirs(os.path.dirname(meta_path), exist_ok=True)
-    with open(meta_path, "w", encoding="utf-8") as f:
-        json.dump(meta, f, ensure_ascii=False)
-
 
 
 def delete_session(session_id: str) -> None:

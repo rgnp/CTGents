@@ -382,49 +382,8 @@ def list_models() -> str:
 
 
 # ═══════════════════════════════════════════════════════════════
-# 任务路由
+# 模型选择
 # ═══════════════════════════════════════════════════════════════
-
-# 简单任务关键词（用 Flash 处理）
-_SIMPLE_TASK_KEYWORDS = [
-    "查看", "读取", "搜索", "查找", "列出", "显示", "统计",
-    "状态", "日志", "分支", "date", "time", "谁", "什么",
-    "read", "show", "list", "status", "log", "find", "search",
-    "git_status", "git_log", "git_branch", "list_files", "read_file",
-    "scan_project", "git_diff",
-]
-
-# 复杂任务关键词（用 Pro 处理）
-_COMPLEX_TASK_KEYWORDS = [
-    "写", "创建", "修改", "重构", "优化", "调试", "设计",
-    "实现", "修复", "重构", "部署", "架构", "分析",
-    "write", "create", "implement", "refactor", "optimize",
-    "debug", "fix", "design", "deploy", "重构", "架构",
-    "git_commit", "git_push",
-]
-
-
-def _estimate_task_complexity(user_input: str) -> str:
-    """根据用户输入预估任务复杂度，返回 'flash' 或 'pro'。"""
-    text = user_input.lower()
-
-    # 如果涉及写代码/修改/重构，用 Pro
-    for kw in _COMPLEX_TASK_KEYWORDS:
-        if kw.lower() in text:
-            return "pro"
-
-    # 如果只是查看/读取，用 Flash
-    for kw in _SIMPLE_TASK_KEYWORDS:
-        if kw.lower() in text:
-            return "flash"
-
-    # 如果包含代码块或较长文本，用 Pro
-    if "```" in text or len(user_input) > 200:
-        return "pro"
-
-    # 默认用 Flash（省钱）
-    return "flash"
-
 
 def auto_select_model(user_input: str) -> LLMBackend:
     """始终使用 Pro。"""
@@ -772,25 +731,6 @@ def _make_brief_summary(messages: list[dict], max_len: int = 300) -> str:
 
 
 # ═══════════════════════════════════════════════════════════════
-# _build_api_messages 已由 CacheContext.send() 替代
-# 保留一个兼容包装以便渐进迁移
-# ═══════════════════════════════════════════════════════════════
-
-def _build_api_messages(messages: list[dict]) -> list[dict]:
-    """向后兼容：从扁平 messages 构建 API 消息。
-
-    ⚠️ 已废弃：新代码请使用 CacheContext.send()。
-    """
-    from .cache_context import CacheContext
-    # 临时构建 CacheContext 来复用 send() 逻辑
-    prefix = [m for m in messages if m.get("role") == "system"]
-    log = [m for m in messages if m.get("role") != "system"]
-    tmp = CacheContext(prefix_msgs=prefix, log_msgs=log)
-    return tmp.send(validate=False)
-
-
-
-# ═══════════════════════════════════════════════════════════════
 # SAFE — 工具并行分发
 # ═══════════════════════════════════════════════════════════════
 
@@ -829,12 +769,6 @@ def _update_safe_stats(n_parallel: int, n_serial: int) -> None:
         _safe_stats["batches"] += 1
         _safe_stats["parallel_tools"] += n_parallel
         _safe_stats["serial_tools"] += n_serial
-
-
-def _compute_prefix_hash(messages: list[dict]) -> tuple[str, int, int]:
-    """Calculate system message prefix hash. Delegates to cache_context module."""
-    from .cache_context import compute_prefix_hash
-    return compute_prefix_hash(messages)
 
 
 def _execute_tool_batch(approved: list[tuple]) -> list[str]:

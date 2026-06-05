@@ -22,7 +22,6 @@ import logging
 import re
 import subprocess
 import time
-from enum import Enum
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
@@ -30,12 +29,6 @@ logger = logging.getLogger(__name__)
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
 # ── 分层定义 ──
-
-class AccessLevel(Enum):
-    READ_ONLY = "read_only"
-    WRITE_WITH_BACKUP = "write"
-    RESTRICTED = "restricted"
-
 
 FILE_TIERS: dict[str, dict] = {
     "tier_0_open": {
@@ -200,23 +193,6 @@ def get_overall_coverage() -> float:
     total, files, lines = _run_coverage()
     _coverage_cache = (total, files, lines, now)
     return total
-
-
-def get_file_coverage(filepath: str) -> float | None:
-    """获取单个文件的覆盖率（0.0-1.0），无数据返回 None。"""
-    global _coverage_cache
-    if _coverage_cache is None or len(_coverage_cache) < 4 or (time.time() - _coverage_cache[3]) >= 60:
-        get_overall_coverage()  # refresh
-    if _coverage_cache is None:
-        return None
-
-    _, files, _, _ = _coverage_cache
-    fp = str(Path(filepath).resolve())
-    try:
-        rel = str(Path(fp).relative_to(PROJECT_ROOT)).replace("\\", "/")
-    except ValueError:
-        return None
-    return files.get(rel)
 
 
 def _get_covered_lines(file_rel: str) -> set[int]:
