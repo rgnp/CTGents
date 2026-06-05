@@ -161,8 +161,8 @@ CONNECTION_GRAPH = [
     ("evolution", "evolve", "结果记录到 JSONL 档案"),
     ("evolution", "git", "改前 commit 快照，失败 reset"),
     ("memory", "rag", "记忆变更 → RAG 索引更新"),
-    ("commands", "evolution_loop", "/evolve /research → 进化 prompt"),
-    ("commands", "self", "/self /health → build_self_portrait()"),
+    ("commands", "evolution_loop", "/evolve → 进化 prompt"),
+    ("commands", "self", "/self → build_self_portrait()"),
 ]
 
 
@@ -231,19 +231,16 @@ def _architecture_section() -> str:
         "### 设计哲学",
         "1. 缓存优先 — DeepSeek 前缀缓存按字节匹配，前缀不变则全命中。",
         "   因此 system prompt 极简（24 token），粘性模型避免切换，工具定义序列化一致。",
-        "2. 渐进披露 — 不是所有信息都塞上下文。自省用 self 工具，搜索用 RAG，研究用子代理。",
-        "3. 无文件锁 — agent 理论上能改任何代码，靠函数级关联测试门禁约束：修改前须有测试保护。",
-        "4. 自洽 — 写完代码自动刷新 RAG/覆盖率/插件，不需要人工记得。",
+        "2. 渐进披露 — 不是所有信息都塞上下文。自省用 self 工具，搜索用 RAG。",
+        "3. 测试门禁 — agent 理论上能改任何代码，靠 is_protected() 硬保护 guard.py + 覆盖率门槛控制。",
+        "4. 自洽 — 写完代码自动更新 RAG 索引，不需要人工记得。",
         "",
         "### 为什么是这个结构",
         "main.py 是外壳（I/O 循环 + 启动初始化），llm.py 是大脑（模型调用 + 工具批处理），",
         "tools/ 是手（工具操作文件/网络/代码/git），cache_context.py 是记忆（三段式上下文），",
-        "guard.py 是免疫系统（is_protected 保护关键文件）。",
-        "",
-        "### 完整文档",
-        "项目根目录 AGENTS.md 包含准确的架构文件清单、常用命令、设计决策。",
-        "随时用 read_file('AGENTS.md') 查看最新版——它不塞 prefix，按需读取。",
-        "进化/研究/记忆/RAG 是上层能力——它们通过工具暴露给 LLM，LLM 自主决定何时调用。",
+        "guard.py 是免疫系统（is_protected 保护关键文件）。"
+        "\n"
+        "进化/记忆/RAG 是上层能力——它们通过工具暴露给 LLM，LLM 自主决定何时调用。",
         "",
         "### 数据流",
         "```",
@@ -257,8 +254,8 @@ def _architecture_section() -> str:
         "",
         "### 启动流程",
         "1. 加载环境配置 → 构建 CacheContext prefix",
-        "2. 构建 CacheContext prefix（env msg + 项目上下文 + RAG 状态）",
-        "3. 注入覆盖率门禁摘要到 log",
+        "2. prefix 包含 AGENTS.md（行为约束）+ 项目上下文",
+        "3. 追加 volatile 系统消息（记忆/RAG/反思）到 log",
         "4. 进入 read–eval–print 循环",
         "",
         "### 当前 src/ 目录树",
@@ -300,8 +297,8 @@ def _runtime_section() -> str:
 
     # 模型
     try:
-        from ..llm import get_current_model_name, _session_model
-        lines.append(f"模型: {get_current_model_name()} | 粘性: {_session_model or '未锁定（下次调用自动选 Pro）'}")
+        from ..llm import get_current_model_name
+        lines.append(f"模型: {get_current_model_name()}")
     except Exception as e:
         lines.append(f"模型: 获取失败 ({e})")
 
