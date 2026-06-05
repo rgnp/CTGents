@@ -424,7 +424,7 @@ def _cmd_plan(r: CmdResult, _ctx, _args, _sid) -> None:
             "📋 Plan Mode 已激活 — 写工具已禁用。\n"
             "   可用: 读文件/搜索/分析/思考\n"
             "   禁用: write_file / edit / delete / git_commit\n"
-            "   输入非指令内容或再次 /plan 退出。"
+            "   LLM 完成只读分析后自动退出。"
         )
 
 # ═══════════════════════════════════════════════════════════════

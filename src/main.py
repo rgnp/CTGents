@@ -364,10 +364,6 @@ def main() -> None:
             if not user_input:
                 continue
 
-            if is_plan_mode() and not user_input.startswith("/"):
-                set_plan_mode(False)
-                print("🔓 收到任务 — Plan Mode 已退出，写工具已恢复。\n")
-
             if user_input.startswith("/"):
                 # ── 热加载：拦截 /reload，不经过旧 dispatch ──
                 if user_input.lower().startswith("/reload"):
@@ -449,6 +445,9 @@ def main() -> None:
                 session_id = sid[0]
                 if has_output():
                     print()
+                if is_plan_mode():
+                    set_plan_mode(False)
+                    print("🔓 分析完成 — Plan Mode 已退出。")
                 session_id = _run_suggest_loop(ctx, session_id)
             except BaseException as e:
                 # ── KeyboardInterrupt：用户主动中断 ──
