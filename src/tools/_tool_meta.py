@@ -29,6 +29,7 @@ _BUILTIN_MODULES: list[tuple[str, str, str]] = [
     (".rag",       "TOOLS_RAG",    "execute"),
     (".evolve",    "TOOLS_EVOLVE", "execute"),
     (".self",      "TOOLS_SELF",   "execute"),
+    (".analyzer_tool", "TOOLS_ANALYZER", "execute"),
 ]
 
 # ── 别名：不在任何 TOOLS_* 列表中但被消费者引用的工具名 ──

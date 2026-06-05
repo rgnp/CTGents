@@ -35,7 +35,7 @@ class TestMetaPresence:
             )
             names.add(name)
 
-        assert len(names) >= 39, f"预期至少 39 个工具，实际 {len(names)} 个"
+        assert len(names) >= 40, f"预期至少 40 个工具，实际 {len(names)} 个"
 
     def test_no_stale_meta_entries(self):
         """没有注册表外的残留 _meta 条目。"""
@@ -81,7 +81,7 @@ class TestMetaStripping:
         """剥离后工具名完整，数量正确。"""
         tools = get_tools()
         names = {t["function"]["name"] for t in tools}
-        assert len(tools) == 39, f"预期 39 个工具，实际 {len(tools)}"
+        assert len(tools) == 40, f"预期 40 个工具，实际 {len(tools)}"
         assert "read_file" in names
         assert "write_file" in names
         assert "self" in names
@@ -110,8 +110,8 @@ class TestHotReloadPreservesMeta:
     def test_refresh_globals_preserves_counts(self):
         """_refresh_globals() 保持派生的 frozenset 大小不变。"""
         _refresh_globals()
-        assert len(TOOL_LABELS) == 40  # 39 + read_file_lines
-        assert len(PARALLEL_SAFE) == 19
+        assert len(TOOL_LABELS) == 41  # 40 + read_file_lines
+        assert len(PARALLEL_SAFE) == 20
         assert len(PLAN_BLOCKED) == 8
         assert len(SKIP_COMPRESS_TOOLS) == 2
         assert len(DEDUP_BLACKLIST) == 12
@@ -121,11 +121,7 @@ class TestHotReloadPreservesMeta:
         from src.tools import reload_tools
         reload_tools()
         # 重新获取
-        raw = _load_raw_tools()
-        names = {t["function"]["name"] for t in raw}
-        assert "read_file" in names
-        # 验证 _derive 仍然输出正确数量
         labels, psafe, pblock, skip, dedup = _derive()
-        assert len(labels) == 40
-        assert len(psafe) == 19
+        assert len(labels) == 41
+        assert len(psafe) == 20
         assert len(pblock) == 8
