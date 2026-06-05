@@ -243,12 +243,17 @@ def _cmd_context(r: CmdResult, ctx, _args, _sid) -> None:
     else:
         status_tag = "✅ 正常"
 
+    # Plan Mode 状态
+    from .tools import is_plan_mode as _is_plan
+    plan_tag = "📋 只读分析中" if _is_plan() else "🔧 正常"
+
     lines = [
         "╔══════════════════════════════╗",
         "║      对话上下文诊断          ║",
         "╚══════════════════════════════╝",
         "",
         f"  状态:      {status_tag}",
+        f"  模式:      {plan_tag}",
         f"  Token:     {used_tokens:,} / {MAX_CONTEXT_TOKENS:,} ({usage_pct:.1f}%)",
         f"  消息数:    {msg_count} 条",
         "",
