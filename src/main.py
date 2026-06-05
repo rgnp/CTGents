@@ -270,34 +270,6 @@ def _reload_dispatch():
     return True, f"已热加载：{'、'.join(loaded_items)}。LLM 下次请求将自动获取最新工具定义。"
 
 
-def _run_suggest_loop(ctx: CacheContext, session_id: str | None) -> str | None:
-    """主动建议 + 修复闭环：扫描工具调用记录，发现问题则询问用户是否修复。"""
-    try:
-        from .suggest import check as _suggest_check
-        tip, repair = _suggest_check()
-        if not tip:
-            return session_id
-        print(f"\n💡 {tip}")
-        ans = input("  要修吗？(Y/n) ").strip().lower()
-        if ans == "n":
-            return session_id
-        on_token, has_output = _make_display()
-        sid = [session_id]
-        _start_esc_listener()
-        try:
-            run_conversation(
-                ctx, repair, on_token, _on_tool,
-                on_progress=lambda sid=sid: sid.__setitem__(0, save_session(ctx.all, sid[0])),
-                session_id=session_id,
-            )
-        finally:
-            _stop_esc_listener()
-        if has_output():
-            print()
-        return sid[0]
-    except Exception:
-        return session_id
-
 
 # ── 主入口 ──
 
@@ -413,7 +385,6 @@ def main() -> None:
                         session_id = sid[0]
                         if has_output():
                             print()
-                        session_id = _run_suggest_loop(ctx, session_id)
                 continue
 
             try:
@@ -443,7 +414,6 @@ def main() -> None:
                 if is_plan_mode():
                     set_plan_mode(False)
                     print("🔓 分析完成 — Plan Mode 已退出。")
-                session_id = _run_suggest_loop(ctx, session_id)
             except BaseException as e:
                 # ── KeyboardInterrupt：用户主动中断 ──
                 if isinstance(e, KeyboardInterrupt):

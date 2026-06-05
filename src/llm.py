@@ -878,11 +878,8 @@ def run_conversation(
     on_progress: Callable[[], None] | None = None,
     session_id: str = "",
 ) -> str:
-    """处理一轮对话：自动路由 + 工具调用循环。
-
-    Args:
-        ctx: CacheContext 实例（三段式上下文管理器）
-    """
+    """处理一轮对话：自动路由 + 工具调用循环。"""
+    _MAX_TOOL_LOOPS = 20  # 单轮对话最多 20 次工具循环
     # ── 运行时守卫：防止误传 list[dict] 等错误类型 ──
     if not hasattr(ctx, "log") or not hasattr(ctx, "all"):
         raise TypeError(
@@ -917,6 +914,13 @@ def run_conversation(
         on_token(f"\n[🤖 使用 {model_name} 处理此任务]\n\n")
 
     while True:
+        # 防止无限工具调用循环
+        tool_loops = sum(1 for m in ctx.log if m.get("role") == "tool")  # approximate
+        if tool_loops >= _MAX_TOOL_LOOPS:
+            return (
+                f"工具调用次数已达上限（{_MAX_TOOL_LOOPS}）。"
+                "请精简操作或分步完成。"
+            )
         used = count_messages_tokens(ctx.all)
         limit = int(MAX_CONTEXT_TOKENS * TOOL_LOOP_THRESHOLD)
         if used >= limit:
@@ -1003,8 +1007,7 @@ def run_conversation(
                     elif new_ctx and old_idx < 0:
                         ctx.log.append({"role": "system", "content": new_ctx, "_volatile": True})
                     clear_dirty()
-                if on_progress:
-                    on_progress()
+                # on_progress 不在循环内调用——移到最后只调用一次
             except Exception:
                 # 异常时补上 tool 结果消息，防止下次 API 调用因缺少 tool 消息而 400
                 for tc_data in tool_calls:
