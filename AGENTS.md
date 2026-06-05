@@ -51,11 +51,16 @@ tools/              17 个工具模块
 
 ### 修改代码后
 
-4. **自动跑测试** — 改完立即跑，不等用户提醒：
-   - 单文件 → `py -m pytest tests/test_xxx.py -v`
-   - 多文件 → `evolve_validate(changed_files=[...])`
+4. **必须 git commit** — 每次代码修改完成后立即提交，不等用户提醒：
+   - `git add <改动的文件>`
+   - `git commit -m "<简明描述修改内容>"`
+   - 每完成一个独立任务就 commit 一次，保持粒度细
 
-5. **lint 干净** — `ruff check src/` 零错误再提交。
+5. **自动跑测试** — 改完立即跑，不等用户提醒：
+   - 单文件 → `py -m pytest tests/test_xxx.py -v`
+   - 多文件 → 跑全量 `py -m pytest tests/`
+
+6. **lint 干净** — `ruff check src/` 零错误再提交。
 
 6. **覆盖率不降** — 新增代码用 `evolve_check_access(filepath, touched_functions=[...])` 验证有测试保护。
 

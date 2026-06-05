@@ -7,8 +7,6 @@
 """
 
 import os
-import sys
-import time
 from pathlib import Path
 
 TOOLS_SELF = [
@@ -54,8 +52,8 @@ SYSTEM_MAP = {
     "llm": {
         "name": "LLM 对话系统",
         "files": "src/llm.py",
-        "what": "模型调用、流式输出、工具批处理、前缀缓存命中追踪",
-        "why": "粘性模型（一个会话一个模型）避免 DeepSeek 前缀缓存碎片化；默认 Pro 负责决策，Flash 用于子代理探索",
+        "what": "模型调用、流式输出、工具批处理、前缀缓存命中追踪。始终使用 Pro 模型",
+        "why": "DeepSeek 前缀缓存按字节匹配，工具定义序列化一致保障缓存命中；粘性模型避免切换",
         "tools": [],
         "connections": {
             "config": "读取 API key、模型 ID、超时参数",
@@ -67,17 +65,14 @@ SYSTEM_MAP = {
     "tools": {
         "name": "工具系统",
         "files": "src/tools/__init__.py + src/tools/*.py",
-        "what": "58 个工具的注册、调度、执行、热加载。插件优先执行，Storm 去重，写入后自动维护一致性",
-        "why": "模块化工具注册（_BUILTIN_MODULES 清单），热加载无需重启，一致性钩子保证写文件后 RAG/覆盖率/插件自动刷新",
-        "tools": ["discover", "self"],
+        "what": "工具的注册、调度、执行、热加载。Storm 去重，模块化注册（_BUILTIN_MODULES 清单）",
+        "why": "热加载无需重启，_BUILTIN_MODULES 是唯一真相源——所有工具由此注册，任何别处硬编码的工具名都可能漂移",
+        "tools": ["self"],
         "connections": {
-            "plugin_mgr": "插件工具与内置工具合并到同一注册表",
             "storm": "同轮重复调用被去重，返回缓存结果",
             "tracker": "每次工具调用记录耗时和成败",
             "reflect": "失败调用触发反思记录",
-            "coverage_gate": "写入 src/*.py 后清除覆盖率缓存",
             "rag": "写入文件后增量更新代码索引",
-            "mcp": "MCP 工具动态合并到工具列表",
         },
     },
     "cache_context": {
@@ -95,26 +90,24 @@ SYSTEM_MAP = {
     "commands": {
         "name": "指令系统",
         "files": "src/commands.py",
-        "what": "/help /evolve /research /model /self /health /stats 等终端命令",
+        "what": "/help /evolve /model /self 等终端命令",
         "why": "@builtin 装饰器注册模式，CmdResult 控制后续行为（retry/save/clear）",
         "tools": [],
         "connections": {
-            "evolution_loop": "/evolve 和 /research 注入进化 prompt",
-            "llm": "/model 切换粘性模型，/clear 重置",
-            "self": "/self 和 /health 调用 build_self_portrait()",
+            "evolution_loop": "/evolve 注入进化 prompt",
+            "llm": "/model 切换模型，/clear 重置",
+            "self": "/self 调用 build_self_portrait()",
             "evolve": "/stats 读取进化统计",
         },
     },
     "guard": {
         "name": "自我保护系统",
         "files": "src/guard.py + src/coverage_gate.py",
-        "what": "两层保护——崩溃自愈（traceback 分析→回滚→重试）+ 函数级关联测试门禁（tier 渐进解锁）",
-        "why": "agent 可修改自身代码，约束是函数级关联测试：要改的函数必须有测试覆盖。guard.py 永不被修改",
+        "what": "is_protected() 保护关键文件不被修改 + 覆盖率门禁渐进解锁",
+        "why": "agent 可修改自身代码，约束是靠 is_protected() 硬保护 guard.py + coverage_gate 覆盖率门槛控制",
         "tools": [],
         "connections": {
-            "coverage_gate": "is_protected() 委托 can_modify() 判断",
-            "tools/file": "write_file 前检查 is_protected()",
-            "main": "崩溃时外层 try-catch 调用 analyze_crash→execute_rollback",
+            "tools/file": "write_file/edit_file_lines 前检查 is_protected()",
         },
     },
     "evolution": {
@@ -131,17 +124,6 @@ SYSTEM_MAP = {
             "llm": "委托 LLM 执行代码修改",
         },
     },
-    "research": {
-        "name": "研究知识库",
-        "files": "src/tools/research.py + knowledge/",
-        "what": "论文搜索（arXiv+Semantic Scholar）、笔记保存、知识库查询。SQLite 存储 + RAG 语义索引",
-        "why": "agent 需要学习外部知识来改进自己——不只是搜网页，还要持久化、可检索",
-        "tools": ["search_papers", "read_paper", "save_note", "search_knowledge", "kb_topics", "link_papers", "kb_stats"],
-        "connections": {
-            "rag": "写入论文/笔记后自动索引到 RAG 研究库",
-            "web": "search_web/read_page 用于补充在线资料",
-        },
-    },
     "memory": {
         "name": "记忆系统",
         "files": "src/tools/memory.py + ~/.claude/projects/.../memory/",
@@ -156,24 +138,13 @@ SYSTEM_MAP = {
     "rag": {
         "name": "RAG 语义搜索",
         "files": "src/tools/rag.py",
-        "what": "TF-IDF 索引——代码（src/*.py）、研究（knowledge/）、记忆（memory/）三库独立。渐进披露：browse→query→read",
-        "why": "大规模代码库不能全塞上下文。按需检索——先看概览（browse），再精确搜（query），最后读原文（read）",
-        "tools": ["rag_query", "rag_status", "rag_browse", "rag_read", "rag_index", "rag_index_research"],
+        "what": "TF-IDF 索引——代码（src/*.py）、研究（knowledge/）、记忆（memory/）三库独立",
+        "why": "大规模代码库不能全塞上下文。按需检索——先索引（rag_index），再搜索（rag_query），查看状态（rag_status）",
+        "tools": ["rag_index", "rag_query", "rag_status"],
         "connections": {
             "tools/__init__": "写入文件后增量更新代码索引",
             "research": "论文/笔记写入后更新研究索引",
             "memory": "记忆变更后更新记忆索引",
-        },
-    },
-    "safety": {
-        "name": "安全系统",
-        "files": "src/safety.py",
-        "what": "MANUAL/SAFE/AUTO 三级安全模式。危险操作（删文件/强推/执行命令）需确认。白名单机制",
-        "why": "agent 能改代码但不应随意删文件或 force push",
-        "tools": [],
-        "connections": {
-            "llm": "run_conversation 中每轮工具调用前过安全检查",
-            "guard": "受保护文件列表参考 is_protected()",
         },
     },
 }
@@ -182,20 +153,13 @@ SYSTEM_MAP = {
 CONNECTION_GRAPH = [
     ("main", "llm", "用户输入 → run_conversation() → LLM 回复"),
     ("main", "commands", "以 / 开头的输入 → dispatch() → CmdResult"),
-    
-    ("main", "guard", "崩溃时 analyze_crash() → execute_rollback() → 重试"),
     ("llm", "cache_context", "ctx.send() 序列化消息 → API 调用"),
     ("llm", "tools/__init__", "get_tools() → API tool definitions"),
-    ("tools/__init__", "coverage_gate", "写入 src/*.py → clear_cache()"),
-    ("tools/__init__", "plugin_mgr", "写入 plugins/*.py → reload_plugins()"),
     ("tools/__init__", "storm", "同轮重复调用 → 返回缓存结果"),
-    ("guard", "coverage_gate", "is_protected() → can_modify()"),
-    ("guard", "tools/file", "write_file 前调用 is_protected()"),
     ("evolution", "validate", "改完后跑三阶段验证"),
     ("evolution", "coverage_gate", "改前检查 can_modify()"),
     ("evolution", "evolve", "结果记录到 JSONL 档案"),
     ("evolution", "git", "改前 commit 快照，失败 reset"),
-    ("research", "rag", "论文/笔记 → SQLite → RAG 索引"),
     ("memory", "rag", "记忆变更 → RAG 索引更新"),
     ("commands", "evolution_loop", "/evolve /research → 进化 prompt"),
     ("commands", "self", "/self /health → build_self_portrait()"),
@@ -229,7 +193,7 @@ def _capabilities_section() -> str:
     lines = [
         "## 功能全景",
         "",
-        "我由 13 个子系统组成，每个有自己的职责、工具、和联动关系。",
+        f"我由 {len(SYSTEM_MAP)} 个子系统组成，每个有自己的职责、工具、和联动关系。",
         "",
     ]
     for key, sysinfo in SYSTEM_MAP.items():
@@ -274,7 +238,7 @@ def _architecture_section() -> str:
         "### 为什么是这个结构",
         "main.py 是外壳（I/O 循环 + 启动初始化），llm.py 是大脑（模型调用 + 工具批处理），",
         "tools/ 是手（工具操作文件/网络/代码/git），cache_context.py 是记忆（三段式上下文），",
-        "guard.py 是免疫系统（崩溃回滚 + 重试）。",
+        "guard.py 是免疫系统（is_protected 保护关键文件）。",
         "",
         "### 完整文档",
         "项目根目录 AGENTS.md 包含准确的架构文件清单、常用命令、设计决策。",
@@ -318,7 +282,7 @@ def _connections_section() -> str:
     lines = [
         "## 子系统联动",
         "",
-        "共 19 条关键连接关系：",
+        f"共 {len(CONNECTION_GRAPH)} 条关键连接关系：",
         "",
     ]
     for src, dst, desc in CONNECTION_GRAPH:
@@ -371,14 +335,6 @@ def _runtime_section() -> str:
         from ..evolve import get_stats
         stats = get_stats()
         lines.append(f"进化: {stats.get('total', 0)} 条记录 | 成功率 {stats.get('success_rate', 0):.0%}")
-    except Exception:
-        pass
-
-    # 覆盖率
-    try:
-        from ..coverage_gate import get_overall_coverage, get_tier_summary
-        cov = get_overall_coverage()
-        lines.append(f"测试覆盖率: {cov:.0%}")
     except Exception:
         pass
 

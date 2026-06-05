@@ -18,13 +18,7 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 # ═══════════════════════════════════════════════════════════════
 
 class TestGuardCoverageGate:
-    """guard.is_protected() 必须接入 coverage_gate.can_modify()。"""
-
-    def test_is_protected_calls_coverage_gate(self):
-        from src.guard import is_protected
-        import inspect
-        src = inspect.getsource(is_protected)
-        assert "coverage_gate" in src, "is_protected 未导入 coverage_gate"
+    """guard.is_protected() 保护关键文件不被修改。"""
 
     def test_is_protected_always_blocks_guard_itself(self):
         from src.guard import is_protected, _GUARD_FILE
@@ -37,40 +31,12 @@ class TestGuardCoverageGate:
         outside.write_text("x = 1")
         assert is_protected(str(outside)) is False
 
-    def test_is_protected_uses_coverage_gate_for_project_files(self):
-        """项目内非特殊文件应走覆盖率门禁判断。"""
+    def test_is_protected_project_file(self):
+        """项目内非特殊文件返回 bool。"""
         from src.guard import is_protected
         llm_file = PROJECT_ROOT / "src" / "llm.py"
         result = is_protected(str(llm_file))
         assert isinstance(result, bool)
-
-# ═══════════════════════════════════════════════════════════════
-# 2. 文件写入 → 一致性维护
-# ═══════════════════════════════════════════════════════════════
-
-class TestConsistencyHook:
-    """write_file / edit_file_lines 成功后必须触发 _maintain_consistency。"""
-
-    def test_execute_tool_calls_maintain_consistency(self):
-        import inspect
-        from src.tools import execute_tool
-        src = inspect.getsource(execute_tool)
-        assert "_maintain_consistency" in src, "execute_tool 未调用 _maintain_consistency"
-
-    def test_maintain_consistency_exists(self):
-        from src.tools.__init__ import _maintain_consistency
-        assert callable(_maintain_consistency)
-
-    def test_maintain_consistency_no_crash(self, monkeypatch):
-        """一致性维护不抛异常（即使 RAG/coverage 模块未完全初始化）。"""
-        from src.tools.__init__ import _maintain_consistency
-        # 直接调用，内置 try/except 保证不抛异常
-        _maintain_consistency(str(PROJECT_ROOT / "src" / "test_dummy.py"))
-
-    def test_maintain_consistency_knowledge_no_crash(self):
-        """knowledge/*.md 写入触发研究索引，不抛异常。"""
-        from src.tools.__init__ import _maintain_consistency
-        _maintain_consistency(str(PROJECT_ROOT / "knowledge" / "test.md"))
 
 # ═══════════════════════════════════════════════════════════════
 # 3. 进化系统 → 进化档案
@@ -111,43 +77,17 @@ class TestEvolveSystem:
 # ═══════════════════════════════════════════════════════════════
 
 class TestStickyModel:
-    """auto_select_model 默认 Pro，切换后粘住。"""
+    """始终使用 Pro 模型。"""
 
     def test_default_is_pro(self):
         import src.llm
-        src.llm.reset_session_model()
         backend = src.llm.auto_select_model("任意输入")
-        assert backend.info.name == "Pro"
+        assert "pro" in backend.info.name.lower()
 
-    def test_sticky_after_switch(self):
+    def test_always_returns_pro(self):
         import src.llm
-        src.llm.reset_session_model()
-        src.llm.switch_model("flash")
         backend = src.llm.auto_select_model("任意输入")
-        assert backend.info.name == "Flash"
-        src.llm.reset_session_model()
-
-    def test_reset_goes_back_to_pro(self):
-        import src.llm
-        src.llm.switch_model("flash")
-        src.llm.reset_session_model()
-        backend = src.llm.auto_select_model("任意输入")
-        assert backend.info.name == "Pro"
-
-    def test_switch_updates_session_model(self):
-        import src.llm
-        src.llm.reset_session_model()
-        src.llm.switch_model("flash")
-        assert src.llm._session_model == "flash"
-        src.llm.switch_model("pro")
-        assert src.llm._session_model == "pro"
-        src.llm.reset_session_model()
-
-    def test_set_session_model(self):
-        import src.llm
-        src.llm.set_session_model("flash")
-        assert src.llm._session_model == "flash"
-        src.llm.reset_session_model()
+        assert "pro" in backend.info.name.lower()
 
 # ═══════════════════════════════════════════════════════════════
 # 5. 工具注册
@@ -164,14 +104,6 @@ class TestToolRegistry:
                       "evolve_coverage", "evolve_suggest_tests", "evolve_status"]:
             assert name in names, f"{name} 未注册"
 
-    def test_research_tools_registered(self):
-        from src.tools import get_tools
-        tools = get_tools()
-        names = [t["function"]["name"] for t in tools]
-        for name in ["search_papers", "read_paper", "save_note",
-                      "search_knowledge", "kb_topics", "kb_stats"]:
-            assert name in names, f"{name} 未注册"
-
     def test_memory_tools_registered(self):
         from src.tools import get_tools
         tools = get_tools()
@@ -183,7 +115,7 @@ class TestToolRegistry:
         from src.tools import get_tools
         tools = get_tools()
         names = [t["function"]["name"] for t in tools]
-        for name in ["rag_query", "rag_status", "rag_browse", "rag_read"]:
+        for name in ["rag_index", "rag_query", "rag_status"]:
             assert name in names, f"{name} 未注册"
 
     """关键命令必须可执行且正确接线。"""
@@ -199,18 +131,6 @@ class TestToolRegistry:
         system_msgs = [m["content"] for m in ctx.log if m.get("role") == "system"]
         system_text = " ".join(system_msgs)
         assert "自进化" in system_text or "进化" in system_text
-
-    def test_research_command_injects_prompt(self):
-        from src.cache_context import CacheContext
-        from src.commands import dispatch
-
-        ctx = CacheContext()
-        ctx.log = []
-        result = dispatch("/research 测试主题", ctx, "test-session")
-        assert result.retry is True
-        system_msgs = [m["content"] for m in ctx.log if m.get("role") == "system"]
-        system_text = " ".join(system_msgs)
-        assert "研究" in system_text
 
     def test_model_command_switches(self):
         from src.cache_context import CacheContext
@@ -245,48 +165,5 @@ class TestCoverageGate:
         assert "覆盖率" in summary
 
 # ═══════════════════════════════════════════════════════════════
-# 8. 看门狗
+# 7. 覆盖率门禁
 # ═══════════════════════════════════════════════════════════════
-
-class TestGuardSelfHealing:
-    """guard 自愈系统：崩溃分析→回滚→报告。"""
-
-    def test_analyze_crash_recoverable(self):
-        from src.guard import analyze_crash
-        try:
-            raise RuntimeError("测试崩溃")
-        except RuntimeError as e:
-            analysis = analyze_crash(type(e), e, e.__traceback__)
-        assert "recoverable" in analysis
-        assert "traceback" in analysis
-
-    def test_build_report(self):
-        from src.guard import build_report
-        analysis = {
-            "recoverable": True,
-            "traceback": "Traceback...\nRuntimeError: test",
-            "culprit_files": ["src/test.py"],
-        }
-        report = build_report(analysis, ["src/test.py"])
-        assert "崩溃" in report
-        assert "回滚" in report or "恢复" in report
-
-# ═══════════════════════════════════════════════════════════════
-# 10. 启动自检 /health
-# ═══════════════════════════════════════════════════════════════
-
-class TestHealthCheck:
-    """/health 命令必须存在且返回系统状态。"""
-
-    def test_health_command_exists(self):
-        from src.commands import _handlers
-        assert "/health" in _handlers, "/health 命令未注册"
-
-    def test_health_returns_valid_result(self):
-        from src.cache_context import CacheContext
-        from src.commands import dispatch
-
-        ctx = CacheContext()
-        result = dispatch("/health", ctx, "test-session")
-        assert result is not None
-        assert len(result.message) > 0

@@ -41,7 +41,6 @@ TOOL_RESULT_BUDGET: float = 0.15
 
 # ── 路径 ──
 SESSION_DIR: str = str(Path(__file__).parent.parent / "sessions")
-PLUGINS_DIR: str = str(Path(__file__).parent.parent / "plugins")
 MEMORY_DIR: str = str(Path(__file__).parent.parent / "memory")
 
 # ── Token 预算 ──

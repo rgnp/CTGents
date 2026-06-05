@@ -97,10 +97,6 @@ def save_session(messages: list[dict], session_id: str | None = None) -> str:
     with open(_messages_path(session_id), "w", encoding="utf-8") as f:
         json.dump(_sanitize_surrogates(persist), f, ensure_ascii=False, indent=2)
 
-    summary = _generate_summary(messages)
-    with open(_summary_path(session_id), "w", encoding="utf-8") as f:
-        f.write(summary)
-
     return session_id
 
 

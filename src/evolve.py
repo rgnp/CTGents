@@ -7,7 +7,6 @@
 import json
 import os
 import re
-import time
 import uuid
 from collections import Counter
 from dataclasses import dataclass, field, asdict
@@ -59,21 +58,6 @@ def record_attempt(record: EvolutionRecord) -> str:
         pass
     _trim_if_needed()
     return record.id
-
-
-def record_simple(goal: str, files_changed: list[str], outcome: str,
-                  lessons: str = "", tags: list[str] | None = None,
-                  duration_ms: float = 0.0) -> str:
-    """快捷记录：最少字段写入。"""
-    rec = EvolutionRecord(
-        goal=goal,
-        files_changed=files_changed,
-        outcome=outcome,
-        lessons_learned=lessons,
-        tags=tags or [],
-        duration_total_ms=duration_ms,
-    )
-    return record_attempt(rec)
 
 
 # ── 查询 ──
@@ -232,46 +216,6 @@ def find_similar(goal: str, top_n: int = 5) -> list[dict]:
     if not documents:
         return []
     return _tfidf_search(goal, documents, field="goal", top_n=top_n)
-
-
-# ── 教训提取 ──
-
-def get_lessons(tag: str | None = None) -> list[str]:
-    """提取历史教训。如果指定 tag，只返回相关 tag 的教训。"""
-    records = _read_tail(200)
-    lessons = []
-    for r in reversed(records):
-        ll = r.get("lessons_learned", "").strip()
-        if not ll:
-            continue
-        if tag:
-            rec_tags = r.get("tags", [])
-            if tag not in rec_tags:
-                continue
-        if ll not in lessons:
-            lessons.append(ll)
-    return lessons
-
-
-def get_failure_patterns() -> list[dict]:
-    """分析常见失败模式。返回 [{pattern, count, last_seen}]。"""
-    records = _read_tail(200)
-    reverted = [r for r in records if r.get("outcome") == "reverted"]
-
-    patterns: list[dict] = []
-    seen_goals: set[str] = set()
-    for r in reverted:
-        goal_short = r.get("goal", "")[:80]
-        if goal_short not in seen_goals:
-            seen_goals.add(goal_short)
-            patterns.append({
-                "goal": goal_short,
-                "lesson": r.get("lessons_learned", "")[:200],
-                "tags": r.get("tags", []),
-                "timestamp": r.get("timestamp", ""),
-            })
-
-    return patterns
 
 
 # ── 统计 ──

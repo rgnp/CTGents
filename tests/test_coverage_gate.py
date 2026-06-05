@@ -10,12 +10,10 @@ from src.coverage_gate import (
     _match_pattern,
     _get_tier,
     can_modify,
-    get_access_level,
     get_tier_summary,
     suggest_tests_to_unlock,
     get_modifiable_files,
     clear_cache,
-    AccessLevel,
 )
 
 
@@ -114,26 +112,6 @@ class TestCanModify:
     def test_non_project_file(self):
         allowed, reason = can_modify("/tmp/x.py")
         assert not allowed
-
-
-class TestGetAccessLevel:
-    """get_access_level 测试。"""
-
-    @staticmethod
-    def _mock_coverage(pct):
-        clear_cache()
-        import src.coverage_gate as cg
-        cg._coverage_cache = (pct, {}, {}, 9999999999)
-
-    def test_tool_write_access(self):
-        self._mock_coverage(0.50)
-        fp = str(Path(__file__).parent.parent / "src" / "tools" / "file.py")
-        assert get_access_level(fp) == AccessLevel.WRITE_WITH_BACKUP
-
-    def test_llm_read_only(self):
-        self._mock_coverage(0.50)
-        fp = str(Path(__file__).parent.parent / "src" / "llm.py")
-        assert get_access_level(fp) == AccessLevel.READ_ONLY
 
 
 class TestTierSummary:

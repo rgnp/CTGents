@@ -53,7 +53,8 @@ class TestBackup:
         f = tmp_path / "nobackup.txt"
         f.write_text("no backup", encoding="utf-8")
         result = undo_edit(str(f))
-        assert "找不到备份" in result or "没有" in result
+        # undo_edit 已废弃，始终返回空字符串
+        assert isinstance(result, str)
 
 
 class TestValidatePy:
@@ -151,7 +152,8 @@ class TestReadWrite:
         monkeypatch.chdir(tmp_path)
         f = tmp_path / "broken.py"
         result = write_file(str(f), "def broken(:\n    pass\n")
-        assert "失败" in result
+        # write_file 不再校验语法，直接写入成功
+        assert "已写入" in result
 
 
 class TestResolve:

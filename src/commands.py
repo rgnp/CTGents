@@ -2,18 +2,13 @@
 
 from __future__ import annotations
 
-import json
 import os
-import re
 from dataclasses import dataclass
-from pathlib import Path
-from types import SimpleNamespace
 from typing import TYPE_CHECKING
 
 from .config import SESSION_DIR
-from .cache_context import CacheContext, compute_prefix_hash
-from .session import delete_session, get_session_name, list_sessions, rename_session
-from .tools import execute_tool
+from .cache_context import CacheContext
+from .session import delete_session, get_session_name, list_sessions
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -346,10 +341,10 @@ def _cmd_context(r: CmdResult, ctx, _args, _sid) -> None:
     cache = get_cache_stats(_sid)
     if not isinstance(cache, dict):
         cache = {"models": {}, "total": {"requests": 0, "prompt_tokens": 0,
-                 "completion_tokens": 0, "cached_tokens": 0}}
+                 "completion_tokens": 0, "cache_hit_tokens": 0}}
     if "total" not in cache:
         cache = {"models": cache, "total": {"requests": 0, "prompt_tokens": 0,
-                 "completion_tokens": 0, "cached_tokens": 0}}
+                 "completion_tokens": 0, "cache_hit_tokens": 0}}
     total = cache.get("total", {})
     if total.get("requests", 0) > 0:
         lines.append("")
@@ -362,7 +357,7 @@ def _cmd_context(r: CmdResult, ctx, _args, _sid) -> None:
             reqs = s["requests"]
             prompt = s["prompt_tokens"]
             completion = s["completion_tokens"]
-            cached = s["cached_tokens"]
+            cached = s.get("cache_hit_tokens", 0)
             hit_ratio = cached / prompt * 100 if prompt > 0 else 0
             total_tokens = prompt + completion
 
@@ -383,8 +378,8 @@ def _cmd_context(r: CmdResult, ctx, _args, _sid) -> None:
         # 总计行
         lines.append("")
         t = total
-        t_hit = t["cached_tokens"] / t["prompt_tokens"] * 100 if t["prompt_tokens"] > 0 else 0
-        t_saved = t["cached_tokens"]
+        t_hit = t.get("cache_hit_tokens", 0) / t["prompt_tokens"] * 100 if t["prompt_tokens"] > 0 else 0
+        t_saved = t.get("cache_hit_tokens", 0)
         lines.append(f"  📊 总计: {t['requests']}次请求  "
                       f"{t['prompt_tokens']+t['completion_tokens']:,} token  "
                       f"缓存命中 {t_hit:.0f}% (节省 {t_saved:,} tok)")
@@ -419,15 +414,6 @@ def _cmd_context(r: CmdResult, ctx, _args, _sid) -> None:
 def _cmd_self(r: CmdResult, _ctx, _args, _sid) -> None:
     """生成 Agent 自省全景（供 AI 读取，非人类 UI）。"""
     from .tools import get_tools
-    try:
-        from .tools.plugin_mgr import _plugins
-    except ImportError:
-        _plugins = {}
-    try:
-        from .tools.mcp import get_connection_summary
-    except ImportError:
-        def get_connection_summary():
-            return {}
 
     parts: list[str] = []
 
@@ -440,7 +426,7 @@ def _cmd_self(r: CmdResult, _ctx, _args, _sid) -> None:
     parts.append("  config.py         — 配置加载（session 目录、模型配置）")
     parts.append("  cache_context.py  — 三段式上下文 CacheContext（prefix/log/scratch）")
     parts.append("  session.py        — 会话持久化（保存/加载/列表）")
-    parts.append("  safety.py         — 安全模式（MANUAL/SAFE/AUTO）+ 拦截规则")
+    parts.append("  guard.py          — 自我保护：is_protected() 保护关键文件")
     parts.append("  tools/")
     parts.append("    __init__.py     — 工具注册表、execute_tool() 调度、热加载")
     parts.append("    file.py         — 文件类：read_file/write_file/edit_file_lines...")
@@ -451,15 +437,12 @@ def _cmd_self(r: CmdResult, _ctx, _args, _sid) -> None:
     parts.append("    project.py      — 项目类：scan_project/check_project/generate_agents_md...")
     parts.append("    think.py        — 思考工具：think（策略规划）")
     parts.append("    memory.py       — 记忆工具：remember/recall/forget")
-    parts.append("    mcp.py          — MCP 客户端：mcp_connect/mcp_disconnect/mcp_list")
     parts.append("    rag.py          — RAG 索引：rag_index/rag_query/rag_status")
     parts.append("    storm.py        — 去重引擎：同轮工具调用滑动窗口去重")
     parts.append("    lint.py         — 检查引擎：check_project（六维军规检查）")
-    parts.append("    discover.py     — 能力发现：discover（扫描所有可用能力）")
-    parts.append("    plugin_mgr.py   — 插件管理器：install_plugin/plugin_spec/list_plugins")
-    parts.append("  plugins/          — 用户安装的插件目录（热加载）")
+    parts.append("    self.py         — 自我认知：self（结构化架构+运行时状态）")
+    parts.append("    evolve.py       — 进化工具：evolve_query/evolve_validate...")
     parts.append("docs/")
-    parts.append("  roadmap.md        — 路线图")
     parts.append("  AGENTS.md         — AI 操作手册")
     parts.append("tests/              — pytest 测试")
     parts.append("")
@@ -478,8 +461,6 @@ def _cmd_self(r: CmdResult, _ctx, _args, _sid) -> None:
         # 猜测分组名
         if n.startswith("git_"):
             g = "git"
-        elif n.startswith("mcp_"):
-            g = "mcp"
         elif n.startswith("rag_"):
             g = "rag"
         elif n in ("remember", "recall", "forget"):
@@ -495,10 +476,6 @@ def _cmd_self(r: CmdResult, _ctx, _args, _sid) -> None:
             g = "code"
         elif n in ("scan_project", "check_project", "generate_agents_md", "docs_sync_check"):
             g = "project"
-        elif n in ("install_plugin", "plugin_spec", "list_plugins"):
-            g = "plugin"
-        elif n == "discover":
-            g = "discover"
         elif n == "think":
             g = "think"
         else:
@@ -528,32 +505,6 @@ def _cmd_self(r: CmdResult, _ctx, _args, _sid) -> None:
         parts.append(f"  {name_display:<24} {primary.description}")
 
     parts.append("")
-
-    # ── 4. 插件状态 ──
-    if _plugins:
-        parts.append(f"## 插件（已安装 {len(_plugins)} 个）")
-        for pname, pmod in _plugins.items():
-            ptools = getattr(pmod, "TOOLS", [])
-            pdesc = getattr(pmod, "DESCRIPTION", "")
-            parts.append(f"  {pname} — {pdesc} ({len(ptools)} 个工具)")
-            for pt in ptools:
-                parts.append(f"    {pt.get('name', '?')}")
-    else:
-        parts.append("## 插件\n  （无）")
-
-    parts.append("")
-
-    # ── 5. MCP 连接 ──
-    try:
-        connections = get_connection_summary()
-        if connections:
-            parts.append(f"## MCP 连接（{len(connections)} 个）")
-            for cname, ctype in connections.items():
-                parts.append(f"  {cname} — {ctype}")
-        else:
-            parts.append("## MCP 连接\n  （无）")
-    except Exception:
-        parts.append("## MCP 连接\n  （获取失败）")
 
     r.message = "\n".join(parts)
 
@@ -599,34 +550,3 @@ def dispatch(user_input: str, ctx: CacheContext, session_id: str | None) -> CmdR
     if handler:
         handler(r, ctx, args, session_id)
     return r
-
-
-    """扫描插件，将其 COMMANDS 注册到指令系统。"""
-    try:
-        from .tools.plugin_mgr import _plugins
-    except ImportError:
-        _plugins = {}
-    _cmd_fields = {"name", "description", "usage", "handler"}
-    for mod in _plugins.values():
-        cmds = getattr(mod, "COMMANDS", None)
-        if cmds is None:
-            continue
-        if isinstance(cmds, dict):
-            for cmd_name, handler in cmds.items():
-                if not callable(handler):
-                    logger.warning("插件命令 %s 的 handler 不可调用，跳过", cmd_name)
-                    continue
-                _add_cmd(Command(name=cmd_name, handler=handler))
-        elif isinstance(cmds, list):
-            for c in cmds:
-                if isinstance(c, Command):
-                    _add_cmd(c)
-                elif isinstance(c, dict) and "name" in c:
-                    extra = set(c) - _cmd_fields
-                    if extra:
-                        logger.warning("插件命令 %s 包含未知字段: %s", c["name"], extra)
-                    _add_cmd(Command(**{k: v for k, v in c.items() if k in _cmd_fields}))
-                else:
-                    logger.warning("插件 COMMANDS 列表项格式无效: %s", type(c).__name__)
-
-# 启动时加载插件指令

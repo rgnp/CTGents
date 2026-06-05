@@ -200,9 +200,6 @@ def get_overall_coverage() -> float:
     total, files, lines = _run_coverage()
     _coverage_cache = (total, files, lines, now)
     return total
-    total, files, lines = _run_coverage()
-    _coverage_cache = (total, files, lines, now)
-    return total
 
 
 def get_file_coverage(filepath: str) -> float | None:
@@ -398,28 +395,6 @@ def can_modify(
         )
 
 
-def get_access_level(
-    filepath: str,
-    touched_functions: list[str] | None = None,
-) -> AccessLevel:
-    """确定文件的访问级别。支持函数级关联测试检查。"""
-    tier = _get_tier(filepath)
-    if tier is None:
-        return AccessLevel.READ_ONLY
-
-    _tier_name, tier_info = tier
-    if tier_info["threshold"] <= 0.0:
-        return AccessLevel.WRITE_WITH_BACKUP
-
-    # 函数级检查或全局覆盖率
-    if touched_functions:
-        allowed, _ = can_modify(filepath, touched_functions=touched_functions)
-    else:
-        allowed, _ = can_modify(filepath)
-
-    return AccessLevel.WRITE_WITH_BACKUP if allowed else AccessLevel.READ_ONLY
-
-
 def get_modifiable_files() -> list[str]:
     """返回当前 agent 有写权限的所有 src/*.py 文件列表。"""
     coverage = get_overall_coverage()
@@ -452,21 +427,6 @@ def get_tier_summary() -> str:
         lines.append(f"  [{icon}] {tier_name}: {desc}（门槛: {threshold_str}）")
 
     return "\n".join(lines)
-
-
-def get_coverage_gap(tier_name: str) -> tuple[float, str] | None:
-    """返回达到某一层还需要多少覆盖率。返回 (gap, 建议)。"""
-    if tier_name not in FILE_TIERS:
-        return None
-    tier_info = FILE_TIERS[tier_name]
-    coverage = get_overall_coverage()
-    if coverage >= tier_info["threshold"]:
-        return 0.0, f"{tier_name} 已解锁"
-    gap = tier_info["threshold"] - coverage
-    return gap, (
-        f"需要额外 {gap:.0%} 覆盖率才能解锁 {tier_name} ({tier_info['description']})。"
-        f"建议为未测试的 src/ 模块添加单元测试。"
-    )
 
 
 def suggest_tests_to_unlock(
@@ -530,14 +490,6 @@ def suggest_tests_to_unlock(
         f"当前 {coverage:.0%}，差 {gap:.0%}。\n"
         f"建议为未测试的模块添加单元测试。"
         f"或者使用函数级检查：声明 touched_functions 指定要修改的函数名。"
-    )
-
-
-def get_unlocked_count() -> int:
-    """返回已解锁的 tier 数量。"""
-    coverage = get_overall_coverage()
-    return sum(
-        1 for info in FILE_TIERS.values() if coverage >= info["threshold"]
     )
 
 

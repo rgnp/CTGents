@@ -796,24 +796,13 @@ def _build_api_messages(messages: list[dict]) -> list[dict]:
 
 # 并行安全白名单：纯读取工具，无副作用，可在同批次内同时执行
 _PARALLEL_SAFE: frozenset[str] = frozenset({
-    # 文件读取
     "read_file", "read_file_lines", "list_files", "count_lines",
-    # 代码搜索
     "grep_code",
-    # 网络查询
-    "search_web", "read_page", "search_papers", "read_paper",
-    "search_notes", "list_notes",
-    # Git 读取（状态/日志/差异/分支）
+    "search_web", "read_page",
     "git_status", "git_diff", "git_log", "git_branch",
-    # RAG 查询
     "rag_query", "rag_status",
-    # 记忆查询
     "recall",
-    # 项目扫描/检查
     "scan_project", "check_project", "docs_sync_check", "generate_agents_md",
-    # 插件/能力
-    "discover", "plugin_spec", "list_plugins",
-    # MCP 列表
 })
 
 # SAFE 运行统计（用于 /context 展示）
