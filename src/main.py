@@ -64,18 +64,6 @@ def _make_memory_context() -> dict | None:
     return {"role": "system", "content": ctx_str, "_volatile": True}
 
 
-def _make_project_context() -> dict | None:
-    """生成项目结构感知上下文（不可变前缀成员，跨会话稳定）。"""
-    from .tools.project import get_project_context
-    context = get_project_context()
-    if not context:
-        return None
-    return {
-        "role": "system",
-        "content": context,
-        "_volatile": True,  # 每次启动重建，不持久化到会话文件
-    }
-
 logger = logging.getLogger(__name__)
 
 
@@ -86,42 +74,10 @@ def _make_agents_message() -> dict:
 
 
 def _append_volatile_context(ctx: CacheContext) -> None:
-    """向 log 末尾追加所有 volatile 系统消息（记忆/安全/RAG/反思）。
-
-    设计原则（对齐 Reasonix cache-first loop）：
-      - **绝不在 prefix 中放动态内容** — prefix 必须 byte-stable
-      - **log 只追加不修改** — 任何原地编辑都会破坏 DeepSeek 前缀缓存
-      - volatile 消息放 log 末尾，不影响主体对话历史的缓存命中
-      - 每次会话启动/重载时调用，旧 volatile 保留在历史中但新消息排在最后
-    """
-    # ── 记忆上下文 ──
+    """注入仅上下文——当前只有记忆。RAG 提示已移除（工具定义自带说明）。"""
     mem_ctx = _make_memory_context()
     if mem_ctx:
         ctx.log.append(mem_ctx)
-
-    # ── RAG 索引状态（移出 prefix，避免索引变→prefix碎→缓存全丢） ──
-    try:
-        from .tools.rag import get_index_status, _load_doc_index
-        rag_info = get_index_status()
-        has_code = "未建立" not in rag_info
-        has_research = _load_doc_index("research") is not None
-
-        if has_code and has_research:
-            hint = "RAG 已就绪：rag_query(scope='code') 搜代码，rag_query(scope='research') 搜论文笔记。研究知识库可用 search_knowledge 或 RAG 语义搜索。"
-        elif has_code:
-            hint = "RAG 代码索引已就绪。研究知识库可用 search_papers 搜论文、save_note 记笔记。用 rag_index_research 将知识库接入 RAG 语义搜索。"
-        elif has_research:
-            hint = "RAG 研究索引已就绪。rag_index 可建立代码索引。"
-        else:
-            hint = ""
-
-        if hint:
-            ctx.log.append({"role": "system", "content": hint, "_volatile": True})
-    except Exception:
-        pass
-
-    except Exception:
-        pass
 
 
 # ── UI 辅助 ──
@@ -294,9 +250,6 @@ def main() -> None:
         ctx = CacheContext()
     prefix_msgs = []
     prefix_msgs.append(_make_agents_message())
-    proj_ctx = _make_project_context()
-    if proj_ctx:
-        prefix_msgs.append(proj_ctx)
     ctx.rebuild_prefix(prefix_msgs)
     # ── volatile 系统消息（log 末尾，仅追加不修改） ──
     _append_volatile_context(ctx)
@@ -355,9 +308,6 @@ def main() -> None:
                     # 重建 prefix 并追加 volatile 上下文（与 session start 一致）
                     prefix_msgs = []
                     prefix_msgs.append(_make_agents_message())
-                    proj_ctx = _make_project_context()
-                    if proj_ctx:
-                        prefix_msgs.append(proj_ctx)
                     ctx.rebuild_prefix(prefix_msgs)
                     if r.save:   # /new: 同时重置 session
                         session_id = None
