@@ -57,7 +57,7 @@ FILE_TIERS: dict[str, dict] = {
             "src/validate.py",
             "src/evolve.py",
             "src/coverage_gate.py",
-            "src/evolution_loop.py",
+            "src/evolution_runner.py",
         ],
         "threshold": 0.60,
         "description": "核心模块 — 需要 60% 覆盖率",

@@ -110,7 +110,7 @@ SYSTEM_MAP = {
     },
     "evolution": {
         "name": "进化系统",
-        "files": "src/evolution_runner.py + src/evolution_loop.py + src/evolve.py + src/validate.py",
+        "files": "src/evolution_runner.py + src/evolve.py + src/validate.py",
         "what": "runner 管理 run/state/patch，研究→综合→生成→验证→合入/修复 闭环。JSONL 档案支持相似搜索",
         "why": "agent 的自修改需要可追踪运行态，而不是只靠一次性 prompt；runner 记录基线、验证和收口状态",
         "tools": [
