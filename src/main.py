@@ -120,12 +120,6 @@ def _append_volatile_context(ctx: CacheContext) -> None:
     except Exception:
         pass
 
-    # ── 反思摘要 ──
-    try:
-        from .tools.reflect import get_summary as _reflect_summary
-        ref = _reflect_summary()
-        if ref:
-            ctx.log.append({"role": "system", "content": ref, "_volatile": True})
     except Exception:
         pass
 

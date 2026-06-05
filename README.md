@@ -109,7 +109,6 @@ src/
     storm.py           # 去重引擎
     tracker.py         # 调用追踪
     tokens.py          # Token 计数
-    reflect.py         # 失败反思
 tests/                 # 291 个测试用例
 docs/                  # 设计文档
 memory/                # 长期记忆
