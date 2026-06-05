@@ -76,19 +76,16 @@ TOOLS_MEMORY = [
         "type": "function",
         "function": {
             "name": "remember",
-            "description": (
-                "记住一条知识，跨会话持久化。当你学到用户的偏好、发现有效的方法、"
-                "或者想记录重要信息时调用。同名记忆会覆盖更新。"
-            ),
+            "description": "记住知识，跨会话持久化。同名覆盖。",
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "name": {"type": "string", "description": "记忆名称（kebab-case），如 user-prefers-short-answers"},
-                    "content": {"type": "string", "description": "记忆内容，写清楚事实、原因和适用场景"},
+                    "name": {"type": "string", "description": "记忆名（kebab-case），如 user-prefers-short"},
+                    "content": {"type": "string", "description": "记忆内容"},
                     "type": {
                         "type": "string",
                         "enum": ["user", "knowledge", "strategy", "reference"],
-                        "description": "类型：user=用户偏好, knowledge=学到的知识, strategy=有效方法, reference=外部资源",
+                        "description": "user/知识/策略/参考",
                     },
                 },
                 "required": ["name", "content", "type"],
@@ -100,7 +97,7 @@ TOOLS_MEMORY = [
         "type": "function",
         "function": {
             "name": "recall",
-            "description": "搜索记忆库，查找相关的记忆。在接到任务时先调用，了解用户偏好和已知方法。",
+            "description": "搜索记忆库，查找相关记忆。",
             "parameters": {
                 "type": "object",
                 "properties": {

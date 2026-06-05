@@ -134,11 +134,7 @@ TOOLS_RAG = [
         "type": "function",
         "function": {
             "name": "rag_index",
-            "description": (
-                "索引项目代码库：扫描项目文件，智能分块，建立语义索引。"
-                "首次使用 RAG 前必须调用一次。之后可随时调用以增量更新。"
-                "支持 30+ 种编程语言。增量更新只重新索引变更的文件。"
-            ),
+            "description": "索引项目代码库，建立 TF-IDF 语义索引。首次必调，后续增量。",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -148,7 +144,7 @@ TOOLS_RAG = [
                     },
                     "force": {
                         "type": "boolean",
-                        "description": "是否强制全量重建索引（默认 False，只增量更新）",
+                        "description": "强制全量重建（默认 False=增量）",
                     },
                 },
                 "required": [],
@@ -160,13 +156,13 @@ TOOLS_RAG = [
         "type": "function",
         "function": {
             "name": "rag_query",
-            "description": "语义搜索。比 grep_code 更智能，搜索代码结构和内容。scope='code'搜代码，'all'两者都搜。",
+            "description": "语义搜索代码库。比 grep_code 更智能。scope=code/all。",
             "parameters": {
                 "type": "object",
                 "properties": {
                     "query": {
                         "type": "string",
-                        "description": "搜索关键词或自然语言描述，如 '文件读写功能'、'如何调用 LLM API'、'safety check 逻辑'",
+                        "description": "搜索词或自然语言描述，如 '文件读写功能'",
                     },
                     "top_k": {
                         "type": "integer",
@@ -175,7 +171,7 @@ TOOLS_RAG = [
                     "scope": {
                         "type": "string",
                         "enum": ["code", "all"],
-                        "description": "搜索范围：code 代码，all 全部。默认 code",
+                        "description": "code=代码, all=全部，默认 code",
                     },
                 },
                 "required": ["query"],
@@ -196,7 +192,7 @@ TOOLS_RAG = [
         "type": "function",
         "function": {
             "name": "rag_index_research",
-            "description": "索引研究知识库：扫描 knowledge/ 目录中的所有 .md 文件，建立语义索引。论文笔记、研究idea、领域知识总结都应放在 knowledge/ 下，然后调用此工具索引。之后用 rag_search(query) 搜索。",
+            "description": "索引研究知识库（knowledge/*.md）。之后用 rag_search 搜索。",
             "parameters": {"type": "object", "properties": {}, "required": []},
         },
     },
@@ -205,13 +201,13 @@ TOOLS_RAG = [
         "type": "function",
         "function": {
             "name": "rag_search",
-            "description": "搜索研究知识库（论文笔记、idea、知识总结）。与 rag_query 不同——rag_query 搜代码，rag_search 搜研究内容。需先运行 rag_index_research 建立索引。",
+            "description": "搜索研究知识库（论文笔记/idea/知识总结）。先调 rag_index_research 建索引。",
             "parameters": {
                 "type": "object",
                 "properties": {
                     "query": {
                         "type": "string",
-                        "description": "搜索关键词，如 '轨迹预测'、'自注意力机制'",
+                        "description": "搜索关键词，如 '轨迹预测'",
                     },
                     "top_k": {
                         "type": "integer",

@@ -35,13 +35,7 @@ TOOLS_EXEC = [
         "type": "function",
         "function": {
             "name": "run_python",
-            "description": (
-                "执行 Python 代码并返回输出。"
-                "用于数据处理、计算验证、自动化操作等。"
-                "代码在子进程中运行，有超时限制。"
-                "不要生成需要用户交互的代码（如 input()、GUI 窗口），"
-                "可视化请保存为图片文件或输出文本/数值结果。"
-            ),
+            "description": "执行 Python 代码并返回输出。子进程运行，有超时，禁止交互/窗口。",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -59,27 +53,21 @@ TOOLS_EXEC = [
         "type": "function",
         "function": {
             "name": "run_command",
-            "description": (
-                "在终端中执行任意 Shell 命令并返回输出。"
-                "用于运行构建工具（npm/pip/make）、版本控制（git）、"
-                "文件操作、启动服务、查看系统信息等。"
-                "命令在项目目录下执行，有超时和输出长度限制。"
-                "禁止的命令会被自动拦截。"
-            ),
+            "description": "执行 Shell 命令。构建/测试/git/文件操作等，有超时和输出限制。",
             "parameters": {
                 "type": "object",
                 "properties": {
                     "command": {
                         "type": "string",
-                        "description": "要执行的命令（如 'npm test'、'git status'、'pip list'）",
+                        "description": "Shell 命令，如 'pytest -q'",
                     },
                     "timeout": {
                         "type": "integer",
-                        "description": "超时秒数，默认 30。长任务（如安装依赖）可设更大值",
+                        "description": "超时秒数，默认 30",
                     },
                     "workdir": {
                         "type": "string",
-                        "description": "工作目录，默认当前项目目录",
+                        "description": "工作目录，默认当前项目",
                     },
                 },
                 "required": ["command"],

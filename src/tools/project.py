@@ -13,26 +13,22 @@ TOOLS_PROJECT = [
         "type": "function",
         "function": {
             "name": "scan_project",
-            "description": (
-                "扫描项目目录，分析项目结构、语言、框架、依赖和构建命令。"
-                "返回项目概览，包括文件树、检测到的技术栈、可用的构建/测试命令。"
-                "适合新项目首次分析或需要了解项目整体结构时调用。"
-            ),
+            "description": "扫描项目结构，分析语言/框架/依赖/构建命令。",
             "parameters": {
                 "type": "object",
                 "properties": {
                     "path": {
                         "type": "string",
-                        "description": "项目路径，默认当前项目目录",
+                        "description": "项目路径，默认当前目录",
                     },
                     "depth": {
                         "type": "integer",
-                        "description": "文件树显示深度，默认 2，最大 4",
+                        "description": "文件树深度，默认 2，最大 4",
                     },
                     "include_patterns": {
                         "type": "array",
                         "items": {"type": "string"},
-                        "description": "额外包含的文件模式，如 ['*.rs', '*.go']。默认会自动检测常见源码文件",
+                        "description": "额外文件模式，如 ['*.rs', '*.go']",
                     },
                 },
                 "required": [],

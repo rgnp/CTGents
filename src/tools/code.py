@@ -6,20 +6,17 @@ TOOLS_CODE = [
         "type": "function",
         "function": {
             "name": "grep_code",
-            "description": (
-                "在项目中搜索代码。支持正则表达式，返回匹配的文件和行。"
-                "用于查找函数定义、变量引用、配置项等。"
-            ),
+            "description": "代码搜索，支持正则，返回匹配文件和行号。",
             "parameters": {
                 "type": "object",
                 "properties": {
                     "pattern": {
                         "type": "string",
-                        "description": "搜索模式，支持正则表达式",
+                        "description": "正则搜索模式",
                     },
                     "path": {
                         "type": "string",
-                        "description": "搜索目录，不传则搜索当前目录",
+                        "description": "搜索目录，不传=当前目录",
                     },
                 },
                 "required": ["pattern"],

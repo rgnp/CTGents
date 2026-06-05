@@ -15,20 +15,14 @@ TOOLS_SELF = [
         "type": "function",
         "function": {
             "name": "self",
-            "description": (
-                "查看自己的完整能力与架构。返回结构化肖像：有什么子系统、各自做什么、"
-                "之间如何联动、当前运行时状态。用户问'你能做什么''你怎么设计的'时调用。"
-            ),
+            "description": "查看自己的能力与架构：子系统/连接/运行时状态。",
             "parameters": {
                 "type": "object",
                 "properties": {
                     "scope": {
                         "type": "string",
                         "enum": ["full", "capabilities", "architecture", "connections", "runtime"],
-                        "description": (
-                            "full=全部, capabilities=功能清单(工具+子系统+联动), "
-                            "architecture=架构设计理由, connections=子系统间联动关系, runtime=当前状态"
-                        ),
+                        "description": "full=全部/capabilities/architecture/connections/runtime",
                     },
                 },
                 "required": [],

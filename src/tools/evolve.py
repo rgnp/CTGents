@@ -143,32 +143,28 @@ TOOLS_EVOLVE: list[dict] = [
         "type": "function",
         "function": {
             "name": "evolve_query",
-            "description": (
-                "查询进化档案——搜索过去的自修改尝试。"
-                "在做任何自修改之前先调用，了解什么方法有效、什么会导致失败。"
-            ),
+            "description": "查询进化档案，了解过去的成功/失败模式。自修改前先调用。",
             "parameters": {
                 "type": "object",
                 "properties": {
                     "goal_keywords": {
                         "type": "array",
                         "items": {"type": "string"},
-                        "description": "目标关键词，用于搜索相似的进化记录",
+                        "description": "关键词列表，搜索相似进化记录",
                     },
                     "outcome": {
                         "type": "string",
                         "enum": ["merged", "reverted", "partial"],
-                        "description": "按结果筛选。merged=成功的修改，reverted=回滚的修改",
+                        "description": "按结果筛选：merged/reverted/partial",
                     },
                     "tags": {
                         "type": "array",
                         "items": {"type": "string"},
-                        "description": "按标签筛选，如 performance、bugfix、refactor",
+                        "description": "按标签筛选，如 performance/bugfix",
                     },
                     "limit": {
                         "type": "integer",
-                        "default": 10,
-                        "description": "最多返回多少条",
+                        "description": "最多返回条数，默认 10",
                     },
                 },
                 "required": [],
@@ -180,11 +176,7 @@ TOOLS_EVOLVE: list[dict] = [
         "type": "function",
         "function": {
             "name": "evolve_check_access",
-            "description": (
-                "检查当前是否有权限修改指定文件。优先进行函数级关联测试检查："
-                "如果要改的函数有测试保护，直接放行；没覆盖则精确列出需补测试的函数名。"
-                "不提供 touched_functions 时回退到全局覆盖率 tier 检查。"
-            ),
+            "description": "检查文件修改权限。优先函数级关联测试，否则回退全局覆盖率。",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -195,11 +187,7 @@ TOOLS_EVOLVE: list[dict] = [
                     "touched_functions": {
                         "type": "array",
                         "items": {"type": "string"},
-                        "description": (
-                            "计划修改的函数/方法名列表（可选但强烈推荐）。"
-                            "提供后进行函数级关联测试检查——只查这些函数是否有测试覆盖。"
-                            "比全局覆盖率检查更精确、更容易通过。"
-                        ),
+                        "description": "计划修改的函数名列表。提供后走函数级检查，更精确。",
                     },
                 },
                 "required": ["filepath"],
@@ -211,10 +199,7 @@ TOOLS_EVOLVE: list[dict] = [
         "type": "function",
         "function": {
             "name": "evolve_coverage",
-            "description": (
-                "获取当前测试覆盖率报告。包含各层级解锁状态、可修改文件列表、"
-                "覆盖率差距。在规划自修改时调用，了解哪些文件可以动、哪些需要先加测试。"
-            ),
+            "description": "获取覆盖率报告：各层解锁状态、可修改文件列表。",
             "parameters": {"type": "object", "properties": {}, "required": []},
         },
     },
@@ -223,11 +208,7 @@ TOOLS_EVOLVE: list[dict] = [
         "type": "function",
         "function": {
             "name": "evolve_validate",
-            "description": (
-                "运行验证流水线：静态检查（AST+import+lint）→ 沙箱测试（pytest）"
-                "→ 后检查（覆盖率不降+无新增lint错误）。"
-                "⚠️ 每次修改代码后必须调用此工具验证，不要手动让用户去测。超时默认 120 秒。"
-            ),
+            "description": "运行验证流水线：AST→pytest→覆盖率/lint。每次改代码后必调。",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -238,8 +219,7 @@ TOOLS_EVOLVE: list[dict] = [
                     },
                     "timeout": {
                         "type": "integer",
-                        "default": 120,
-                        "description": "测试超时秒数",
+                        "description": "测试超时秒数，默认 120",
                     },
                     "related_only": {
                         "type": "boolean",
@@ -259,11 +239,7 @@ TOOLS_EVOLVE: list[dict] = [
         "type": "function",
         "function": {
             "name": "evolve_suggest_tests",
-            "description": (
-                "获取建议：需要添加哪些测试才能解锁对目标文件的修改权限。"
-                "支持函数级精确建议：提供 touched_functions 后，只列出未覆盖的函数及行号。"
-                "当 evolve_check_access 返回拒绝时调用，了解需要做什么才能解锁。"
-            ),
+            "description": "获取解锁修改权限的测试建议。支持函数级精确建议（提供 touched_functions）。",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -274,10 +250,7 @@ TOOLS_EVOLVE: list[dict] = [
                     "touched_functions": {
                         "type": "array",
                         "items": {"type": "string"},
-                        "description": (
-                            "计划修改的函数名列表（可选）。提供后给出函数级精确建议，"
-                            "包括每个函数的行号和覆盖状态。"
-                        ),
+                        "description": "计划修改的函数名列表。提供后走函数级建议。",
                     },
                 },
                 "required": ["target_file"],

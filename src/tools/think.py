@@ -4,7 +4,7 @@ TOOLS_THINK = [
         "type": "function",
         "function": {
             "name": "think",
-            "description": "策略规划工具。复杂任务时拆解子问题、规划步骤；收到信息后评估完整性、决定下一步。思考内容持久化在上下文中。",
+            "description": "策略规划：拆解任务、评估进展、决定下一步。",
             "parameters": {
                 "type": "object",
                 "properties": {

@@ -22,22 +22,17 @@ TOOLS_LINT = [
         "type": "function",
         "function": {
             "name": "check_project",
-            "description": (
-                "全面检查项目是否符合 AI Agent 开发规范。"
-                "基于 GitHub 2500+ 案例研究的六大军规，从命令、测试、结构、"
-                "代码风格、Git 工作流、边界六个维度扫描，给出评分（0-100）和具体优化建议。"
-                "适合定期运行以保持项目健康度。"
-            ),
+            "description": "六维度规范扫描（命令/测试/结构/风格/Git/边界），0-100 评分。",
             "parameters": {
                 "type": "object",
                 "properties": {
                     "path": {
                         "type": "string",
-                        "description": "项目路径，默认当前项目目录",
+                        "description": "项目路径，默认当前目录",
                     },
                     "fix": {
                         "type": "boolean",
-                        "description": "是否自动修复可修复的问题（如生成缺失的 AGENTS.md），默认 False",
+                        "description": "自动修复可修复项，默认 False",
                     },
                 },
                 "required": [],
@@ -49,22 +44,17 @@ TOOLS_LINT = [
         "type": "function",
         "function": {
             "name": "generate_agents_md",
-            "description": (
-                "自动扫描项目并生成 AGENTS.md 规范文件。"
-                "AGENTS.md 是面向 AI 编程智能体的项目级操作手册，"
-                "包含构建命令、测试入口、代码风格、安全边界等关键信息。"
-                "如果已有 AGENTS.md 则更新它。"
-            ),
+            "description": "扫描项目生成/更新 AGENTS.md（构建/测试/风格/安全）。",
             "parameters": {
                 "type": "object",
                 "properties": {
                     "path": {
                         "type": "string",
-                        "description": "项目路径，默认当前项目目录",
+                        "description": "项目路径，默认当前目录",
                     },
                     "overwrite": {
                         "type": "boolean",
-                        "description": "是否覆盖已有的 AGENTS.md，默认 False（仅创建不存在的）",
+                        "description": "覆盖已有文件，默认 False（仅创建不存在时）",
                     },
                 },
                 "required": [],

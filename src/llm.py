@@ -573,9 +573,9 @@ def _compress_tool_result(tool_name: str, result: str) -> str:
 # ═══════════════════════════════════════════════════════════════
 
 # 触发滑窗压缩的上下文比例（达到 80% 时触发 — 驱旧消息，换出空间）
-_COMPACT_THRESHOLD = 0.80
+_COMPACT_THRESHOLD = 0.65
 # 保留比例：滑窗压缩后保留最近 N% 的消息
-_COMPACT_KEEP_RATIO = 0.50
+_COMPACT_KEEP_RATIO = 0.40
 # 话题切换关键词（检测到后追加边界标记）
 _TOPIC_SWITCH_KEYWORDS = [
     "换个", "换一", "不谈", "不说", "跳过", "算了",
@@ -605,6 +605,50 @@ def _compact_context(ctx, user_input: str):
         tmp = CacheContext(prefix_msgs=prefix, log_msgs=log)
         _compact_cache_context(tmp, user_input)
         return tmp.all
+
+
+def _cleanup_tool_results(ctx) -> None:
+    """任务完成后压缩中间工具结果：保留摘要，丢弃细节。
+
+    每轮任务（从用户输入到 LLM 最终回复）完成后调用。
+    工具结果占 log 膨胀的绝大部分——任务完成后它们不再有用，
+    替换为一行摘要可以在下次滑窗压缩前有效控制 log 大小。
+    """
+    log = ctx.log
+    # 找到最后一次 user 消息
+    last_user = None
+    for i in range(len(log) - 1, -1, -1):
+        if log[i].get("role") == "user":
+            last_user = i
+            break
+    if last_user is None:
+        return
+
+    tool_names: list[str] = []
+    tool_indices: list[int] = []
+
+    for i in range(last_user + 1, len(log)):
+        m = log[i]
+        if m.get("role") == "tool" and m.get("_tool_result_compressed"):
+            name = m.get("_tool_name", "?")
+            if name not in tool_names:
+                tool_names.append(name)
+            tool_indices.append(i)
+
+    if len(tool_indices) < 2:
+        return  # 太少，不值得压缩
+
+    summary = f"⏪ 已归档 {len(tool_indices)} 条工具结果: {', '.join(tool_names[:10])}"
+    if len(tool_names) > 10:
+        summary += f" 等共 {len(tool_names)} 种工具"
+
+    # 第一条工具结果替换为摘要，其余删除
+    first_idx = tool_indices[0]
+    log[first_idx] = {"role": "system", "content": summary, "_volatile": True}
+    for idx in reversed(tool_indices[1:]):
+        del log[idx]
+
+    logger.info("工具结果清理：%d → 1 条（%d 种工具）", len(tool_indices), len(tool_names))
 
 
 def _compact_cache_context(ctx, user_input: str) -> None:
@@ -1067,4 +1111,5 @@ def run_conversation(
                 on_progress()
             if auto_plan:
                 set_plan_mode(False)
+            _cleanup_tool_results(ctx)
             return content or ""

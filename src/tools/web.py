@@ -89,16 +89,13 @@ TOOLS_WEB = [
         "type": "function",
         "function": {
             "name": "search_web",
-            "description": (
-                "搜索互联网获取信息。"
-                "搜索结果是唯一信息来源——结果不相关或为空时必须如实告知未找到，不得编造。"
-            ),
+            "description": "搜索互联网获取最新信息，结果不相关时必须如实告知。",
             "parameters": {
                 "type": "object",
                 "properties": {
                     "query": {
                         "type": "string",
-                        "description": "搜索关键词，用中英文均可",
+                        "description": "搜索关键词",
                     }
                 },
                 "required": ["query"],
@@ -110,13 +107,13 @@ TOOLS_WEB = [
         "type": "function",
         "function": {
             "name": "read_page",
-            "description": "打开指定 URL 读取网页全文。搜索结果只有摘要，需要详细内容时用这个工具深入阅读。",
+            "description": "打开 URL 读取网页全文，搜索结果摘要不完整时用此深入阅读。",
             "parameters": {
                 "type": "object",
                 "properties": {
                     "url": {
                         "type": "string",
-                        "description": "要阅读的网页 URL",
+                        "description": "网页 URL",
                     }
                 },
                 "required": ["url"],

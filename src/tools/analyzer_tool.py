@@ -18,11 +18,7 @@ TOOLS_ANALYZER: list[dict] = [
         "type": "function",
         "function": {
             "name": "analyze_code",
-            "description": (
-                "静态分析项目代码：检测死代码、圈复杂度超标、嵌套过深、"
-                "裸 except、可变默认参数等代码坏味道。"
-                "修改代码前调用，确认改动区域不存在已知问题。"
-            ),
+            "description": "静态分析：死代码/圈复杂度/嵌套/bare except/可变默认参数。",
             "parameters": {
                 "type": "object",
                 "properties": {

@@ -201,7 +201,7 @@ TOOLS_FILE = [
         "type": "function",
         "function": {
             "name": "read_file",
-            "description": "读取文件。不加行号参数返回全文；加 start_line/end_line 返回带行号的指定范围。",
+            "description": "读取文件全文或指定行范围（start_line/end_line）。",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -211,11 +211,11 @@ TOOLS_FILE = [
                     },
                     "start_line": {
                         "type": "integer",
-                        "description": "起始行号（从 1 开始），不传则从第 1 行",
+                        "description": "起始行号（从1开始），不传=从第1行",
                     },
                     "end_line": {
                         "type": "integer",
-                        "description": "结束行号（包含），不传则到文件末尾",
+                        "description": "结束行号（包含），不传=到末尾",
                     },
                 },
                 "required": ["path"],
@@ -227,20 +227,17 @@ TOOLS_FILE = [
         "type": "function",
         "function": {
             "name": "write_file",
-            "description": (
-                "创建或覆写本地文件。⚠️ 使用前必须先用 read_file 读取目标文件的当前内容，"
-                "不要凭记忆操作。修改完成后记得运行测试验证。"
-            ),
+            "description": "创建或覆写文件。⚠️ 先 read_file 读原内容，不要凭记忆写。",
             "parameters": {
                 "type": "object",
                 "properties": {
                     "path": {
                         "type": "string",
-                        "description": "文件路径，支持相对路径或绝对路径",
+                        "description": "文件路径",
                     },
                     "content": {
                         "type": "string",
-                        "description": "要写入的完整内容",
+                        "description": "写入的完整内容",
                     },
                 },
                 "required": ["path", "content"],
@@ -252,11 +249,7 @@ TOOLS_FILE = [
         "type": "function",
         "function": {
             "name": "edit_file_lines",
-            "description": (
-                "行级编辑文件：替换、删除或插入指定行。行号从 1 开始。"
-                "⚠️ 编辑前必须先用 read_file 读取目标文件当前内容和行号。"
-                "不要凭记忆猜测行号——文件可能已被之前的编辑改变。"
-            ),
+            "description": "行级编辑（replace/delete/insert）。⚠️ 先 read_file 确认行号。",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -268,15 +261,15 @@ TOOLS_FILE = [
                     },
                     "start_line": {
                         "type": "integer",
-                        "description": "起始行号（从 1 开始）。insert 时在此行之后插入",
+                        "description": "起始行号（从1开始），insert=在此行后插入",
                     },
                     "end_line": {
                         "type": "integer",
-                        "description": "结束行号（包含）。delete/replace 时必填，insert 时忽略",
+                        "description": "结束行号（含），del/replace必填，insert忽略",
                     },
                     "new_lines": {
                         "type": "string",
-                        "description": "新内容（多行字符串）。replace/insert 时必填，delete 时忽略",
+                        "description": "新内容（多行字符串），del忽略",
                     },
                 },
                 "required": ["path", "action", "start_line"],
@@ -288,13 +281,13 @@ TOOLS_FILE = [
         "type": "function",
         "function": {
             "name": "list_files",
-            "description": "列出目录中的文件和子目录。用于浏览项目结构、查找文件、了解目录布局。",
+            "description": "列出目录内容，浏览项目结构。",
             "parameters": {
                 "type": "object",
                 "properties": {
                     "path": {
                         "type": "string",
-                        "description": "目录路径，支持相对路径或绝对路径。不传则列出当前目录。",
+                        "description": "目录路径，不传=当前目录",
                     }
                 },
                 "required": [],
@@ -324,7 +317,7 @@ TOOLS_FILE = [
         "type": "function",
         "function": {
             "name": "count_lines",
-            "description": "统计文件的行数、字符数和单词数。快速了解文件大小。",
+            "description": "统计文件行数/字符数/单词数。",
             "parameters": {
                 "type": "object",
                 "properties": {

@@ -12,17 +12,13 @@ TOOLS_GIT = [
         "type": "function",
         "function": {
             "name": "git_status",
-            "description": (
-                "查看 Git 工作区状态。"
-                "显示当前分支、已修改文件、已暂存文件、未跟踪文件。"
-                "相当于 'git status' 的结构化版本。"
-            ),
+            "description": "查看工作区状态：分支、变更文件、暂存、未跟踪。",
             "parameters": {
                 "type": "object",
                 "properties": {
                     "path": {
                         "type": "string",
-                        "description": "Git 仓库路径，默认当前项目目录",
+                        "description": "Git 仓库路径，默认当前目录",
                     }
                 },
                 "required": [],
@@ -34,25 +30,21 @@ TOOLS_GIT = [
         "type": "function",
         "function": {
             "name": "git_diff",
-            "description": (
-                "查看 Git 工作区的文件变更详情。"
-                "可查看未暂存的变更（working tree）或已暂存的变更（staged）。"
-                "相当于 'git diff' 的结构化版本。"
-            ),
+            "description": "查看文件变更详情。staged/working, 可按文件过滤。",
             "parameters": {
                 "type": "object",
                 "properties": {
                     "staged": {
                         "type": "boolean",
-                        "description": "是否查看已暂存（staged）的变更，默认 False 查看未暂存变更",
+                        "description": "已暂存变更（True）或未暂存（False）",
                     },
                     "path": {
                         "type": "string",
-                        "description": "Git 仓库路径，默认当前项目目录",
+                        "description": "Git 仓库路径，默认当前目录",
                     },
                     "file": {
                         "type": "string",
-                        "description": "指定查看某个文件的变更，不传则查看所有变更",
+                        "description": "指定文件，不传=所有文件",
                     },
                 },
                 "required": [],
@@ -64,11 +56,7 @@ TOOLS_GIT = [
         "type": "function",
         "function": {
             "name": "git_log",
-            "description": (
-                "查看 Git 提交历史。"
-                "返回最近的提交记录，包含 hash、作者、日期、提交信息。"
-                "相当于 'git log --oneline' 的扩展版本。"
-            ),
+            "description": "查看提交历史：hash、作者、日期、提交信息。",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -78,7 +66,7 @@ TOOLS_GIT = [
                     },
                     "path": {
                         "type": "string",
-                        "description": "Git 仓库路径，默认当前项目目录",
+                        "description": "Git 仓库路径，默认当前目录",
                     },
                 },
                 "required": [],
@@ -90,17 +78,13 @@ TOOLS_GIT = [
         "type": "function",
         "function": {
             "name": "git_review",
-            "description": (
-                "Review staged changes for issues before commit. "
-                "Run before git_commit to catch: missing type hints, bare except, "
-                "hardcoded secrets, dead code, incomplete error handling."
-            ),
+            "description": "审查暂存变更，提交前检查：类型注解/bare except/密钥/死代码。",
             "parameters": {
                 "type": "object",
                 "properties": {
                     "path": {
                         "type": "string",
-                        "description": "Git 仓库路径，默认当前项目目录",
+                        "description": "Git 仓库路径，默认当前目录",
                     },
                 },
                 "required": [],
@@ -112,26 +96,21 @@ TOOLS_GIT = [
         "type": "function",
         "function": {
             "name": "git_commit",
-            "description": (
-                "暂存所有变更并提交。"
-                "如果未提供 message，将自动分析当前变更生成 commit message。"
-                "支持 commit 前自动 stage 所有变更。"
-                "建议先调 git_review 审查变更再提交。"
-            ),
+            "description": "暂存变更并提交。message 为空则自动生成。先调 git_review 审查。",
             "parameters": {
                 "type": "object",
                 "properties": {
                     "message": {
                         "type": "string",
-                        "description": "提交信息。不传则自动根据变更内容生成",
+                        "description": "提交信息，不传=自动生成",
                     },
                     "auto_stage": {
                         "type": "boolean",
-                        "description": "是否自动暂存所有变更（git add -A），默认 True",
+                        "description": "是否自动暂存（git add -A），默认 True",
                     },
                     "path": {
                         "type": "string",
-                        "description": "Git 仓库路径，默认当前项目目录",
+                        "description": "Git 仓库路径，默认当前目录",
                     },
                 },
                 "required": [],
@@ -143,17 +122,13 @@ TOOLS_GIT = [
         "type": "function",
         "function": {
             "name": "git_push",
-            "description": (
-                "推送本地提交到远程仓库。"
-                "默认推送到 origin 的当前分支。"
-                "如果未设置远程仓库，会返回错误提示。"
-            ),
+            "description": "推送提交到远程仓库（默认 origin 当前分支）。",
             "parameters": {
                 "type": "object",
                 "properties": {
                     "remote": {
                         "type": "string",
-                        "description": "远程仓库名称，默认 origin",
+                        "description": "远程仓库名，默认 origin",
                     },
                     "branch": {
                         "type": "string",
@@ -165,7 +140,7 @@ TOOLS_GIT = [
                     },
                     "path": {
                         "type": "string",
-                        "description": "Git 仓库路径，默认当前项目目录",
+                        "description": "Git 仓库路径，默认当前目录",
                     },
                 },
                 "required": [],
@@ -177,30 +152,25 @@ TOOLS_GIT = [
         "type": "function",
         "function": {
             "name": "git_pr",
-            "description": (
-                "创建 Pull Request。"
-                "基于当前分支向目标分支创建 PR。"
-                "需要已配置 GitHub CLI (gh) 或 Git 远程仓库有对应 API 支持。"
-                "如果未提供 title 和 body，将自动分析当前分支的变更生成。"
-            ),
+            "description": "创建 Pull Request。title/body 不传则自动分析生成。",
             "parameters": {
                 "type": "object",
                 "properties": {
                     "title": {
                         "type": "string",
-                        "description": "PR 标题，不传则自动生成",
+                        "description": "PR 标题，不传=自动生成",
                     },
                     "body": {
                         "type": "string",
-                        "description": "PR 描述，不传则自动生成",
+                        "description": "PR 描述，不传=自动生成",
                     },
                     "base_branch": {
                         "type": "string",
-                        "description": "目标分支（合并到哪个分支），默认 main 或 master",
+                        "description": "目标分支，默认 main",
                     },
                     "path": {
                         "type": "string",
-                        "description": "Git 仓库路径，默认当前项目目录",
+                        "description": "Git 仓库路径，默认当前目录",
                     },
                 },
                 "required": [],
@@ -212,11 +182,7 @@ TOOLS_GIT = [
         "type": "function",
         "function": {
             "name": "git_branch",
-            "description": (
-                "查看和管理 Git 分支。"
-                "列出所有本地分支，标记当前分支。"
-                "相当于 'git branch' 的结构化版本。"
-            ),
+            "description": "查看和管理分支。列出本地分支，标记当前分支。",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -226,7 +192,7 @@ TOOLS_GIT = [
                     },
                     "path": {
                         "type": "string",
-                        "description": "Git 仓库路径，默认当前项目目录",
+                        "description": "Git 仓库路径，默认当前目录",
                     },
                 },
                 "required": [],
