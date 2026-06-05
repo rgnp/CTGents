@@ -369,11 +369,6 @@ def main() -> None:
                 if user_input.lower().startswith("/reload"):
                     ok, msg = _reload_dispatch()
                     print(msg)
-                    # 注入一条系统消息，告知 LLM 工具已更新
-                    ctx.log.append({
-                        "role": "system",
-                        "content": "⚠️ 系统已热加载，工具列表已更新。执行 discover 查看最新可用工具。"
-                    })
                     continue
 
                 r = dispatch_cmd(user_input, ctx, session_id)
