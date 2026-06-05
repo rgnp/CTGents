@@ -859,24 +859,15 @@ def _repair_json(raw: str) -> str:
 
 
 # ═══════════════════════════════════════════════════════════════
-# 自动 Plan Mode — 复杂任务自动只读分析
+# 自动 Plan Mode — 长任务默认只读分析（LLM 可在 think 中推翻）
 # ═══════════════════════════════════════════════════════════════
 
-_COMPLEX_KEYWORDS = [
-    "重构", "架构", "迁移", "设计", "重写", "改造",
-    "实现一个", "写一个", "添加新功能", "模块", "系统",
-    "refactor", "architecture", "migrate", "redesign", "rewrite",
-]
-
-_AUTO_PLAN_MIN_CHARS = 150  # 短于这个不触发（简单查询）
+_AUTO_PLAN_MIN_CHARS = 300  # 超长描述意味着任务需要理解现状
 
 
 def _should_auto_plan(user_input: str) -> bool:
-    """判断任务是否需要自动进入只读分析模式。"""
-    text = user_input.lower()
-    if len(text) < _AUTO_PLAN_MIN_CHARS:
-        return False
-    return any(kw in text for kw in _COMPLEX_KEYWORDS)
+    """纯长度启发式，不做关键词匹配。LLM 若认为不需要可用 think 自行退出。"""
+    return len(user_input) >= _AUTO_PLAN_MIN_CHARS
 
 
 def run_conversation(
