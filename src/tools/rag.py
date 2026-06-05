@@ -1410,5 +1410,5 @@ def execute(name: str, args: dict) -> str:
             top_k=args.get("top_k", DEFAULT_TOP_K),
         )
     elif name == "rag_status":
-        return get_stats_text()
+        return get_index_status()
     return f"未知 RAG 工具: {name}"

@@ -23,6 +23,7 @@ _BUILTIN_MODULES: list[tuple[str, str, str]] = [
     (".lint",      "TOOLS_LINT",   "execute"),
     (".rag",       "TOOLS_RAG",    "execute"),
     (".evolve",    "TOOLS_EVOLVE",  "execute"),
+    (".self",      "TOOLS_SELF",   "execute"),
 ]
 
 _TOOL_SOURCES: list[list[dict]] = []

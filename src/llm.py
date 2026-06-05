@@ -34,10 +34,8 @@ TOOL_LABELS: dict[str, str] = {
     "search_web":    "搜索",
     "read_page":     "阅读网页",
     "read_file":     "读取文件",
-    "read_file_lines": "读取文件（带行号）",
     "write_file":    "写入文件",
     "edit_file_lines": "行级编辑",
-    "undo_edit":     "撤销编辑",
     "list_files":    "浏览目录",
     "delete_file":   "删除文件",
     "count_lines":   "统计行数",
@@ -48,13 +46,10 @@ TOOL_LABELS: dict[str, str] = {
     "remember":      "记住",
     "recall":        "回忆",
     "forget":        "忘记",
-    "install_plugin": "安装插件",
-    "list_plugins":   "列出插件",
-    "discover":       "能力扫描",
-    "plugin_spec":    "插件规范",
     "git_status":    "Git 状态",
     "git_diff":      "Git 差异",
     "git_log":       "Git 日志",
+    "git_review":    "Git 审查",
     "git_commit":    "Git 提交",
     "git_push":      "Git 推送",
     "git_pr":        "Git PR",
@@ -63,17 +58,16 @@ TOOL_LABELS: dict[str, str] = {
     "check_project": "规范检查",
     "generate_agents_md": "生成规范",
     "docs_sync_check": "文档同步检查",
+    "rag_index":     "RAG 索引",
+    "rag_query":     "RAG 搜索",
+    "rag_status":    "RAG 状态",
     "evolve_query":    "进化查询",
+    "evolve_check_access": "权限检查",
+    "evolve_coverage": "覆盖率报告",
     "evolve_validate": "进化验证",
-    "search_papers":   "论文搜索",
-    "read_paper":      "阅读论文",
-    "save_note":       "保存笔记",
-    "search_knowledge": "搜索知识库",
-    "kb_topics":       "知识库主题",
-    "link_papers":     "关联论文",
-    "kb_stats":        "知识库统计",
-    "rag_browse":      "浏览知识库",
-    "rag_read":        "阅读文档",
+    "evolve_suggest_tests": "测试建议",
+    "evolve_status":  "进化状态",
+    "self":          "自我认知",
 }
 
 logger = logging.getLogger(__name__)
@@ -323,8 +317,8 @@ AVAILABLE_MODELS: dict[str, LLMBackend] = {
     )),
 }
 
-# 当前选中的模型（默认 Flash）
-_current_backend: LLMBackend = AVAILABLE_MODELS["flash"]
+# 当前模型 — 始终 Pro
+_current_backend: LLMBackend = AVAILABLE_MODELS["pro"]
 
 # ── 模型切换滞后计数器（避免 flash↔pro ping-pong 破坏前缀缓存） ──
 # DeepSeek KV 缓存按模型独立 — flash 和 pro 各有自己的缓存。
@@ -433,37 +427,11 @@ def _estimate_task_complexity(user_input: str) -> str:
 
 
 def auto_select_model(user_input: str) -> LLMBackend:
-    """根据用户输入自动选择最合适的模型。
+    """始终使用 Pro。"""
+    return AVAILABLE_MODELS["pro"]
 
-    滞后策略（保护前缀缓存，对齐 Reasonix）：
-      - flash → pro: 即刻切换（复杂任务不能降质）
-      - pro → flash: 需连续 _STICKY_THRESHOLD 轮简单任务才降回
-        （避免 ping-pong 导致两个模型都攒不起长前缀）
-    注意：此函数会更新全局 _current_backend，无需调用方再赋值。
-    """
-    global _consecutive_simple_tasks, _current_backend
-    model_key = _estimate_task_complexity(user_input)
 
-    is_on_flash = _current_backend is AVAILABLE_MODELS["flash"]
 
-    if is_on_flash and model_key == "pro":
-        # flash → pro: 即刻升级，重置计数器
-        _consecutive_simple_tasks = 0
-        _current_backend = AVAILABLE_MODELS["pro"]
-        return _current_backend
-
-    if not is_on_flash and model_key == "flash":
-        # 当前 pro，遇到了简单任务 — 累积计数
-        _consecutive_simple_tasks += 1
-        if _consecutive_simple_tasks >= _STICKY_THRESHOLD:
-            _current_backend = AVAILABLE_MODELS["flash"]
-            return _current_backend
-        # 还不够，留在 pro
-        return _current_backend
-
-    # 模型匹配当前，重置简单任务计数
-    _consecutive_simple_tasks = 0
-    return _current_backend
 # 统计持久化目录：agent/stats/{session_id}.json
 _STATS_DIR = Path(__file__).resolve().parent.parent / "stats"
 
@@ -996,11 +964,6 @@ def run_conversation(
                 "tool_calls": tool_calls,
             })
             try:
-                # ═══════════════════════════════════════════════════════════
-                # SAFE Phase 1：安全确认（顺序执行，含用户交互）
-                # ═══════════════════════════════════════════════════════════
-                from .safety import check_tool, get_mode, get_safety_level, trust_tool
-
                 approved: list[tuple] = []  # (tc_data, tool_name, args, tc, pre_result_or_None)
 
                 for tc_data in tool_calls:
@@ -1020,37 +983,8 @@ def run_conversation(
                         )
                     )
                     on_tool(tool_name, args)
+                    approved.append((tc_data, tool_name, args, tc, None))
 
-                    safety = check_tool(tool_name)
-                    if safety == "confirm":
-                        level = get_safety_level(tool_name).value
-                        mode = get_mode()
-                        label = TOOL_LABELS.get(tool_name, tool_name)
-                        detail = " ".join(f"{k}={v}" for k, v in args.items())
-                        if len(detail) > 120:
-                            detail = detail[:117] + "..."
-
-                        print(f"\n  ⚠️ [{label}] 需要确认")
-                        print(f"     等级: {level.upper()} | 模式: {mode}")
-                        print(f"     参数: {detail}")
-                        choice = input("     执行？[y=确认/n=跳过/a=始终允许本次会话] ").strip().lower()
-
-                        if choice in ("a", "always"):
-                            trust_tool(tool_name)
-                            print(f"     ✅ 已信任 {tool_name}，本次会话自动放行\n")
-                            approved.append((tc_data, tool_name, args, tc, None))
-                        elif choice in ("y", "yes", ""):
-                            approved.append((tc_data, tool_name, args, tc, None))
-                        else:
-                            print("     ⛔ 已跳过\n")
-                            approved.append((tc_data, tool_name, args, tc,
-                                              f"⛔ [{tool_name}] 已跳过（用户未批准）"))
-                    else:
-                        approved.append((tc_data, tool_name, args, tc, None))
-
-                # ═══════════════════════════════════════════════════════════
-                # SAFE Phase 2：批量执行（只读并行 + 有副作用串行）
-                # ═══════════════════════════════════════════════════════════
                 exec_indices: list[int] = []
                 exec_items: list[tuple] = []
                 for i, item in enumerate(approved):
@@ -1064,9 +998,6 @@ def run_conversation(
                         tc_data, tool_name, args, tc, _ = approved[idx]
                         approved[idx] = (tc_data, tool_name, args, tc, result)
 
-                # ═══════════════════════════════════════════════════════════
-                # SAFE Phase 3：处理后追加到 ctx.log
-                # ═══════════════════════════════════════════════════════════
                 for tc_data, tool_name, args, tc, result in approved:
                     result = truncate_to_budget(result, ctx.all)
                     result = _compress_tool_result(tool_name, result)
