@@ -878,8 +878,13 @@ def run_conversation(
     on_progress: Callable[[], None] | None = None,
     session_id: str = "",
 ) -> str:
-    """处理一轮对话：自动路由 + 工具调用循环。"""
-    _MAX_TOOL_LOOPS = 20  # 单轮对话最多 20 次工具循环
+    """处理一轮对话：自动路由 + 工具调用循环。
+
+    循环终止条件：
+      1. LLM 返回无 tool_calls（自然完成）
+      2. 上下文 token 超限
+      3. 连续 3 轮无用户可见进展（兜底熔断）
+    """
     # ── 运行时守卫：防止误传 list[dict] 等错误类型 ──
     if not hasattr(ctx, "log") or not hasattr(ctx, "all"):
         raise TypeError(
@@ -914,13 +919,6 @@ def run_conversation(
         on_token(f"\n[🤖 使用 {model_name} 处理此任务]\n\n")
 
     while True:
-        # 防止无限工具调用循环
-        tool_loops = sum(1 for m in ctx.log if m.get("role") == "tool")  # approximate
-        if tool_loops >= _MAX_TOOL_LOOPS:
-            return (
-                f"工具调用次数已达上限（{_MAX_TOOL_LOOPS}）。"
-                "请精简操作或分步完成。"
-            )
         used = count_messages_tokens(ctx.all)
         limit = int(MAX_CONTEXT_TOKENS * TOOL_LOOP_THRESHOLD)
         if used >= limit:
