@@ -24,13 +24,13 @@ from .config import (
     RETRY_BASE_DELAY,
     TOOL_LOOP_THRESHOLD,
 )
-from .tools import execute_tool, get_tools
+from .tools import execute_tool, get_tools, is_plan_mode, set_plan_mode
 from .tools.tokens import count_messages_tokens, truncate_to_budget
 from .cache_context import CacheContext
 
 
 # 工具显示标签（安全确认 + 终端回显共用）
-from .tools._tool_meta import TOOL_LABELS, PARALLEL_SAFE as _PARALLEL_SAFE, SKIP_COMPRESS_TOOLS as _SKIP_COMPRESS_TOOLS
+from .tools._tool_meta import PARALLEL_SAFE as _PARALLEL_SAFE, SKIP_COMPRESS_TOOLS as _SKIP_COMPRESS_TOOLS
 
 logger = logging.getLogger(__name__)
 
@@ -951,7 +951,6 @@ def run_conversation(
     # ── 自动 Plan Mode：复杂任务先只读分析 ──
     auto_plan = False
     if _should_auto_plan(user_input) and not is_plan_mode():
-        from .tools import set_plan_mode
         set_plan_mode(True)
         auto_plan = True
         on_token("📋 任务较复杂，先进入只读分析…\n\n")
