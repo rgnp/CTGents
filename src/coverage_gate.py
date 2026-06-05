@@ -83,7 +83,7 @@ _coverage_cache: tuple[float, dict[str, float], dict[str, set[int]], float] | No
 # ═══════════════════════════════════════════════════════════════
 
 def _match_pattern(filepath: str, pattern: str) -> bool:
-    """glob 风格模式匹配。** 匹配任意深度，* 匹配单层任意字符。"""
+    """Glob 风格模式匹配。** 匹配任意深度，* 匹配单层任意字符。"""
     fp = str(Path(filepath)).replace("\\", "/")
     regex_parts: list[str] = []
     i = 0
@@ -214,10 +214,7 @@ def _get_function_line_ranges(source: str) -> dict[str, tuple[int, int]]:
 
     ranges: dict[str, tuple[int, int]] = {}
     for node in ast.walk(tree):
-        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
-            end = getattr(node, "end_lineno", node.lineno)
-            ranges[node.name] = (node.lineno, end)
-        elif isinstance(node, ast.ClassDef):
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
             end = getattr(node, "end_lineno", node.lineno)
             ranges[node.name] = (node.lineno, end)
 

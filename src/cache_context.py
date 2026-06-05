@@ -35,6 +35,7 @@ def _compute_msg_hash(msgs: list[dict]) -> str:
 
 class PrefixIntegrityError(RuntimeError):
     """前缀哈希校验失败 — 不可变前缀被意外修改。"""
+
     pass
 
 
@@ -66,7 +67,7 @@ class CacheContext:
 
     @property
     def all(self) -> list[dict]:
-        """prefix + log（用于 session 持久化；save_session 会过滤 _volatile）。"""
+        """Prefix + log（用于 session 持久化；save_session 会过滤 _volatile）。"""
         return self.prefix + self.log
 
     def stats(self) -> dict:

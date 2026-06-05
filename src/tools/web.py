@@ -286,7 +286,6 @@ def _do_read_page(url: str) -> tuple[str, int | None]:
         (result_text, status_code_or_None)
         status_code 为 HTTP 状态码，网络错误时为 None
     """
-
     # 带超时下载
     html, status = _fetch_url_with_timeout(url)
 

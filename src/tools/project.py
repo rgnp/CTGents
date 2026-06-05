@@ -202,7 +202,7 @@ def _detect_language_and_framework(root: Path) -> dict:
         try:
             pkg = json.loads(pkg_json.read_text(encoding="utf-8"))
             scripts = pkg.get("scripts", {})
-            for name, cmd in scripts.items():
+            for name, _cmd in scripts.items():
                 has_build = any(kw in name.lower() for kw in _BUILD_KEYWORDS)
                 has_test = any(kw in name.lower() for kw in _TEST_KEYWORDS)
                 has_run = any(kw in name.lower() for kw in _RUN_KEYWORDS)
@@ -327,10 +327,10 @@ def _build_tree(root: Path, depth: int = 2, current_depth: int = 0,
     ]
 
     # 限制每个目录显示的条目数
-    MAX_ENTRIES = 30
-    if len(entries) > MAX_ENTRIES:
-        truncated = entries[:MAX_ENTRIES]
-        remaining = len(entries) - MAX_ENTRIES
+    max_entries = 30
+    if len(entries) > max_entries:
+        truncated = entries[:max_entries]
+        remaining = len(entries) - max_entries
     else:
         truncated = entries
         remaining = 0

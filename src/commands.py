@@ -6,8 +6,8 @@ import os
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
-from .config import SESSION_DIR
 from .cache_context import CacheContext
+from .config import SESSION_DIR
 from .session import delete_session, get_session_name, list_sessions
 
 if TYPE_CHECKING:
@@ -286,7 +286,10 @@ def _cmd_context(r: CmdResult, ctx, _args, _sid) -> None:
         lines.append("")
         lines.append("── 三段式结构 ──")
         lines.append(f"  Prefix: {s['prefix']['messages']} 条 ({s['prefix']['tokens']} token)")
-        lines.append(f"  Log:    {s['log']['messages']} 条 ({s['log']['tokens']} token, volatile {s['log']['volatile']})")
+        lines.append(
+            f"  Log:    {s['log']['messages']} 条 "
+            f"({s['log']['tokens']} token, volatile {s['log']['volatile']})"
+        )
         lines.append(f"  Scratch:{s['scratch']['messages']} 条 ({s['scratch']['tokens']} token)")
 
     # ── 前缀哈希 ──

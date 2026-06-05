@@ -32,7 +32,8 @@ class TestEvolutionSystemPrompt:
     def test_contains_safety_rules(self):
         prompt = build_evolution_system_prompt("test")
         assert "git_commit" in prompt
-        assert "回滚" in prompt or "rollback" in prompt.lower()
+        assert "修复" in prompt
+        assert "reset" in prompt
 
     def test_markdown_formatting(self):
         prompt = build_evolution_system_prompt("test")

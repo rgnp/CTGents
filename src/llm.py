@@ -12,6 +12,7 @@ from types import SimpleNamespace
 
 from openai import APIConnectionError, APITimeoutError, InternalServerError, OpenAI, RateLimitError
 
+from .cache_context import CacheContext
 from .config import (
     DEEPSEEK_API_KEY,
     DEEPSEEK_BASE_URL,
@@ -25,12 +26,11 @@ from .config import (
     TOOL_LOOP_THRESHOLD,
 )
 from .tools import execute_tool, get_tools, is_plan_mode, set_plan_mode
-from .tools.tokens import count_messages_tokens, truncate_to_budget
-from .cache_context import CacheContext
-
 
 # 工具显示标签（安全确认 + 终端回显共用）
-from .tools._tool_meta import PARALLEL_SAFE as _PARALLEL_SAFE, SKIP_COMPRESS_TOOLS as _SKIP_COMPRESS_TOOLS
+from .tools._tool_meta import PARALLEL_SAFE as _PARALLEL_SAFE
+from .tools._tool_meta import SKIP_COMPRESS_TOOLS as _SKIP_COMPRESS_TOOLS
+from .tools.tokens import count_messages_tokens, truncate_to_budget
 
 logger = logging.getLogger(__name__)
 
@@ -48,7 +48,7 @@ RETRYABLE = (
 # ═══════════════════════════════════════════════════════════════
 
 
-class UserInterrupt(Exception):
+class UserInterruptError(Exception):
     """用户主动中断（按 Esc 触发）。"""
 
     pass
@@ -168,7 +168,7 @@ class DeepSeekBackend(LLMBackend):
                 if is_interrupt_requested():
                     stream.close()
                     clear_interrupt()
-                    raise UserInterrupt("用户按 Esc 中断")
+                    raise UserInterruptError("用户按 Esc 中断")
 
                 # 每个 chunk 都检查 usage（末 chunk 带真实缓存统计，其他 chunk 为 None）
                 if hasattr(chunk, "usage") and chunk.usage:
@@ -199,7 +199,7 @@ class DeepSeekBackend(LLMBackend):
                                 tc["function"]["name"] += tc_delta.function.name
                             if tc_delta.function.arguments:
                                 tc["function"]["arguments"] += tc_delta.function.arguments
-        except UserInterrupt:
+        except UserInterruptError:
             # 中断时返回已收到的部分内容，但不作为完整回复
             content = "".join(content_parts) if content_parts else None
             if content:
@@ -475,10 +475,7 @@ def _update_cache_stats(model_key: str, messages: list[dict], session_id: str = 
 
 def get_cache_stats(session_id: str = "") -> dict:
     """返回指定会话的缓存命中统计，供 /context 使用。"""
-    if session_id and session_id != _current_session_id:
-        data = _load_cache_stats(session_id)
-    else:
-        data = _CACHE_STATS
+    data = _load_cache_stats(session_id) if session_id and session_id != _current_session_id else _CACHE_STATS
 
     if not isinstance(data, dict):
         data = {"flash": dict(_EMPTY_STATS), "pro": dict(_EMPTY_STATS)}
@@ -1020,7 +1017,7 @@ def run_conversation(
 
         try:
             content, tool_calls = _invoke_llm(backend, ctx.send(), on_token, session_id)
-        except UserInterrupt:
+        except UserInterruptError:
             clear_interrupt()
             return "\n\n[⏹️ 已中断]"
         if tool_calls:
@@ -1042,10 +1039,16 @@ def run_conversation(
                             args = json.loads(repaired)
                             logger.info("工具调用 JSON 已修复: %s", tool_name)
                         except json.JSONDecodeError:
-                            approved.append((tc_data, tool_name, {},
-                                             SimpleNamespace(function=SimpleNamespace(name=tool_name, arguments="{}")),
-                                             json.dumps({"error": f"JSON 解析失败: {tc_data['function']['arguments'][:100]}"},
-                                                        ensure_ascii=False)))
+                            error_payload = {
+                                "error": f"JSON 解析失败: {tc_data['function']['arguments'][:100]}",
+                            }
+                            approved.append((
+                                tc_data,
+                                tool_name,
+                                {},
+                                SimpleNamespace(function=SimpleNamespace(name=tool_name, arguments="{}")),
+                                json.dumps(error_payload, ensure_ascii=False),
+                            ))
                             continue
                     tc = SimpleNamespace(
                         function=SimpleNamespace(
@@ -1065,11 +1068,11 @@ def run_conversation(
 
                 if exec_items:
                     exec_results = _execute_tool_batch(exec_items)
-                    for idx, result in zip(exec_indices, exec_results):
+                    for idx, result in zip(exec_indices, exec_results, strict=True):
                         tc_data, tool_name, args, tc, _ = approved[idx]
                         approved[idx] = (tc_data, tool_name, args, tc, result)
 
-                for tc_data, tool_name, args, tc, result in approved:
+                for tc_data, tool_name, _args, _tc, result in approved:
                     result = truncate_to_budget(result, ctx.all)
                     result = _compress_tool_result(tool_name, result)
                     ctx.log.append({
@@ -1080,7 +1083,7 @@ def run_conversation(
                         "_tool_result_compressed": True,  # 标记可压缩
                     })
                 # 记忆变更后更新 ctx.log 中的记忆索引
-                from .tools.memory import get_context, is_dirty, clear_dirty
+                from .tools.memory import clear_dirty, get_context, is_dirty
                 if is_dirty():
                     old_idx = next((i for i, m in enumerate(ctx.log)
                                     if m.get("role") == "system" and "你拥有以下记忆" in m.get("content","")), -1)

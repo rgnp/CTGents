@@ -4,12 +4,13 @@
 支持：写入记录、关键词搜索、TF-IDF 相似度搜索、教训提取、统计汇总。
 """
 
+import contextlib
 import json
 import os
 import re
 import uuid
 from collections import Counter
-from dataclasses import dataclass, field, asdict
+from dataclasses import asdict, dataclass, field
 from datetime import datetime
 from math import log
 from pathlib import Path
@@ -22,6 +23,7 @@ MAX_RECORDS = 1000
 @dataclass
 class EvolutionRecord:
     """一次自进化尝试的完整记录。"""
+
     id: str = field(default_factory=lambda: uuid.uuid4().hex[:12])
     timestamp: str = field(default_factory=lambda: datetime.now().isoformat(timespec="seconds"))
     goal: str = ""
@@ -68,14 +70,12 @@ def _read_all() -> list[dict]:
         return []
     records = []
     try:
-        with open(EVOLVE_LOG, "r", encoding="utf-8") as f:
+        with open(EVOLVE_LOG, encoding="utf-8") as f:
             for line in f:
                 line = line.strip()
                 if line:
-                    try:
+                    with contextlib.suppress(json.JSONDecodeError):
                         records.append(json.loads(line))
-                    except json.JSONDecodeError:
-                        pass
     except OSError:
         pass
     return records
@@ -105,10 +105,8 @@ def _read_tail(limit: int) -> list[dict]:
     records = []
     for line in lines[-limit:]:
         if line:
-            try:
+            with contextlib.suppress(json.JSONDecodeError):
                 records.append(json.loads(line))
-            except json.JSONDecodeError:
-                pass
     return records
 
 
@@ -183,11 +181,11 @@ def _tfidf_search(query_text: str, documents: list[dict], field: str = "goal",
         all_tokens.update(dt)
 
     # IDF
-    N = len(documents)
+    doc_count = len(documents)
     idf: dict[str, float] = {}
     for token in all_tokens:
         df = sum(1 for dt in doc_tokens_list if token in dt)
-        idf[token] = log((N + 1) / (df + 1)) + 1.0
+        idf[token] = log((doc_count + 1) / (df + 1)) + 1.0
 
     # 查询 TF
     query_tf = Counter(query_tokens)
@@ -278,7 +276,7 @@ def _trim_if_needed():
         size = EVOLVE_LOG.stat().st_size
         if size < 500_000:
             return
-        with open(EVOLVE_LOG, "r", encoding="utf-8") as f:
+        with open(EVOLVE_LOG, encoding="utf-8") as f:
             lines = f.readlines()
         if len(lines) > MAX_RECORDS:
             with open(EVOLVE_LOG, "w", encoding="utf-8") as f:

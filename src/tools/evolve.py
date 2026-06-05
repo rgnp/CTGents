@@ -53,9 +53,8 @@ def _parse_test_imports() -> dict[str, set[str]]:
             if isinstance(node, ast.Import):
                 for alias in node.names:
                     imports.add(alias.name)
-            elif isinstance(node, ast.ImportFrom):
-                if node.module:
-                    imports.add(node.module)
+            elif isinstance(node, ast.ImportFrom) and node.module:
+                imports.add(node.module)
         cache[str(tf)] = imports
     return cache
 
@@ -329,7 +328,7 @@ def _cmd_check_access(args: dict) -> str:
 
 
 def _cmd_coverage(args: dict) -> str:
-    from ..coverage_gate import get_tier_summary, get_modifiable_files
+    from ..coverage_gate import get_modifiable_files, get_tier_summary
     summary = get_tier_summary()
     files = get_modifiable_files()
     lines = [summary, "", f"可修改文件 ({len(files)} 个):"]
@@ -353,7 +352,8 @@ def _cmd_validate(args: dict) -> str:
         return _validate_related_only(changed_files, timeout)
 
     # ── 全量验证 ──
-    from ..validate import validate as run_validate, format_report
+    from ..validate import format_report
+    from ..validate import validate as run_validate
     report = run_validate(changed_files, timeout=timeout)
     result = format_report(report)
     if report.overall.value != "pass":
@@ -479,8 +479,8 @@ def _cmd_suggest_tests(args: dict) -> str:
 
 
 def _cmd_status(args: dict) -> str:
-    from ..evolve import get_stats, get_last_n
     from ..coverage_gate import get_tier_summary
+    from ..evolve import get_last_n, get_stats
 
     stats = get_stats()
     tier = get_tier_summary()

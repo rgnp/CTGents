@@ -211,7 +211,10 @@ def _check_tests(root: Path) -> dict:
     # 检查 pytest 配置
     has_pytest_config = (
         (root / "pytest.ini").exists()
-        or ((root / "pyproject.toml").exists() and "[tool.pytest" in (root / "pyproject.toml").read_text(encoding="utf-8"))
+        or (
+            (root / "pyproject.toml").exists()
+            and "[tool.pytest" in (root / "pyproject.toml").read_text(encoding="utf-8")
+        )
         or ((root / "setup.cfg").exists() and "[tool:pytest" in (root / "setup.cfg").read_text(encoding="utf-8"))
     )
 
@@ -463,7 +466,7 @@ def _check_git(root: Path) -> dict:
             ["git", "-C", str(root), "status", "--porcelain"],
             capture_output=True, encoding="utf-8", errors="replace", timeout=10
         )
-        dirty_files = len([l for l in result.stdout.split("\n") if l.strip()])
+        dirty_files = len([line for line in result.stdout.split("\n") if line.strip()])
         if dirty_files > 10:
             issues.append(f"有 {dirty_files} 个未提交的文件变更，建议频繁小步提交")
             suggestions.append("将当前变更拆分为小的、有意义的提交")
@@ -719,7 +722,10 @@ def check_project(path: str | None = None, fix: bool = False) -> str:
     elif overall_pct >= _SCORE_FAIR:
         lines.append("  项目有多项需要改进，建议优先处理 🔴 问题列表。")
     else:
-        lines.append("  项目规范严重不足，建议参考 AGENTS.md 规范指南（yeasy.gitbook.io/agentic_ai_guide）进行全面整改。")
+        lines.append(
+            "  项目规范严重不足，建议参考 AGENTS.md 规范指南"
+            "（yeasy.gitbook.io/agentic_ai_guide）进行全面整改。"
+        )
 
     return "\n".join(lines)
 

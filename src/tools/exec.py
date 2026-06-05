@@ -25,6 +25,7 @@ ALLOWED_COMMANDS: list[str] = []  # 空列表表示不限制，只用黑名单
 
 # 最大输出长度（字符）
 MAX_OUTPUT_LENGTH = 100_000
+SHELL_META_CHARS = frozenset("&|;<>\n\r")
 
 
 # ── 工具定义 ──
@@ -110,6 +111,19 @@ def _truncate_output(output: str, max_len: int = MAX_OUTPUT_LENGTH) -> str:
     return output[:max_len] + f"\n\n...（输出已截断，共 {len(output)} 字符，仅显示前 {max_len} 字符）"
 
 
+def _split_command(command: str) -> list[str] | str:
+    """解析单个命令，拒绝需要 shell 解释的语法。"""
+    if any(ch in command for ch in SHELL_META_CHARS):
+        return "命令包含 shell 元字符（& | ; < > 或换行），请改用单个可执行文件加参数。"
+    try:
+        parts = shlex.split(command)
+    except ValueError as exc:
+        return f"命令解析失败: {exc}"
+    if not parts:
+        return "命令为空"
+    return parts
+
+
 # ── 执行函数 ──
 
 
@@ -168,11 +182,14 @@ def run_command(command: str, timeout: int = 30, workdir: str | None = None) -> 
     if not cwd.is_dir():
         return f"路径不是目录: {cwd}"
 
+    cmd_parts = _split_command(command)
+    if isinstance(cmd_parts, str):
+        return cmd_parts
+
     # ── 执行 ──
     try:
         result = subprocess.run(
-            command,
-            shell=True,
+            cmd_parts,
             capture_output=True,
             encoding="utf-8",
             errors="replace",

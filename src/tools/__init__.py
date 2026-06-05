@@ -5,11 +5,13 @@ import json
 import logging
 import sys
 import time
+
 from openai.types.chat import ChatCompletionMessageToolCall
 
-logger = logging.getLogger(__name__)
+from ._tool_meta import _BUILTIN_MODULES
+from ._tool_meta import PLAN_BLOCKED as _PLAN_BLOCKED
 
-from ._tool_meta import _BUILTIN_MODULES, PLAN_BLOCKED as _PLAN_BLOCKED
+logger = logging.getLogger(__name__)
 
 _TOOL_SOURCES: list[list[dict]] = []
 _EXECUTORS: list = []
@@ -156,7 +158,7 @@ def _auto_reload_module(filepath: str) -> str | None:
     if mod_name == "src.commands":
         try:
             del sys.modules[mod_name]
-            import src.commands  # type: ignore[no-redef]
+            importlib.import_module("src.commands")
             # 通知 main.py 刷新 dispatch_cmd（如果可访问）
             try:
                 from src.main import _reload_dispatch

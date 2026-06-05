@@ -76,7 +76,7 @@ def _ast_check(filepath: str) -> str | None:
 def _import_check(filepath: str) -> str | None:
     """用 ast 提取 import 语句，find_spec 验证（进程内，毫秒级）。"""
     p = Path(filepath)
-    if not p.suffix == ".py":
+    if p.suffix != ".py":
         return None
 
     try:
@@ -92,11 +92,10 @@ def _import_check(filepath: str) -> str | None:
                 base = alias.name.split(".")[0]
                 if importlib.util.find_spec(base) is None:
                     errors.append(f"无法找到模块: {alias.name}")
-        elif isinstance(node, ast.ImportFrom):
-            if node.module and not node.module.startswith("."):
-                base = node.module.split(".")[0]
-                if importlib.util.find_spec(base) is None:
-                    errors.append(f"无法找到模块: {node.module}")
+        elif isinstance(node, ast.ImportFrom) and node.module and not node.module.startswith("."):
+            base = node.module.split(".")[0]
+            if importlib.util.find_spec(base) is None:
+                errors.append(f"无法找到模块: {node.module}")
 
     if errors:
         return f"Import 检查失败 {filepath}: {'; '.join(errors[:3])}"
@@ -122,8 +121,8 @@ def _ruff_check(filepaths: list[str]) -> tuple[int, str]:
             return 0, ""
         output = (result.stdout + result.stderr).strip()
         # 只统计含错误代码的行（格式: file:line:col: CODE message）
-        error_lines = [l for l in output.split("\n") if l.strip()
-                       and not l.startswith("warning:")]
+        error_lines = [line for line in output.split("\n") if line.strip()
+                       and not line.startswith("warning:")]
         return len(error_lines), output
     except subprocess.TimeoutExpired:
         return 0, "ruff 检查超时"
@@ -194,8 +193,8 @@ def _count_lint_issues() -> int:
         if result.returncode == 0:
             return 0
         output = (result.stdout + result.stderr).strip()
-        return len([l for l in output.split("\n") if l.strip()
-                    and not l.startswith("warning:")])
+        return len([line for line in output.split("\n") if line.strip()
+                    and not line.startswith("warning:")])
     except Exception:
         return 0
 
@@ -219,7 +218,7 @@ def sandbox_tests(timeout: int = 120) -> PhaseResult:
             return PhaseResult(
                 phase=Phase.SANDBOX_TEST,
                 result=Result.PASS,
-                details=f"所有测试通过",
+                details="所有测试通过",
                 duration_ms=duration,
             )
         else:
@@ -228,8 +227,8 @@ def sandbox_tests(timeout: int = 120) -> PhaseResult:
             # 取尾部 3000 字符（而不是 1000），确保包含完整错误信息
             tail = output[-3000:] if len(output) > 3000 else output
             # 额外提取所有 "FAILED" 行放在前面
-            failed_tests = [l.strip() for l in fail_lines
-                          if "FAILED" in l and "::" in l][:10]
+            failed_tests = [line.strip() for line in fail_lines
+                          if "FAILED" in line and "::" in line][:10]
             prefix = ""
             if failed_tests:
                 prefix = "失败测试:\n" + "\n".join(f"  - {t}" for t in failed_tests) + "\n\n"

@@ -7,19 +7,19 @@ import time
 from collections.abc import Callable
 from pathlib import Path
 
+from .cache_context import CacheContext
+from .commands import dispatch as dispatch_cmd
+from .config import SESSION_DIR
+from .llm import TokenCallback, clear_interrupt, request_interrupt, run_conversation
+from .session import list_sessions, load_session, save_session
+from .tools import is_plan_mode, set_plan_mode
+from .tools._tool_meta import TOOL_LABELS
+
 logging.basicConfig(
     level=logging.WARNING,
     format="%(asctime)s [%(levelname)s] %(message)s",
     datefmt="%H:%M:%S",
 )
-
-from .cache_context import CacheContext
-from .commands import dispatch as dispatch_cmd
-from .config import SESSION_DIR
-from .llm import TokenCallback, clear_interrupt, request_interrupt, run_conversation
-from .tools._tool_meta import TOOL_LABELS
-from .session import list_sessions, load_session, save_session
-from .tools import is_plan_mode, set_plan_mode
 
 # ═══════════════════════════════════════════════════════════════
 # Esc 打断监听（Windows msvcrt 后台线程）
@@ -153,7 +153,7 @@ _PREREAD_MAX_CHARS = 3000  # 单文件最多读取字符
 
 def _preread_files(user_input: str, ctx) -> list[dict]:
     """扫描用户输入中的文件路径，预读到上下文。返回预读的 tool 消息列表。"""
-    from .tools.file import _resolve, _read_cached
+    from .tools.file import _read_cached, _resolve
 
     paths = set()
     for m in _FILE_PATH_RE.finditer(user_input):

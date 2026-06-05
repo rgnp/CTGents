@@ -255,9 +255,8 @@ class ProjectAnalyzer:
 
     def _collect_assign_value_refs(self, node: ast.Assign, module: str) -> None:
         for target in node.targets:
-            if isinstance(target, ast.Subscript):
-                if isinstance(node.value, ast.Name):
-                    self._refs[module].add(node.value.id)
+            if isinstance(target, ast.Subscript) and isinstance(node.value, ast.Name):
+                self._refs[module].add(node.value.id)
 
     def _resolve_attr_path(self, node: ast.Attribute) -> str | None:
         parts: list[str] = []
@@ -311,9 +310,7 @@ class ProjectAnalyzer:
         # 类内私有方法（通过 self._xxx 调用，AST 无法追踪）
         if d.kind == "method" and not d.is_public:
             return True
-        if d.file.endswith("__init__.py") and d.is_public:
-            return True
-        return False
+        return d.file.endswith("__init__.py") and d.is_public
 
     def _is_used(self, d: DefInfo, fqn: str, referenced: set[str]) -> bool:
         if fqn in referenced or d.name in referenced:

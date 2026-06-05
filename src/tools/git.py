@@ -106,7 +106,7 @@ TOOLS_GIT = [
                     },
                     "auto_stage": {
                         "type": "boolean",
-                        "description": "是否自动暂存（git add -A），默认 True",
+                        "description": "是否自动暂存具体变更文件，默认 True",
                     },
                     "path": {
                         "type": "string",
@@ -245,6 +245,34 @@ def _get_current_branch(path: str | None = None) -> str:
     return "unknown"
 
 
+def _changed_paths_for_stage(workdir: str) -> list[str]:
+    """返回需要暂存的具体路径。"""
+    r = _git(["status", "--porcelain"], workdir)
+    if not r["success"]:
+        return []
+
+    paths: list[str] = []
+    for raw_line in r["stdout"].splitlines():
+        if not raw_line or raw_line.startswith("##"):
+            continue
+        path_text = raw_line[3:].strip()
+        if " -> " in path_text:
+            path_text = path_text.split(" -> ", 1)[1].strip()
+        if path_text:
+            paths.append(path_text.strip('"'))
+    return sorted(set(paths))
+
+
+def _stage_changed_files(workdir: str) -> str | None:
+    paths = _changed_paths_for_stage(workdir)
+    if not paths:
+        return None
+    r = _git(["add", "--", *paths], workdir)
+    if not r["success"]:
+        return f"暂存失败:\n{r['stderr']}"
+    return None
+
+
 def _format_diff_stats(diff_text: str) -> str:
     """从 diff 输出中提取统计信息。"""
     lines = diff_text.split("\n")
@@ -349,9 +377,9 @@ def git_diff(staged: bool = False, path: str | None = None, file: str | None = N
         return f"无 {label} 变更"
 
     # 截断过长的 diff，保留前 5000 字符
-    MAX_DIFF = 5000
-    if len(output) > MAX_DIFF:
-        output = output[:MAX_DIFF] + f"\n\n...（diff 过长，已截断至 {MAX_DIFF} 字符，共 {len(output)} 字符）"
+    max_diff = 5000
+    if len(output) > max_diff:
+        output = output[:max_diff] + f"\n\n...（diff 过长，已截断至 {max_diff} 字符，共 {len(output)} 字符）"
 
     # 计算统计信息
     add_count = output.count("\n+")
@@ -453,10 +481,10 @@ def git_review(path: str | None = None) -> str:
         static_part = "## 静态检查发现的问题\n" + "\n".join(f"- {s}" for s in static_issues) + "\n"
 
     # ── LLM 审查（仅对代码文件，纯文档跳过以节省 ~15s）──
-    CODE_EXTENSIONS = {".py", ".rs", ".go", ".js", ".ts", ".c", ".cpp", ".h", ".hpp",
+    code_extensions = {".py", ".rs", ".go", ".js", ".ts", ".c", ".cpp", ".h", ".hpp",
                        ".sh", ".toml", ".yaml", ".yml", ".json", ".tf", ".proto"}
     has_code_changes = any(
-        any(f.endswith(ext) for ext in CODE_EXTENSIONS)
+        any(f.endswith(ext) for ext in code_extensions)
         for f in changed_files
     ) if changed_files else False
 
@@ -503,9 +531,9 @@ def git_commit(message: str | None = None, auto_stage: bool = True, path: str | 
 
     # 自动暂存
     if auto_stage:
-        r1 = _git(["add", "-A"], str(workdir))
-        if not r1["success"]:
-            return f"暂存失败:\n{r1['stderr']}"
+        stage_error = _stage_changed_files(str(workdir))
+        if stage_error:
+            return stage_error
 
     # 检查是否有变更需要提交
     r_check = _git(["status", "--porcelain"], str(workdir))
@@ -521,6 +549,19 @@ def git_commit(message: str | None = None, auto_stage: bool = True, path: str | 
     if has_py_changes:
         import subprocess as sp
         try:
+            lint_result = sp.run(
+                ["py", "-m", "ruff", "check", "src/"],
+                cwd=str(workdir),
+                capture_output=True,
+                timeout=120,
+                encoding="utf-8", errors="replace",
+            )
+            if lint_result.returncode != 0:
+                return (
+                    "⛔ 提交被拒绝：ruff check src/ 未通过。请修复后重试。\n\n"
+                    f"{lint_result.stdout[-1500:]}{lint_result.stderr[-500:]}"
+                )
+
             test_result = sp.run(
                 ["py", "-m", "pytest", "-q", "--tb=line", "-p", "no:cacheprovider"],
                 cwd=str(workdir),
@@ -536,7 +577,7 @@ def git_commit(message: str | None = None, auto_stage: bool = True, path: str | 
         except sp.TimeoutExpired:
             return "⛔ 提交被拒绝：测试超时（>120s）。请修复性能问题后重试。"
         except FileNotFoundError:
-            pass  # pytest 不可用，跳过检查
+            return "⛔ 提交被拒绝：pytest 或 ruff 不可用，无法完成提交前验证。"
 
     # 如果没有提供 message，自动分析变更生成
     if not message:
@@ -741,7 +782,10 @@ def git_pr(title: str | None = None, body: str | None = None,
             )
             if r.returncode == 0:
                 pr_url = r.stdout.strip()
-                return f"✅ Pull Request 已创建\n\n标题: {title}\n目标: {current_branch} → {base_branch}\n链接: {pr_url}"
+                return (
+                    "✅ Pull Request 已创建\n\n"
+                    f"标题: {title}\n目标: {current_branch} → {base_branch}\n链接: {pr_url}"
+                )
             else:
                 return f"❌ 创建 PR 失败（gh CLI）:\n{r.stderr[:500]}"
         except subprocess.TimeoutExpired:

@@ -73,7 +73,10 @@ SYSTEM_MAP = {
     "cache_context": {
         "name": "上下文缓存系统",
         "files": "src/cache_context.py",
-        "what": "三段式 CacheContext：不可变 prefix（享受缓存）+ 追加 log（对话历史）+ 临时 scratch（不缓存的动态内容）",
+        "what": (
+            "三段式 CacheContext：不可变 prefix（享受缓存）+ 追加 log（对话历史）"
+            "+ 临时 scratch（不缓存的动态内容）"
+        ),
         "why": "DeepSeek 前缀缓存按字节匹配——prefix 不变则全命中，log 增量部分仅首次计费。_volatile 标记控制持久化",
         "tools": [],
         "connections": {
@@ -108,13 +111,20 @@ SYSTEM_MAP = {
     "evolution": {
         "name": "进化系统",
         "files": "src/evolution_loop.py + src/evolve.py + src/validate.py",
-        "what": "研究→综合→生成→验证→合入/回滚 闭环。JSONL 进化档案支持 TF-IDF 相似搜索和学习",
-        "why": "agent 能在网上研究更好的设计、生成候选方案、落地代码、跑测试验证、失败自动回滚、记录教训",
-        "tools": ["evolve_query", "evolve_status", "evolve_check_access", "evolve_coverage", "evolve_suggest_tests", "evolve_validate"],
+        "what": "研究→综合→生成→验证→合入/修复 闭环。JSONL 进化档案支持 TF-IDF 相似搜索和学习",
+        "why": "agent 能在网上研究更好的设计、生成候选方案、落地代码、跑测试验证、失败时修复或停止并记录教训",
+        "tools": [
+            "evolve_query",
+            "evolve_status",
+            "evolve_check_access",
+            "evolve_coverage",
+            "evolve_suggest_tests",
+            "evolve_validate",
+        ],
         "connections": {
             "validate": "三阶段验证（AST→pytest→覆盖率/lint）",
             "coverage_gate": "改文件前检查权限，覆盖率不足时建议测试",
-            "git": "改前 git_commit 快照，失败 git reset --hard",
+            "git": "git_commit 使用具体文件暂存，提交前强制 ruff + pytest",
             "evolve": "每次尝试写入 JSONL 进化档案",
             "llm": "委托 LLM 执行代码修改",
         },
@@ -122,7 +132,10 @@ SYSTEM_MAP = {
     "memory": {
         "name": "记忆系统",
         "files": "src/tools/memory.py + ~/.claude/projects/.../memory/",
-        "what": "remember/recall/forget。混合检索——RAG 语义搜索优先，关键词回退。时间衰减评分（相似度×0.6+新近度×0.3+重要性×0.1）",
+        "what": (
+            "remember/recall/forget。混合检索——RAG 语义搜索优先，关键词回退。"
+            "时间衰减评分（相似度×0.6+新近度×0.3+重要性×0.1）"
+        ),
         "why": "agent 需要跨会话记住用户偏好和重要事实。不是存了就完——会衰减、会浮现、会关联",
         "tools": ["remember", "recall", "forget"],
         "connections": {
@@ -132,7 +145,11 @@ SYSTEM_MAP = {
     "rag": {
         "name": "RAG 语义搜索",
         "files": "src/tools/rag.py",
-        "what": "TF-IDF 索引——代码（src/*.py）和知识库（knowledge/*.md）双库独立。rag_index 索引代码，rag_index_research 索引研究笔记，rag_query/rag_search 分别搜索",
+        "what": (
+            "TF-IDF 索引——代码（src/*.py）和知识库（knowledge/*.md）双库独立。"
+            "rag_index 索引代码，rag_index_research 索引研究笔记，"
+            "rag_query/rag_search 分别搜索"
+        ),
         "why": "两套独立索引：代码和知识库数据量差异大，分开搜索更精准",
         "tools": ["rag_index", "rag_query", "rag_status", "rag_index_research", "rag_search"],
         "connections": {

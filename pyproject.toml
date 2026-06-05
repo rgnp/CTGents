@@ -32,8 +32,15 @@ select = [
 ]
 ignore = [
     "D100",   # 不强制模块级 docstring
+    "D101",   # 不强制 public class docstring
+    "D102",   # 不强制 public method docstring
+    "D103",   # 不强制 public function docstring
     "D104",   # 不强制包级 docstring
+    "D105",   # 不强制 magic method docstring
     "D107",   # 不强制 __init__ 的 docstring
+    "D203",   # 与 D211 冲突，显式忽略
+    "D212",   # 与 D213 冲突，显式忽略
+    "D213",   # 与 D212 冲突，显式忽略
     "D205",   # 中文 docstring 摘要与正文之间无空行
     "D400",   # 中文 docstring 以"。"结尾，不强制英文句号
     "D413",   # Returns 段落后缺少空行（中文风格）

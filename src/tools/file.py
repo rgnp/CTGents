@@ -345,8 +345,12 @@ def _ensure_in_workspace(filepath: Path) -> None:
     root = Path.cwd().resolve()
     try:
         filepath.resolve().relative_to(root)
-    except ValueError:
-        raise PermissionError(f"路径超出工作目录范围: {filepath}\n工作目录: {root}\n所有增删改操作只能在工作目录内进行。")
+    except ValueError as exc:
+        raise PermissionError(
+            f"路径超出工作目录范围: {filepath}\n"
+            f"工作目录: {root}\n"
+            "所有增删改操作只能在工作目录内进行。"
+        ) from exc
 
 
 def _assert_file(filepath: Path) -> None:

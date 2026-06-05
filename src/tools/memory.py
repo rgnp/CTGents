@@ -19,7 +19,7 @@ def _build_context() -> str | None:
     d = mem_dir
     entries: list[str] = []
     for f in sorted(d.iterdir()):
-        if f.name == "MEMORY.md" or not f.suffix == ".md":
+        if f.name == "MEMORY.md" or f.suffix != ".md":
             continue
         try:
             text = f.read_text(encoding="utf-8")

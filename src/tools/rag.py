@@ -286,9 +286,7 @@ def _should_ignore_file(name: str, ext: str) -> bool:
     if ext in (".pyc", ".pyo", ".so", ".o", ".class", ".jar", ".war"):
         return True
     # 忽略测试缓存快照
-    if "__snapshots__" in name or "__pycache__" in name:
-        return True
-    return False
+    return "__snapshots__" in name or "__pycache__" in name
 
 
 def _scan_source_files(project_root: Path) -> list[Path]:
@@ -799,7 +797,7 @@ class TfIdfIndex:
         """序列化为可 JSON 序列化的 dict。"""
         return {
             "documents": [d.to_dict() for d in self.documents],
-            "inverted_index": {k: v for k, v in self.inverted_index.items()},
+            "inverted_index": dict(self.inverted_index),
             "doc_norms": self.doc_norms,
             "num_docs": self.num_docs,
         }
@@ -1122,10 +1120,7 @@ def get_index_status(path: str | None = None) -> str:
         return "\n".join(parts)
 
     updated = meta.get("updated_at", 0)
-    if updated:
-        updated_str = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(updated))
-    else:
-        updated_str = "未知"
+    updated_str = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(updated)) if updated else "未知"
 
     research_status = ""
     if research_idx:
@@ -1151,6 +1146,7 @@ def get_index_status(path: str | None = None) -> str:
 
 class DocChunk:
     """研究文档块：论文摘要或笔记片段。"""
+
     def __init__(self, source: str, title: str, content: str, doc_type: str):
         self.source = source       # paper_id 或 note_id
         self.title = title
@@ -1185,11 +1181,11 @@ def _index_doc_chunks(chunks: list[DocChunk], index_name: str) -> int:
         for term in term_weights:
             term_doc_freq[term] += 1
 
-    N = len(doc_terms)
+    doc_count = len(doc_terms)
     # IDF
     idf: dict[str, float] = {}
     for term, df in term_doc_freq.items():
-        idf[term] = math.log((N + 1) / (df + 1)) + 1.0
+        idf[term] = math.log((doc_count + 1) / (df + 1)) + 1.0
 
     # 向量 + 归一化
     doc_vectors: list[dict[str, float]] = []
@@ -1203,12 +1199,12 @@ def _index_doc_chunks(chunks: list[DocChunk], index_name: str) -> int:
         "chunks": [c.to_dict() for c in chunks],
         "vectors": doc_vectors,
         "idf": idf,
-        "doc_count": N,
+        "doc_count": doc_count,
         "created": time.time(),
     }
     idx_path = index_dir / f"{index_name}.json"
     idx_path.write_text(json.dumps(index_data, ensure_ascii=False), encoding="utf-8")
-    return N
+    return doc_count
 
 
 def _load_doc_index(index_name: str) -> dict | None:
