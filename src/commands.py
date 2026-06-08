@@ -176,7 +176,7 @@ def _cmd_new(r: CmdResult, _ctx, _args, _sid) -> None:
 # 模型指令
 # ═══════════════════════════════════════════════════════════════
 
-@builtin("/model", description="查看/切换 LLM 模型", usage="/model [flash|pro]")
+@builtin("/model", description="查看/切换 LLM 模型", usage="/model [pro]")
 def _cmd_model(r: CmdResult, _ctx, args, _sid) -> None:
     from .llm import get_current_model_name, list_models, switch_model
     if not args:
@@ -359,7 +359,7 @@ def _cmd_context(r: CmdResult, ctx, _args, _sid) -> None:
         lines.append("")
         lines.append("── API 统计（按模型） ──")
 
-        for model_key in ["flash", "pro"]:
+        for model_key in ["pro"]:
             s = cache["models"].get(model_key)
             if not s or s["requests"] == 0:
                 continue
@@ -370,8 +370,7 @@ def _cmd_context(r: CmdResult, ctx, _args, _sid) -> None:
             hit_ratio = cached / prompt * 100 if prompt > 0 else 0
             total_tokens = prompt + completion
 
-            model_emoji = "⚡" if model_key == "flash" else "🧠"
-            lines.append(f"  {model_emoji} {model_key.title()}")
+            lines.append(f"  🧠 {model_key.title()}")
             lines.append(f"    请求: {reqs}次  |  输出: {completion:,} tok")
             lines.append(f"    输入: {prompt:,} tok (缓存命中 {cached:,})  |"
                          f"  总计: {total_tokens:,} tok")

@@ -534,7 +534,7 @@ def git_review(path: str | None = None) -> str:
         )
 
         try:
-            backend = auto_select_model(review_prompt)  # 快速模型
+            backend = auto_select_model(review_prompt)  # 始终 Pro
             llm_review, _ = _invoke_llm(backend, [
                 {"role": "system", "content": "你是一个代码审查助手。只说关键问题，不要凑字数。"},
                 {"role": "user", "content": review_prompt},

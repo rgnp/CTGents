@@ -22,11 +22,7 @@ def _require_env(key: str) -> str:
 DEEPSEEK_API_KEY: str = _require_env("DEEPSEEK_API_KEY")
 DEEPSEEK_BASE_URL: str = os.getenv("DEEPSEEK_BASE_URL", "https://api.deepseek.com")
 
-# ── 双模型配置 ──
-# Flash: 快速/省钱（1元/M入, 2元/M出），32K 输出足够日常操作和问答
-MODEL_FLASH: str = os.getenv("MODEL_FLASH", "deepseek-v4-flash")
-FLASH_MAX_TOKENS: int = int(os.getenv("FLASH_MAX_TOKENS", "32768"))
-
+# ── 模型配置（始终 Pro：固定单模型才能养肥 DeepSeek 前缀缓存）──
 # Pro: 强推理/长代码（3元/M入, 6元/M出），64K 给大型重构留空间
 MODEL_PRO: str = os.getenv("MODEL_PRO", "deepseek-v4-pro")
 PRO_MAX_TOKENS: int = int(os.getenv("PRO_MAX_TOKENS", "65536"))

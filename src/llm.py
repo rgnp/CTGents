@@ -16,10 +16,8 @@ from .cache_context import CacheContext
 from .config import (
     DEEPSEEK_API_KEY,
     DEEPSEEK_BASE_URL,
-    FLASH_MAX_TOKENS,
     MAX_CONTEXT_TOKENS,
     MAX_RETRIES,
-    MODEL_FLASH,
     MODEL_PRO,
     PRO_MAX_TOKENS,
     RETRY_BASE_DELAY,
@@ -82,8 +80,8 @@ def is_interrupt_requested() -> bool:
 class ModelInfo:
     """模型元信息。"""
 
-    id: str                    # 模型 ID，如 deepseek-v4-flash
-    name: str                  # 显示名称，如 "Flash"
+    id: str                    # 模型 ID，如 deepseek-v4-pro
+    name: str                  # 显示名称，如 "Pro"
     provider: str = "deepseek" # 提供商
     supports_tools: bool = True   # 是否支持 function calling
     supports_stream: bool = True  # 是否支持流式
@@ -255,17 +253,8 @@ class DeepSeekBackend(LLMBackend):
 # 模型注册表
 # ═══════════════════════════════════════════════════════════════
 
-# 所有可用模型
+# 所有可用模型（始终 Pro — 单模型养肥前缀缓存）
 AVAILABLE_MODELS: dict[str, LLMBackend] = {
-    "flash": DeepSeekBackend(ModelInfo(
-        id=MODEL_FLASH,
-        name="Flash",
-        provider="deepseek",
-        supports_tools=True,
-        supports_stream=True,
-        supports_thinking=False,
-        max_tokens=FLASH_MAX_TOKENS,
-    )),
     "pro": DeepSeekBackend(ModelInfo(
         id=MODEL_PRO,
         name="Pro",
@@ -287,7 +276,7 @@ def get_current_model_name() -> str:
 
 
 def switch_model(name: str) -> tuple[bool, str]:
-    """切换当前模型。name 可以是 'flash'、'pro' 或完整模型 ID。"""
+    """切换当前模型。name 可以是 'pro' 或完整模型 ID。"""
     global _current_backend
 
     # 先按短名称查找
@@ -343,13 +332,12 @@ _EMPTY_STATS = {"requests": 0, "prompt_tokens": 0, "completion_tokens": 0,
 # 当前会话 ID 和内存中的统计（切换会话时自动读写文件）
 _current_session_id: str = ""
 _CACHE_STATS: dict[str, dict] = {
-    "flash": dict(_EMPTY_STATS),
     "pro": dict(_EMPTY_STATS),
 }
 
 
 # API 返回的真实 usage（运行时数据，不持久化）
-_last_api_usage: dict[str, dict | None] = {"flash": None, "pro": None}
+_last_api_usage: dict[str, dict | None] = {"pro": None}
 
 
 def _stats_path(session_id: str) -> Path:
@@ -365,17 +353,13 @@ def _load_cache_stats(session_id: str) -> dict[str, dict]:
             data = json.loads(p.read_text(encoding="utf-8"))
             if not isinstance(data, dict):
                 logger.warning("stats file corrupted (not a dict), resetting")
-                return {"flash": dict(_EMPTY_STATS), "pro": dict(_EMPTY_STATS)}
-            for model in ("flash", "pro"):
-                if model not in data:
-                    data[model] = dict(_EMPTY_STATS)
+                return {"pro": dict(_EMPTY_STATS)}
+            if "pro" not in data:
+                data["pro"] = dict(_EMPTY_STATS)
             return data
     except Exception:
         pass
-    return {
-        "flash": dict(_EMPTY_STATS),
-        "pro": dict(_EMPTY_STATS),
-    }
+    return {"pro": dict(_EMPTY_STATS)}
 
 
 def _save_cache_stats(session_id: str) -> None:
@@ -458,12 +442,12 @@ def get_cache_stats(session_id: str = "") -> dict:
     data = _load_cache_stats(session_id) if session_id and session_id != _current_session_id else _CACHE_STATS
 
     if not isinstance(data, dict):
-        data = {"flash": dict(_EMPTY_STATS), "pro": dict(_EMPTY_STATS)}
+        data = {"pro": dict(_EMPTY_STATS)}
 
     models: dict[str, dict] = {}
     total = dict(_EMPTY_STATS)
     for key, stats in data.items():
-        if key in ("flash", "pro") and isinstance(stats, dict):
+        if key == "pro" and isinstance(stats, dict):
             models[key] = dict(stats)
             for k in total:
                 total[k] += stats.get(k, 0)
