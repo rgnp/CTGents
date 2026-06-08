@@ -1,9 +1,43 @@
 """记忆系统：agent 可以 remember / recall / forget 跨会话知识。"""
 
+import re
 from datetime import UTC, datetime
 from pathlib import Path
 
 from ..config import MEMORY_DIR
+
+# ── 记忆写入信号（机械探测"该考虑记"的时刻；写入仍由 agent 判断） ──
+# 固定触发的错在于把"探测"和"写入"捆死。这里只机械探测语义事件，
+# 命中时挂一行易失提示，记不记、记什么仍是 agent 自愿调 remember。
+_SIGNAL_EXPLICIT = re.compile(r"记住|记一下|记下来|记下|帮我记|remember", re.I)
+_SIGNAL_CORRECTION = re.compile(
+    r"不对|不是这样|错了|搞错|应该是|其实是|并不是|别这样|不要这样|理解错|你弄错"
+)
+_SIGNAL_PREFERENCE = re.compile(
+    r"我喜欢|我习惯|我倾向|我更喜欢|我偏好|我们项目|我们的约定|以后都|以后请|每次都要|默认要|默认用"
+)
+
+_NUDGE_EXPLICIT = "💡 用户要求记住某事。用 remember 存下来(name/content/type)，别只在本轮回应。"
+_NUDGE_CORRECTION = "💡 用户纠正了你。若这是跨会话通用的偏好或教训，考虑 remember(type=user/strategy)。"
+_NUDGE_PREFERENCE = "💡 用户表达了偏好/惯例。若跨会话通用且 AGENTS.md 未覆盖，考虑 remember(type=user)。"
+
+
+def detect_signal(user_text: str) -> str | None:
+    """探测最新 user 消息里"值得记忆"的语义信号，命中返回一行提示。
+
+    只探测、不写入：写入仍是 agent 自愿调 remember。按强度优先匹配：
+    显式要求 > 纠正 > 偏好陈述。无信号返回 None。
+    """
+    if not user_text:
+        return None
+    if _SIGNAL_EXPLICIT.search(user_text):
+        return _NUDGE_EXPLICIT
+    if _SIGNAL_CORRECTION.search(user_text):
+        return _NUDGE_CORRECTION
+    if _SIGNAL_PREFERENCE.search(user_text):
+        return _NUDGE_PREFERENCE
+    return None
+
 
 # ── 记忆索引缓存（避免每次请求重复读文件） ──
 _context_cache: str | None = None
