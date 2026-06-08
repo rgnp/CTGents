@@ -51,8 +51,8 @@ trap restore_worktree EXIT
 
 echo "[pre-commit] 检测到 .py 改动，对【暂存快照】运行质量门禁……"
 
-if ! $PY -m ruff check src/; then
-    echo "[pre-commit] ⛔ ruff check src/ 未通过，提交被拒绝。"
+if ! $PY -m ruff check src/ tests/; then
+    echo "[pre-commit] ⛔ ruff check src/ tests/ 未通过，提交被拒绝。"
     exit 1
 fi
 

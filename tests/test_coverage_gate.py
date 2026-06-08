@@ -7,13 +7,13 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from src.coverage_gate import (
     FILE_TIERS,
-    _match_pattern,
     _get_tier,
+    _match_pattern,
     can_modify,
+    clear_cache,
+    get_modifiable_files,
     get_tier_summary,
     suggest_tests_to_unlock,
-    get_modifiable_files,
-    clear_cache,
 )
 
 

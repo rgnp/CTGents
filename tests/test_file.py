@@ -7,9 +7,14 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from src.tools.file import (
-    _backup, _backup_path, _validate_py, _validate_imports,
-    _read_cached, _resolve, read_file, write_file, undo_edit, _list_backups,
-    BACKUP_DIR,
+    _backup,
+    _read_cached,
+    _resolve,
+    _validate_imports,
+    _validate_py,
+    read_file,
+    undo_edit,
+    write_file,
 )
 
 
@@ -35,7 +40,9 @@ class TestBackup:
 
     def test_backup_and_list(self, tmp_path):
         """备份后可被 _list_backups 发现。"""
-        import os, src.tools.file as fmod
+        import os
+
+        import src.tools.file as fmod
         old_cwd = os.getcwd()
         os.chdir(str(tmp_path))
         try:
@@ -187,6 +194,7 @@ class TestReadCached:
 
     def test_cache_mtime_invalidation(self, tmp_path):
         import time
+
         import src.tools.file as fmod
         fmod._file_cache.clear()
 

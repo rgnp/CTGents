@@ -1,11 +1,9 @@
 """测试 Phase 1-3 缓存优化：API消息构建 + 工具结果压缩 + 对话历史压缩。"""
 
 from src.llm import (
-    _compress_tool_result,
-    _compact_context,
-    _is_topic_switch,
-    _make_brief_summary,
     _TOOL_RESULT_COMPRESS_THRESHOLD,
+    _compact_context,
+    _compress_tool_result,
 )
 
 
@@ -112,12 +110,6 @@ class TestCompressToolResult:
 
     def test_generic_tool_hint(self):
         text = "e" * 5000
-        compressed = _compress_tool_result("other_tool", text)
-        assert "已压缩" in compressed
-        assert "read_file" not in compressed
-
-    def test_generic_tool_hint(self):
-        text = "d" * 5000
         compressed = _compress_tool_result("other_tool", text)
         assert "已压缩" in compressed
         assert "read_file" not in compressed

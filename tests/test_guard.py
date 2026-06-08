@@ -5,7 +5,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from src.guard import is_protected, PROTECTED_FILES
+from src.guard import PROTECTED_FILES, is_protected
 
 
 def test_guard_self_protected():

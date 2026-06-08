@@ -1,26 +1,22 @@
 """测试 lint 模块：check_project / generate_agents_md。"""
 
-import os
-from pathlib import Path
 
-import pytest
 
 from src.tools.lint import (
+    _check_bonus,
+    _check_boundaries,
     _check_commands,
-    _check_tests,
+    _check_git,
     _check_structure,
     _check_style,
-    _check_git,
-    _check_boundaries,
-    _check_bonus,
-    _get_rating,
+    _check_tests,
+    _detect_build_commands,
     _detect_tech_stack,
     _detect_test_commands,
-    _detect_build_commands,
+    _get_rating,
     check_project,
     generate_agents_md,
 )
-
 
 # ═══════════════════════════════════════════════════════════════
 # 独立函数测试

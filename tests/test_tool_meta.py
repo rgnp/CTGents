@@ -4,18 +4,16 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-import pytest
-from src.tools import get_tools, _auto_reload_module, _init_registry
+from src.tools import get_tools
 from src.tools._tool_meta import (
-    _BUILTIN_MODULES,
-    _load_raw_tools,
-    _derive,
-    TOOL_LABELS,
+    _META_ALIASES,
+    DEDUP_BLACKLIST,
     PARALLEL_SAFE,
     PLAN_BLOCKED,
     SKIP_COMPRESS_TOOLS,
-    DEDUP_BLACKLIST,
-    _META_ALIASES,
+    TOOL_LABELS,
+    _derive,
+    _load_raw_tools,
     _refresh_globals,
 )
 

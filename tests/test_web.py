@@ -1,7 +1,6 @@
 """测试 web.py：TTL 缓存、超时控制、页面截断、错误缓存策略。"""
 
 import time
-import pytest
 
 
 class TestWebCache:
@@ -9,7 +8,7 @@ class TestWebCache:
 
     def test_search_web_cache_hit(self, monkeypatch):
         """重复查询应命中缓存，不重复调 API。"""
-        from src.tools.web import search_web, _web_cache, get_web_cache_stats
+        from src.tools.web import _web_cache, get_web_cache_stats, search_web
 
         _web_cache.clear()
 
@@ -40,7 +39,7 @@ class TestWebCache:
 
     def test_search_web_cache_expiry(self, monkeypatch):
         """过期查询应重新调 API。"""
-        from src.tools.web import search_web, _web_cache, _CACHE_TTL_SEARCH
+        from src.tools.web import _CACHE_TTL_SEARCH, _web_cache, search_web
 
         _web_cache.clear()
 
@@ -53,7 +52,7 @@ class TestWebCache:
 
         monkeypatch.setattr("src.tools.web.tavily.search", fake_search)
 
-        r1 = search_web("fresh")
+        search_web("fresh")
         assert call_count == 1
 
         # 手动让缓存过期
@@ -61,12 +60,12 @@ class TestWebCache:
         key = f'search_web:{json.dumps({"query": "fresh"}, sort_keys=True, ensure_ascii=False)}'
         _web_cache[key]["t"] = time.time() - _CACHE_TTL_SEARCH - 1
 
-        r2 = search_web("fresh")
+        search_web("fresh")
         assert call_count == 2  # 过期后重新请求
 
     def test_read_page_cache_hit(self, monkeypatch):
         """重复读同一 URL 应命中缓存。"""
-        from src.tools.web import read_page, _web_cache
+        from src.tools.web import _web_cache, read_page
 
         _web_cache.clear()
 
@@ -88,7 +87,7 @@ class TestWebCache:
 
     def test_read_page_different_url_no_cache(self, monkeypatch):
         """不同 URL 不走缓存。"""
-        from src.tools.web import read_page, _web_cache
+        from src.tools.web import _web_cache, read_page
 
         _web_cache.clear()
 
@@ -108,7 +107,7 @@ class TestWebCache:
 
     def test_read_page_404_cached_long(self, monkeypatch):
         """404 错误应长期缓存（不反复重试）。"""
-        from src.tools.web import read_page, _web_cache
+        from src.tools.web import _web_cache, read_page
 
         _web_cache.clear()
 
@@ -130,7 +129,7 @@ class TestWebCache:
 
     def test_read_page_timeout_cached_short(self, monkeypatch):
         """网络超时应短缓存（允许快速重试）。"""
-        from src.tools.web import read_page, _web_cache, _CACHE_TTL_ERROR
+        from src.tools.web import _CACHE_TTL_ERROR, _web_cache, read_page
 
         _web_cache.clear()
 
@@ -148,7 +147,7 @@ class TestWebCache:
         assert "超时" in r1 or "DNS" in r1
 
         # 短缓存未过期 → 应走缓存
-        r2 = read_page("https://slow.example.com")
+        read_page("https://slow.example.com")
         assert call_count == 1  # 还在缓存中
 
         # 手动让短缓存过期
@@ -156,7 +155,7 @@ class TestWebCache:
         key = f'read_page:{json.dumps({"url": "https://slow.example.com"}, sort_keys=True, ensure_ascii=False)}'
         _web_cache[key]["t"] = time.time() - _CACHE_TTL_ERROR - 1
 
-        r3 = read_page("https://slow.example.com")
+        read_page("https://slow.example.com")
         assert call_count == 2  # 过期后重新请求
 
 
@@ -165,7 +164,7 @@ class TestPageTruncation:
 
     def test_long_page_truncated(self, monkeypatch):
         """超过 _PAGE_MAX_CHARS 的内容应被截断。"""
-        from src.tools.web import read_page, _web_cache, _PAGE_MAX_CHARS
+        from src.tools.web import _PAGE_MAX_CHARS, _web_cache, read_page
 
         _web_cache.clear()
 
@@ -182,7 +181,7 @@ class TestPageTruncation:
 
     def test_short_page_not_truncated(self, monkeypatch):
         """短页面不被截断。"""
-        from src.tools.web import read_page, _web_cache
+        from src.tools.web import _web_cache, read_page
 
         _web_cache.clear()
 
@@ -203,7 +202,7 @@ class TestCacheEviction:
 
     def test_cache_eviction(self, monkeypatch):
         """超过最大容量应淘汰最旧条目。"""
-        from src.tools.web import search_web, _web_cache, _CACHE_MAX_SIZE, get_web_cache_stats
+        from src.tools.web import _CACHE_MAX_SIZE, _web_cache, get_web_cache_stats, search_web
 
         _web_cache.clear()
 
@@ -250,7 +249,7 @@ class TestUrlRewrite:
         assert _rewrite_url(url) == url
 
     def test_arxiv_html_to_abs(self):
-        """arxiv HTML 版 URL 应重写为 abstract 页面（保留版本号）。"""
+        """Arxiv HTML 版 URL 应重写为 abstract 页面（保留版本号）。"""
         from src.tools.web import _rewrite_url
 
         url = "https://arxiv.org/html/2501.11260v3"
@@ -258,7 +257,7 @@ class TestUrlRewrite:
         assert _rewrite_url(url) == expected
 
     def test_arxiv_abs_unchanged(self):
-        """arxiv abstract 页面 URL 不应被重写。"""
+        """Arxiv abstract 页面 URL 不应被重写。"""
         from src.tools.web import _rewrite_url
 
         url = "https://arxiv.org/abs/2501.11260"
@@ -273,7 +272,7 @@ class TestUrlRewrite:
 
     def test_read_page_rewrites_github_blob(self, monkeypatch):
         """read_page 遇到 GitHub blob URL 应走 raw.githubusercontent.com。"""
-        from src.tools.web import read_page, _web_cache
+        from src.tools.web import _web_cache, read_page
 
         _web_cache.clear()
 
@@ -293,7 +292,7 @@ class TestUrlRewrite:
 
     def test_read_page_rewrites_arxiv_html(self, monkeypatch):
         """read_page 遇到 arxiv HTML URL 应走 abs 页面。"""
-        from src.tools.web import read_page, _web_cache
+        from src.tools.web import _web_cache, read_page
 
         _web_cache.clear()
 

@@ -1,9 +1,11 @@
 """Storm 去重模块测试。"""
 
-import json
-import pytest
 from src.tools.storm import (
-    storm_check, storm_record, reset_storm, get_storm_stats, get_blacklist,
+    get_blacklist,
+    get_storm_stats,
+    reset_storm,
+    storm_check,
+    storm_record,
 )
 
 
@@ -74,14 +76,14 @@ class TestStormDedup:
     def test_args_normalization_none_values(self):
         """None 值参数不应影响哈希。"""
         reset_storm()
-        r1 = storm_check("read_file", {"path": "main.py", "start_line": None})
+        storm_check("read_file", {"path": "main.py", "start_line": None})
         r2 = storm_check("read_file", {"path": "main.py"})
         assert r2 is not None, "None 值被忽略后，两条调用应匹配为重复"
 
     def test_args_normalization_key_order(self):
         """参数键顺序不影响去重判断。"""
         reset_storm()
-        r1 = storm_check("read_file", {"path": "main.py", "encoding": "utf-8"})
+        storm_check("read_file", {"path": "main.py", "encoding": "utf-8"})
         r2 = storm_check("read_file", {"encoding": "utf-8", "path": "main.py"})
         assert r2 is not None, "顺序不同但内容相同应标记为重复"
 
@@ -97,7 +99,7 @@ class TestStormDedup:
         assert r2 is not None
 
     def test_reset_clears_window(self):
-        """reset 后窗口清空，之前的记录不再视为重复。"""
+        """Reset 后窗口清空，之前的记录不再视为重复。"""
         storm_check("read_file", {"path": "main.py"})
         storm_check("read_file", {"path": "main.py"})
 
@@ -124,7 +126,7 @@ class TestStormDedup:
         assert r3 is not None, "第三次仍未翻篇，应继续标记重复"
 
     def test_think_is_blacklisted(self):
-        """think 工具在黑名单中，不应去重。"""
+        """Think 工具在黑名单中，不应去重。"""
         storm_check("think", {"thought": "思考1"})
         r2 = storm_check("think", {"thought": "思考1"})
         assert r2 is None, "think 在黑名单中，不应去重"

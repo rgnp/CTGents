@@ -1,12 +1,8 @@
 """SAFE 并行分发测试。"""
 
-import json
-import sys
-from unittest.mock import patch
 
-import pytest
 
-from src.llm import _execute_tool_batch, _PARALLEL_SAFE
+from src.llm import _PARALLEL_SAFE, _execute_tool_batch
 
 
 class TestParallelSafeWhitelist:
@@ -87,7 +83,8 @@ class TestExecuteToolBatch:
         approved = [
             (self.make_tc("git_status"), "git_status", {}, self.make_tc("git_status"), None),
             (self.make_tc("git_branch"), "git_branch", {}, self.make_tc("git_branch"), None),
-            (self.make_tc("list_files"), "list_files", {"path": "."}, self.make_tc("list_files", '{"path": "."}'), None),
+            (self.make_tc("list_files"), "list_files", {"path": "."},
+             self.make_tc("list_files", '{"path": "."}'), None),
         ]
         results = _execute_tool_batch(approved)
         assert len(results) == 3
@@ -149,7 +146,7 @@ class TestExecuteToolBatch:
 
         start = time.time()
         results = _execute_tool_batch(approved)
-        elapsed = time.time() - start
+        time.time() - start
 
         assert len(results) == 2
         # 如果串行执行，需要 2× 单次时间；
@@ -159,7 +156,7 @@ class TestExecuteToolBatch:
 
     def test_storm_interaction_with_parallel(self):
         """Storm 去重在线程安全模式下仍正常工作。"""
-        from src.tools.storm import reset_storm, storm_check
+        from src.tools.storm import reset_storm
         reset_storm()
 
         # 两个相同的并行工具，Storm 应拦截第二次
@@ -184,8 +181,9 @@ class TestStormThreadSafety:
 
     def test_concurrent_storm_checks(self):
         """多个并发 storm_check 不应导致竞争条件。"""
-        from src.tools.storm import reset_storm, storm_check
         from concurrent.futures import ThreadPoolExecutor, as_completed
+
+        from src.tools.storm import reset_storm, storm_check
 
         reset_storm()
 

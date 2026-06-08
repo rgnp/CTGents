@@ -1,6 +1,7 @@
 """CacheContext 三段式上下文管理器测试。"""
 
 import pytest
+
 from src.cache_context import CacheContext, PrefixIntegrityError, compute_prefix_hash
 
 
@@ -54,7 +55,7 @@ class TestSendMethod:
         assert len(api) == 1
 
     def test_log_system_messages_in_order(self):
-        """log 中的 system 消息应在对话之后，避免破坏前缀缓存。"""
+        """Log 中的 system 消息应在对话之后，避免破坏前缀缓存。"""
         ctx = CacheContext(
             prefix_msgs=[{"role": "system", "content": "PREFIX"}],
             log_msgs=[
@@ -71,7 +72,7 @@ class TestSendMethod:
         assert api[3]["content"] == "LOG_SYS"
 
     def test_scratch_not_in_api(self):
-        """scratch 消息不应出现在 send() 输出中。"""
+        """Scratch 消息不应出现在 send() 输出中。"""
         ctx = CacheContext(
             prefix_msgs=[{"role": "system", "content": "sys"}],
         )
@@ -81,7 +82,7 @@ class TestSendMethod:
         assert ctx.stats()["scratch"]["messages"] == 1
 
     def test_tool_calls_preserved(self):
-        """assistant 消息中的 tool_calls 应保留。"""
+        """Assistant 消息中的 tool_calls 应保留。"""
         ctx = CacheContext(
             prefix_msgs=[{"role": "system", "content": "sys"}],
             log_msgs=[{
@@ -94,7 +95,7 @@ class TestSendMethod:
         assert api[1]["tool_calls"] == [{"id": "1", "function": {"name": "run"}}]
 
     def test_tool_call_id_preserved(self):
-        """tool 消息中的 tool_call_id 应保留。"""
+        """Tool 消息中的 tool_call_id 应保留。"""
         ctx = CacheContext(
             prefix_msgs=[{"role": "system", "content": "sys"}],
             log_msgs=[{"role": "tool", "tool_call_id": "abc", "content": "result"}],

@@ -27,13 +27,13 @@ def test_context_defaults():
 
 
 def test_config_and_llm_source_from_params():
-    """config / llm 的旧名值 == params 单一来源（没有第二处真值）。"""
+    """Config / llm 的旧名值 == params 单一来源（没有第二处真值）。"""
     import src.config as config
     import src.llm as llm
-    assert config.MAX_CONTEXT_TOKENS == params.CONTEXT.max_context_tokens
-    assert config.TOOL_LOOP_THRESHOLD == params.CONTEXT.tool_loop_threshold
-    assert llm._COMPACT_THRESHOLD == params.CONTEXT.compact_threshold
-    assert llm._CLEANUP_CONTEXT_THRESHOLD == params.CONTEXT.cleanup_threshold
+    assert params.CONTEXT.max_context_tokens == config.MAX_CONTEXT_TOKENS
+    assert params.CONTEXT.tool_loop_threshold == config.TOOL_LOOP_THRESHOLD
+    assert params.CONTEXT.compact_threshold == llm._COMPACT_THRESHOLD
+    assert params.CONTEXT.cleanup_threshold == llm._CLEANUP_CONTEXT_THRESHOLD
 
 
 def test_rag_and_evolution_defaults():
@@ -49,11 +49,11 @@ def test_rag_and_evolution_wired_to_modules():
     import src.config as config
     import src.evolution_runner as er
     import src.tools.rag as rag
-    assert rag.DEFAULT_TOP_K == params.RAG.default_top_k
-    assert rag.WEIGHT_NAME == params.RAG.weight_name
-    assert rag.MAX_FILE_SIZE == params.RAG.max_file_size
-    assert er.GIT_TIMEOUT_SECONDS == params.EVOLUTION.git_timeout_seconds
-    assert config.EVOLVE_REQUIRE_CLEAN == params.EVOLUTION.require_clean
+    assert params.RAG.default_top_k == rag.DEFAULT_TOP_K
+    assert params.RAG.weight_name == rag.WEIGHT_NAME
+    assert params.RAG.max_file_size == rag.MAX_FILE_SIZE
+    assert params.EVOLUTION.git_timeout_seconds == er.GIT_TIMEOUT_SECONDS
+    assert params.EVOLUTION.require_clean == config.EVOLVE_REQUIRE_CLEAN
 
 
 def test_runtime_defaults_and_wiring():
@@ -61,10 +61,10 @@ def test_runtime_defaults_and_wiring():
     assert params.RUNTIME.max_exec_timeout == 5
     assert params.RUNTIME.token_per_char == 0.5
     import src.config as config
-    assert config.MAX_RETRIES == params.RUNTIME.max_retries
-    assert config.MAX_EXEC_TIMEOUT == params.RUNTIME.max_exec_timeout
-    assert config.TOOL_RESULT_BUDGET == params.RUNTIME.tool_result_budget
-    assert config.TOKEN_PER_CHAR == params.RUNTIME.token_per_char
+    assert params.RUNTIME.max_retries == config.MAX_RETRIES
+    assert params.RUNTIME.max_exec_timeout == config.MAX_EXEC_TIMEOUT
+    assert params.RUNTIME.tool_result_budget == config.TOOL_RESULT_BUDGET
+    assert params.RUNTIME.token_per_char == config.TOKEN_PER_CHAR
 
 
 def test_env_override(monkeypatch):

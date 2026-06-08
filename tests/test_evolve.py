@@ -6,15 +6,15 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
+import contextlib
+
 from src.evolve import (
     EvolutionRecord,
-    record_attempt,
-    query,
     find_similar,
-    get_stats,
     get_last_n,
-    EVOLVE_DIR,
-    EVOLVE_LOG,
+    get_stats,
+    query,
+    record_attempt,
 )
 
 
@@ -76,7 +76,8 @@ class TestRecordAndQuery:
 
     def test_query_by_tags(self):
         record_attempt(EvolutionRecord(goal="perf A", files_changed=["a.py"], outcome="merged", tags=["performance"]))
-        record_attempt(EvolutionRecord(goal="perf B", files_changed=["b.py"], outcome="merged", tags=["performance", "tools"]))
+        record_attempt(EvolutionRecord(
+            goal="perf B", files_changed=["b.py"], outcome="merged", tags=["performance", "tools"]))
         record_attempt(EvolutionRecord(goal="bug A", files_changed=["c.py"], outcome="merged", tags=["bugfix"]))
 
         perf = query(tags=["performance"])
@@ -86,8 +87,10 @@ class TestRecordAndQuery:
         assert len(both) >= 1
 
     def test_query_combined(self):
-        record_attempt(EvolutionRecord(goal="优化数据库查询", files_changed=["db.py"], outcome="merged", tags=["performance"]))
-        record_attempt(EvolutionRecord(goal="修复数据库连接泄漏", files_changed=["db.py"], outcome="merged", tags=["bugfix"]))
+        record_attempt(EvolutionRecord(
+            goal="优化数据库查询", files_changed=["db.py"], outcome="merged", tags=["performance"]))
+        record_attempt(EvolutionRecord(
+            goal="修复数据库连接泄漏", files_changed=["db.py"], outcome="merged", tags=["bugfix"]))
 
         results = query(goal_keywords=["数据库"], outcome="merged")
         assert len(results) >= 2
@@ -117,9 +120,12 @@ class TestSimilarity:
         self._tmpdir.cleanup()
 
     def test_find_similar(self):
-        record_attempt(EvolutionRecord(goal="优化文件读取的缓存性能", files_changed=["file.py"], outcome="merged", tags=["performance"]))
-        record_attempt(EvolutionRecord(goal="修复 web 搜索的超时问题", files_changed=["web.py"], outcome="merged", tags=["bugfix"]))
-        record_attempt(EvolutionRecord(goal="添加 git 状态检查的缓存", files_changed=["git.py"], outcome="merged", tags=["performance"]))
+        record_attempt(EvolutionRecord(
+            goal="优化文件读取的缓存性能", files_changed=["file.py"], outcome="merged", tags=["performance"]))
+        record_attempt(EvolutionRecord(
+            goal="修复 web 搜索的超时问题", files_changed=["web.py"], outcome="merged", tags=["bugfix"]))
+        record_attempt(EvolutionRecord(
+            goal="添加 git 状态检查的缓存", files_changed=["git.py"], outcome="merged", tags=["performance"]))
 
         similar = find_similar("文件缓存优化", top_n=3)
         assert len(similar) >= 1
@@ -131,7 +137,8 @@ class TestSimilarity:
         assert similar == []
 
     def test_find_similar_exact_match(self):
-        record_attempt(EvolutionRecord(goal="精确匹配测试：优化 import 检查速度", files_changed=["validate.py"], outcome="merged"))
+        record_attempt(EvolutionRecord(
+            goal="精确匹配测试：优化 import 检查速度", files_changed=["validate.py"], outcome="merged"))
         record_attempt(EvolutionRecord(goal="不相关的其他修改", files_changed=["other.py"], outcome="merged"))
 
         similar = find_similar("import 检查性能优化", top_n=2)
@@ -201,7 +208,7 @@ class TestEvolutionRecord:
             lessons_learned="分阶段重构更安全",
             duration_total_ms=5000.0,
         )
-        d = rec.__dict__ if hasattr(rec, '__dict__') else {
+        rec.__dict__ if hasattr(rec, '__dict__') else {
             'goal': rec.goal, 'outcome': rec.outcome, 'tags': rec.tags}
         assert rec.outcome == "merged"
         assert len(rec.files_changed) == 2
@@ -231,17 +238,13 @@ if __name__ == "__main__":
         except AssertionError as e:
             print(f"  ❌ {name}: {e}")
             if hasattr(fn.__self__, 'teardown_method'):
-                try:
+                with contextlib.suppress(Exception):
                     fn.__self__.teardown_method()
-                except Exception:
-                    pass
         except Exception as e:
             print(f"  💥 {name}: {type(e).__name__}: {e}")
             if hasattr(fn.__self__, 'teardown_method'):
-                try:
+                with contextlib.suppress(Exception):
                     fn.__self__.teardown_method()
-                except Exception:
-                    pass
 
     print(f"\n{'═' * 40}")
     print(f"  结果: {passed}/{len(tests)} 通过")

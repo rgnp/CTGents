@@ -6,7 +6,10 @@
   C. 大文件读取场景（read_file 返回大内容 → 工具结果压缩）
   D. 压缩对比：旧删除式 vs 新 append-only
 """
-import hashlib, json, sys, os
+import json
+import os
+import sys
+
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 os.environ.setdefault("DEEPSEEK_API_KEY", "sk-test")
 os.environ.setdefault("TAVILY_API_KEY", "tvly-test")
@@ -252,6 +255,7 @@ ctx3.log = ctx3.log[:2]  # 重置到 tool call 之前
 
 # 压缩（模拟 _compress_tool_result）
 from src.llm import _compress_tool_result
+
 ctx3.log.append({"role": "tool", "tool_call_id": "c1",
                   "content": _compress_tool_result("read_file", LARGE_FILE),
                   "_tool_name": "read_file", "_tool_result_compressed": True})
@@ -298,10 +302,10 @@ new_cache = cache_bytes(before, after_new)
 print(f"  压缩前 payload:          {est_tokens(before):,} token")
 print(f"  旧删除式 后 payload:     {est_tokens(after_old):,} token")
 print(f"  新追加式 后 payload:     {est_tokens(after_new):,} token")
-print(f"")
+print("")
 print(f"  旧删除式 可缓存字节:     {old_cache // 4:,} token / {est_tokens(before):,} → 命中率 {old_cache/len(after_old)*100:.1f}%")
 print(f"  新追加式 可缓存字节:     {new_cache // 4:,} token / {est_tokens(before):,} → 命中率 {new_cache/len(after_new)*100:.1f}%")
-print(f"")
+print("")
 print(f"  改进: {new_cache - old_cache:,} 额外缓存字节 (+{(new_cache - old_cache) / max(old_cache, 1) * 100:.0f}%)")
 
 
@@ -322,7 +326,7 @@ print(f"  场景 C（大文件压缩）:     节省 ~{(1 - est_tokens(compressed
 print(f"  场景 D（缓存保持）:       新追加式比旧删除式多保留 {new_cache - old_cache:,} 可缓存字节")
 
 if avg_a >= 85:
-    print(f"\n  ✅ 日常使用场景缓存命中率已达标 (>85%)")
+    print("\n  ✅ 日常使用场景缓存命中率已达标 (>85%)")
 else:
     print(f"\n  ⚠️  日常使用场景缓存命中率 {avg_a:.1f}%，目标 85%+")
 

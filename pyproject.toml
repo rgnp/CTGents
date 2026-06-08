@@ -52,6 +52,8 @@ ignore = [
 
 [tool.ruff.lint.per-file-ignores]
 "tests/**/*.py" = ["D103"]
+# 线性诊断脚本（pytest 忽略）：中途 import、长 mock 数据是脚本固有风格，非测试代码
+"tests/analyze_cache_hitrate.py" = ["E402", "E501", "B905"]
 "run.py" = ["D100", "D103"]
 
 [tool.ruff.format]

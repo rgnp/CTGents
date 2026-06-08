@@ -8,8 +8,8 @@
 """
 import hashlib
 import json
-import sys
 import os
+import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -18,7 +18,7 @@ os.environ.setdefault("DEEPSEEK_API_KEY", "sk-test")
 os.environ.setdefault("TAVILY_API_KEY", "tvly-test")
 os.environ.setdefault("DEEPSEEK_BASE_URL", "https://api.deepseek.com")
 
-from src.cache_context import CacheContext, _compute_msg_hash
+from src.cache_context import CacheContext
 
 
 def api_bytes(messages: list[dict]) -> str:
@@ -32,7 +32,7 @@ def api_bytes(messages: list[dict]) -> str:
 def cache_prefix_messages(prev: list[dict], curr: list[dict]) -> int:
     """计算两次 payload 在消息层面的共同前缀长度（消息数）。"""
     n = 0
-    for a, b in zip(prev, curr):
+    for a, b in zip(prev, curr, strict=False):
         if a != b:
             break
         n += 1
@@ -50,7 +50,7 @@ def cacheable_prefix_bytes(prev_payload: str, curr_payload: str) -> int:
     curr_trimmed = curr_payload.rstrip().rstrip("]")
 
     i = 0
-    for a, b in zip(prev_trimmed, curr_trimmed):
+    for a, b in zip(prev_trimmed, curr_trimmed, strict=False):
         if a != b:
             break
         i += 1

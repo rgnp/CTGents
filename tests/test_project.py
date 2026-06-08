@@ -3,10 +3,10 @@
 from pathlib import Path
 
 from src.tools.project import (
-    _detect_language_and_framework,
     _build_tree,
-    scan_project,
+    _detect_language_and_framework,
     get_project_context,
+    scan_project,
 )
 
 
@@ -48,7 +48,7 @@ class TestBuildTree:
     def test_depth_limit(self, tmp_project):
         """depth=1 时不展开子目录。"""
         tree = _build_tree(tmp_project, depth=1)
-        tree_str = "\n".join(tree)
+        "\n".join(tree)
         # src/ 可能展开也可能不展开，但至少不会递归过深
         assert len(tree) > 0
 
