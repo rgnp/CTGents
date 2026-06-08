@@ -122,6 +122,13 @@ def execute_tool(tool_call: ChatCompletionMessageToolCall) -> str:
     args = json.loads(tool_call.function.arguments)
     t0 = time.perf_counter()
 
+    # ── 工具边界拦截：强规则(C10 读后写 / C14 目录)在执行前机械校验 ──
+    from .tool_guard import check as _guard_check
+    rejection = _guard_check(name, args)
+    if rejection is not None:
+        logger.info("工具拦截: %s — %s", name, rejection)
+        return rejection
+
     # ── Storm 去重检查 ──
     from .storm import storm_check, storm_record
     dup = storm_check(name, args)
