@@ -1,10 +1,12 @@
-"""配置中心：环境变量 → 模型配置 + 行为参数。"""
+"""配置中心：密钥/模型/路径。可调行为旋钮见 params.py（按域分组）。"""
 
 import os
 from pathlib import Path
 
 from dotenv import load_dotenv
 from tavily import TavilyClient
+
+from .params import CONTEXT
 
 load_dotenv(Path(__file__).parent.parent / ".env")
 
@@ -33,7 +35,8 @@ PRO_MAX_TOKENS: int = int(os.getenv("PRO_MAX_TOKENS", "65536"))
 TAVILY_API_KEY: str = _require_env("TAVILY_API_KEY")
 
 # ── 行为参数 ──
-TOOL_LOOP_THRESHOLD: float = 0.95
+# 上下文/压缩旋钮已迁往 params.CONTEXT（按域分组）；此处绑定本地名，保持 import 兼容。
+TOOL_LOOP_THRESHOLD: float = CONTEXT.tool_loop_threshold
 # 进化干净基线：开启后，工作区已脏时 start_evolution_run 拒绝启动（避免脏树进化）。
 # 默认关——靠"按 run 圈定提交"已能防一锅端；此开关是额外的预防闸。
 EVOLVE_REQUIRE_CLEAN: bool = os.getenv("EVOLVE_REQUIRE_CLEAN", "0") == "1"
@@ -47,7 +50,7 @@ SESSION_DIR: str = str(Path(__file__).parent.parent / "sessions")
 MEMORY_DIR: str = str(Path(__file__).parent.parent / "memory")
 
 # ── Token 预算 ──
-MAX_CONTEXT_TOKENS: int = 960_000
+MAX_CONTEXT_TOKENS: int = CONTEXT.max_context_tokens
 TOKEN_PER_CHAR: float = 0.5
 
 # 客户端（模块级单例，惰性初始化）

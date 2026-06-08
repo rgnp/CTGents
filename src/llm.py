@@ -25,6 +25,7 @@ from .config import (
     RETRY_BASE_DELAY,
     TOOL_LOOP_THRESHOLD,
 )
+from .params import CONTEXT
 from .tools import execute_tool, get_tools, is_plan_mode, set_plan_mode
 
 # 工具显示标签（安全确认 + 终端回显共用）
@@ -569,16 +570,11 @@ def _compress_tool_result(tool_name: str, result: str) -> str:
 # 对话上下文优化（Append-Only — 对齐 Reasonix 缓存优先策略）
 # ═══════════════════════════════════════════════════════════════
 
-# 触发滑窗压缩的上下文比例（达到 80% 时触发 — 驱旧消息，换出空间）
-_COMPACT_THRESHOLD = 0.65
-# 保留比例：滑窗压缩后保留最近 N% 的消息
-_COMPACT_KEEP_RATIO = 0.40
-# 工具结果清理门槛：上下文用量低于此比例时不清理，保留工具结果以维持前缀缓存连续。
-# 清理会删改 log 中间消息（断缓存），仅当上下文够大、收益(甩掉臃肿工具结果)>代价时才做。
-# 贴近压缩点 0.65：清理是压缩前的轻量步骤，过早触发会每轮断缓存（首要目标是缓存命中）。
-_CLEANUP_CONTEXT_THRESHOLD = 0.60
-# 一轮内工具结果达到此数量才考虑清理（太少不值得断缓存）
-_CLEANUP_MIN_TOOL_RESULTS = 2
+# 上下文/压缩旋钮统一定义在 params.CONTEXT；此处绑定本地名，保持模块内引用与可 monkeypatch。
+_COMPACT_THRESHOLD = CONTEXT.compact_threshold          # 滑窗压缩触发比例
+_COMPACT_KEEP_RATIO = CONTEXT.compact_keep_ratio        # 压缩后保留最近 N% 消息
+_CLEANUP_CONTEXT_THRESHOLD = CONTEXT.cleanup_threshold  # 工具结果清理门槛（贴近压缩点防每轮断缓存）
+_CLEANUP_MIN_TOOL_RESULTS = CONTEXT.cleanup_min_tool_results  # 一轮工具结果达此数才值得清理
 # 话题切换关键词（检测到后追加边界标记）
 _TOPIC_SWITCH_KEYWORDS = [
     "换个", "换一", "不谈", "不说", "跳过", "算了",
