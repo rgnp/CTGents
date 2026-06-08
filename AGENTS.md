@@ -156,3 +156,8 @@ tasks/            任务追踪（current.md + archive/）
 2. py -m pytest tests/ -q   # 全绿
 3. git diff --stat           # 确认改动了预期文件
 ```
+
+**提交硬闸（自动）**：`.git/hooks/pre-commit` 在暂存区含 `.py` 改动时强制跑
+`ruff check src/` + 全量 `pytest`，不绿则拒绝提交——任何路径（raw `git commit`、
+`git_commit` 工具、进化自提交）都绕不过。新克隆/重置后用 `py scripts/install_hooks.py`
+重装钩子。应急人工放行：`git commit --no-verify`（仅在明确知情时）。

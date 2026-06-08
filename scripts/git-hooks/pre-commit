@@ -1,0 +1,27 @@
+#!/bin/sh
+# CTGents 提交硬闸：任何提交路径（raw git / git_commit 工具 / 进化）都强制走这里。
+# 暂存区含 .py 改动时，ruff + 全量 pytest 必须全绿，否则拒绝提交。
+# 这是 git_commit 工具内同名检查的兜底——后者可被 raw `git commit` 绕过，本钩子不会。
+#
+# 应急放行（仅人工、明确知情时）：git commit --no-verify
+set -e
+
+staged_py=$(git diff --cached --name-only --diff-filter=ACMR | grep '\.py$' || true)
+if [ -z "$staged_py" ]; then
+    exit 0
+fi
+
+echo "[pre-commit] 检测到 .py 改动，运行质量门禁……"
+
+if ! py -m ruff check src/; then
+    echo "[pre-commit] ⛔ ruff check src/ 未通过，提交被拒绝。"
+    exit 1
+fi
+
+if ! py -m pytest -q --tb=line -p no:cacheprovider; then
+    echo "[pre-commit] ⛔ pytest 未全绿，提交被拒绝。修复后重试，或 --no-verify 人工放行。"
+    exit 1
+fi
+
+echo "[pre-commit] ✅ 门禁通过。"
+exit 0
