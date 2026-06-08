@@ -1,19 +1,26 @@
-"""科研工具集：论文分析、交叉验证、卡片管理。
+"""科研工具集：论文扫描、批量读取、评分归档。
 
-包装 knowledge/trajectory-prediction/tools/ 下的 paper_analyzer.py 和
-cross_validator.py，让 agent 可以直接调用。新增 save_paper_card 实现
-卡片持久化，打通"读论文→分析→存卡片"全流程。
+工具:
+  scan_papers  — 搜索+提取arxiv ID+去重
+  read_papers  — 批量读取arxiv摘要
+  paper_grid   — 按领域生成评分总表
+  analyze_paper / cross_validate / save_paper_card — 论文分析管线
 """
 
 from __future__ import annotations
 
+import json
+import re
 import sys
+import time
+import urllib.request
+from collections import defaultdict
 from pathlib import Path
 
-# ── 路径准备：将知识库工具目录加入搜索路径 ──
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 _KNOWLEDGE_TOOLS = _PROJECT_ROOT / "knowledge" / "trajectory-prediction" / "tools"
 _KNOWLEDGE_PAPERS = _PROJECT_ROOT / "knowledge" / "trajectory-prediction" / "papers"
+_KNOWLEDGE_AD2026 = _PROJECT_ROOT / "knowledge" / "autonomous-driving-2026"
 
 if str(_KNOWLEDGE_TOOLS) not in sys.path:
     sys.path.insert(0, str(_KNOWLEDGE_TOOLS))
@@ -26,19 +33,13 @@ TOOLS_RESEARCH = [
         "type": "function",
         "function": {
             "name": "analyze_paper",
-            "description": (
-                "分析论文：方法论分类（6种类型）+ 已知Gap匹配 + 生成论文卡片模板。"
-                "输入标题和摘要即可，可选补充作者/会议/年份完善卡片。"
-            ),
+            "description": "分析论文：方法论分类（6种类型）+ 已知Gap匹配 + 生成论文卡片模板。输入标题和摘要即可。",
             "parameters": {
                 "type": "object",
                 "properties": {
                     "title": {"type": "string", "description": "论文标题"},
                     "abstract": {"type": "string", "description": "论文摘要"},
-                    "contributions": {
-                        "type": "string",
-                        "description": "核心贡献（可选，不传则仅用标题+摘要分类）",
-                    },
+                    "contributions": {"type": "string", "description": "核心贡献（可选）"},
                     "authors": {"type": "string", "description": "作者（可选）"},
                     "conference": {"type": "string", "description": "会议/期刊（可选）"},
                     "year": {"type": "string", "description": "年份（可选）"},
@@ -52,182 +53,321 @@ TOOLS_RESEARCH = [
         "type": "function",
         "function": {
             "name": "cross_validate",
-            "description": (
-                "新论文与知识库已有论文的交叉验证：矛盾检测、互补分析、"
-                "Gap影响评估、方法论对比。自动读取 papers/ 下所有卡片。"
-            ),
+            "description": "新论文与知识库已有论文交叉验证：矛盾检测、互补分析、Gap影响、方法论对比。",
             "parameters": {
                 "type": "object",
                 "properties": {
                     "title": {"type": "string", "description": "论文标题"},
                     "abstract": {"type": "string", "description": "论文摘要"},
-                    "contributions": {
-                        "type": "string",
-                        "description": "核心贡献（可选）",
-                    },
+                    "contributions": {"type": "string", "description": "核心贡献（可选）"},
                 },
                 "required": ["title", "abstract"],
             },
         },
     },
     {
-        "_meta": {
-            "label": "保存论文卡片",
-            "plan_blocked": True,
-            "dedup_blacklist": True,
-        },
+        "_meta": {"label": "保存论文卡片", "plan_blocked": True, "dedup_blacklist": True},
         "type": "function",
         "function": {
             "name": "save_paper_card",
-            "description": (
-                "将论文卡片 Markdown 保存到 knowledge/trajectory-prediction/papers/。"
-                "文件名建议格式：'年份-简称.md'（如 '2025-ssl-interactions.md'）。"
-                "保存后提醒更新 KNOWLEDGE_INDEX.md。"
-            ),
+            "description": "将论文卡片 Markdown 保存到 knowledge/。",
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "filename": {
-                        "type": "string",
-                        "description": "文件名，如 '2025-ssl-interactions.md'",
-                    },
-                    "content": {
-                        "type": "string",
-                        "description": "卡片 Markdown 完整内容",
-                    },
+                    "filename": {"type": "string", "description": "文件名，如 '2025-paper.md'"},
+                    "content": {"type": "string", "description": "卡片 Markdown 内容"},
                 },
                 "required": ["filename", "content"],
             },
         },
     },
+    {
+        "_meta": {"label": "扫描论文", "parallel_safe": True},
+        "type": "function",
+        "function": {
+            "name": "scan_papers",
+            "description": "批量搜索。输入JSON数组[[领域,搜索词],...]自动搜索2025+2026，提取arxiv ID去重，缓存结果。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "queries": {"type": "string", "description": "JSON: [[\"领域\",\"搜索词\"],...]"},
+                },
+                "required": ["queries"],
+            },
+        },
+    },
+    {
+        "_meta": {"label": "批量读论文", "parallel_safe": True},
+        "type": "function",
+        "function": {
+            "name": "read_papers",
+            "description": "批量读取arxiv标题+摘要。输入JSON数组[\"id1\",...]，最多30篇。返回结构化摘要。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "ids": {"type": "string", "description": "JSON: [\"2601.01528\",...]"},
+                },
+                "required": ["ids"],
+            },
+        },
+    },
+    {
+        "_meta": {"label": "论文评分表", "plan_blocked": True},
+        "type": "function",
+        "function": {
+            "name": "paper_grid",
+            "description": "生成领域论文评分表Markdown。输入领域名+read_papers返回的JSON。写入knowledge/。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "area": {"type": "string", "description": "领域名"},
+                    "papers_json": {"type": "string", "description": "read_papers 返回的 JSON"},
+                },
+                "required": ["area", "papers_json"],
+            },
+        },
+    },
 ]
 
+# ═══════════════════════════════════════════════════════════
+# 内部函数
+# ═══════════════════════════════════════════════════════════
 
-# ── 工具实现 ──────────────────────────────────────────────
 
+def _load_known_ids() -> set[str]:
+    known: set[str] = set()
+    kb_dir = _KNOWLEDGE_AD2026 / "topics"
+    if kb_dir.is_dir():
+        for md in kb_dir.glob("*.md"):
+            known.update(re.findall(r'(\d{4}\.\d{4,5})', md.read_text(encoding="utf-8")))
+    return known
+
+
+def _read_arxiv_abstract(aid: str) -> dict:
+    url = f"https://arxiv.org/abs/{aid}"
+    req = urllib.request.Request(url, headers={"User-Agent": "ResearchBot/1.0"})
+    try:
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            text = resp.read().decode("utf-8", errors="replace")
+    except Exception as exc:
+        return {"id": aid, "title": "FETCH_ERR", "abstract": str(exc), "venue": "?"}
+
+    title_m = re.search(r'Title:(.*?)(?:\n)', text)
+    abstract_m = re.search(r'Abstract:(.*?)(?:Subjects|Comments|Cite|Submission)', text, re.DOTALL)
+    comments_m = re.search(r'Comments:(.*?)(?:\n)', text)
+
+    title = title_m.group(1).strip() if title_m else "?"
+    abstract = abstract_m.group(1).strip() if abstract_m else ""
+    venue = "arxiv"
+    if comments_m:
+        for conf in ["CVPR", "ICCV", "NeurIPS", "ICLR", "ICRA", "CoRL", "ECCV", "AAAI", "RSS"]:
+            if conf in comments_m.group(1):
+                yr = re.search(r'(\d{4})', comments_m.group(1))
+                venue = f"{conf} {yr.group(1)}" if yr else conf
+                break
+
+    return {"id": aid, "title": title[:200], "abstract": abstract[:500], "venue": venue}
+
+# ═══════════════════════════════════════════════════════════
+# 新工具
+# ═══════════════════════════════════════════════════════════
+
+def scan_papers(queries: str) -> str:
+    try:
+        query_list: list = json.loads(queries)
+    except json.JSONDecodeError as exc:
+        return f"queries 解析失败: {exc}"
+
+    known = _load_known_ids()
+    found: dict[str, str] = {}
+
+    for area, raw_query in query_list:
+        for year in ("2025", "2026"):
+            q = f"{raw_query} {year} arxiv"
+            try:
+                from ..config import get_tavily_client
+                client = get_tavily_client()
+                result = client.search(q, max_results=5)
+                text = json.dumps(result.get("results", []))
+                ids = re.findall(r'arxiv\.org/(?:abs|html)/(\d{4}\.\d{4,5})', text)
+                for aid in ids:
+                    if aid.startswith(("250", "260")) and aid not in found:
+                        found[aid] = area
+            except Exception:
+                pass
+            time.sleep(0.3)
+
+    new_papers = {k: v for k, v in found.items() if k not in known}
+    overlap = {k: v for k, v in found.items() if k in known}
+    y25 = sum(1 for k in new_papers if k.startswith("250"))
+    y26 = sum(1 for k in new_papers if k.startswith("260"))
+
+    lines = [
+        f"搜索 {len(query_list)} 领域 → {len(found)} 篇",
+        f"已知: {len(overlap)} | 新增: {len(new_papers)} (2025:{y25}, 2026:{y26})",
+        f"总: {len(known) + len(new_papers)}",
+    ]
+
+    by_area = defaultdict(list)
+    for aid, area_label in sorted(new_papers.items()):
+        by_area[area_label].append(aid)
+
+    for area_label, pid_list in sorted(by_area.items()):
+        lines.append(f"\n## {area_label} ({len(pid_list)})")
+        for pid in pid_list:
+            lines.append(f"  [{'25' if pid.startswith('250') else '26'}] {pid}")
+
+    cache_path = _PROJECT_ROOT / ".scan_cache.json"
+    cache_path.write_text(json.dumps(new_papers, ensure_ascii=False, indent=2), encoding="utf-8")
+    lines.append("\n💾 已缓存 .scan_cache.json")
+
+    return "\n".join(lines)
+
+    by_area = defaultdict(list)
+    for aid, area_label in sorted(new_papers.items()):
+        by_area[area_label].append(aid)
+
+    for area_label, pid_list in sorted(by_area.items()):
+        lines.append(f"\n## {area_label} ({len(pid_list)})")
+        for pid in pid_list:
+            lines.append(f"  [{'25' if pid.startswith('250') else '26'}] {pid}")
+
+    cache_path = _PROJECT_ROOT / ".scan_cache.json"
+    cache_path.write_text(json.dumps(new_papers, ensure_ascii=False, indent=2), encoding="utf-8")
+    lines.append("\n💾 已缓存 .scan_cache.json")
+
+    return "\n".join(lines)
+
+
+def read_papers(ids: str) -> str:
+    try:
+        id_list: list = json.loads(ids)
+    except json.JSONDecodeError:
+        cache_path = _PROJECT_ROOT / ".scan_cache.json"
+        if cache_path.exists():
+            id_list = list(json.loads(cache_path.read_text(encoding="utf-8")).keys())[:30]
+        else:
+            return "ids 解析失败且无缓存"
+
+    id_list = id_list[:30]
+    results = {}
+    for _i, aid in enumerate(id_list):
+        results[aid] = _read_arxiv_abstract(aid)
+        time.sleep(0.8)
+
+    output = json.dumps(results, ensure_ascii=False, indent=2)
+    cache_path = _PROJECT_ROOT / ".read_cache.json"
+    cache_path.write_text(output, encoding="utf-8")
+
+    lines = [f"读取 {len(results)} 篇:"]
+    for aid, info in results.items():
+        lines.append(f"[{aid}] {info['title'][:100]} [{info['venue']}]")
+
+    return "\n".join(lines) + "\n\n💾 已缓存 .read_cache.json"
+
+
+def paper_grid(area: str, papers_json: str) -> str:
+    try:
+        papers: dict = json.loads(papers_json)
+    except json.JSONDecodeError:
+        cache_path = _PROJECT_ROOT / ".read_cache.json"
+        if cache_path.exists():
+            papers = json.loads(cache_path.read_text(encoding="utf-8"))
+        else:
+            return "papers_json 解析失败且无缓存"
+
+    lines = [
+        f"# {area} — 论文评分表",
+        f"\n> {len(papers)} 篇 | R=关联 N=新颖 F=可行 I=影响\n",
+        "| # | arxiv | 标题 | 会议 | R | N | F | I | 总 |",
+        "|:--:|------|------|:---:|:--:|:--:|:--:|:--:|:--:|",
+    ]
+
+    for j, (aid, info) in enumerate(papers.items(), 1):
+        title = info.get("title", "?")[:80]
+        venue = info.get("venue", "arxiv")
+        lines.append(
+            f"| {j} | [{aid}](https://arxiv.org/abs/{aid}) "
+            f"| {title} | {venue} | ? | ? | ? | ? | ? |"
+        )
+
+    result = "\n".join(lines)
+    slug = area.replace("/", "-").replace(" ", "-").lower()
+    path = _KNOWLEDGE_AD2026 / "topics" / f"grid-{slug}.md"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(result, encoding="utf-8")
+
+    return result + f"\n\n💾 已保存 {path}"
+
+
+# ═══════════════════════════════════════════════════════════
+# 旧工具
+# ═══════════════════════════════════════════════════════════
 
 def analyze_paper(
-    title: str,
-    abstract: str,
-    contributions: str = "",
-    authors: str = "",
-    conference: str = "",
-    year: str = "",
+    title: str, abstract: str, contributions: str = "",
+    authors: str = "", conference: str = "", year: str = "",
 ) -> str:
-    """分析论文：方法论分类 + Gap 匹配 + 卡片模板生成。"""
     try:
         from paper_analyzer import classify_methodology, generate_card, match_gaps
-    except ImportError as e:
-        return (
-            f"无法导入 paper_analyzer: {e}\n"
-            "请确认 knowledge/trajectory-prediction/tools/paper_analyzer.py 存在。"
-        )
-
+    except ImportError as exc:
+        return f"无法导入 paper_analyzer: {exc}"
     methodology = classify_methodology(title, abstract, contributions)
     gaps = match_gaps(title, abstract, contributions)
-
     parts: list[str] = []
-
-    # ── 方法论分类 ──
-    primary = methodology["primary"]
-    parts.append("## 方法论分类")
-    parts.append(
-        f"- **类型**: {primary['label']}（置信度 {primary['confidence']:.0%}）"
-    )
-    parts.append(f"- **说明**: {primary['description']}")
-    parts.append(f"- **创新等级**: {primary['innovation_level']}")
-    parts.append(f"- **风险**: {primary['risk']}")
-    parts.append(f"- **同类论文**: {', '.join(primary['examples'])}")
+    p = methodology["primary"]
+    parts.append(f"## 方法论: {p['label']}（{p['confidence']:.0%}）")
+    parts.append(f"- {p['description']} | 创新: {p['innovation_level']} | 风险: {p['risk']}")
     if "secondary" in methodology:
-        sec = methodology["secondary"]
-        parts.append(
-            f"- **次级类型**: {sec['label']}（置信度 {sec['confidence']:.0%}）"
-        )
-
-    # ── Gap 匹配 ──
+        s = methodology["secondary"]
+        parts.append(f"- 次级: {s['label']}（{s['confidence']:.0%}）")
     parts.append("\n## Gap 匹配")
     if gaps:
         for g in gaps:
-            parts.append(
-                f"- **{g['gap']}** [{g['status']}]: {g['impact']} "
-                f"（命中 {g['hit_count']} 个关键词: "
-                f"{', '.join(g['hit_keywords'][:5])}）"
-            )
+            parts.append(f"- {g['gap']} [{g['status']}]: {g['impact']}（{g['hit_count']} kw）")
     else:
-        parts.append("⚠️ 未命中任何已知 Gap → 可能是新的空白方向！")
-
-    # ── 卡片模板 ──
+        parts.append("⚠️ 未命中已知 Gap")
     parts.append("\n## 论文卡片模板\n")
-    card = generate_card(
-        title, authors, conference, year,
-        abstract, contributions, methodology, gaps,
-    )
-    parts.append(card)
-
+    parts.append(generate_card(title, authors, conference, year, abstract, contributions, methodology, gaps))
     return "\n".join(parts)
 
 
-def cross_validate(
-    title: str,
-    abstract: str,
-    contributions: str = "",
-) -> str:
-    """跨论文交叉验证：矛盾、互补、Gap 影响、方法论对比。"""
+def cross_validate(title: str, abstract: str, contributions: str = "") -> str:
     try:
         from cross_validator import generate_report
-    except ImportError as e:
-        return (
-            f"无法导入 cross_validator: {e}\n"
-            "请确认 knowledge/trajectory-prediction/tools/cross_validator.py 存在。"
-        )
-
+    except ImportError as exc:
+        return f"无法导入 cross_validator: {exc}"
     try:
         report = generate_report(title, abstract, contributions)
-    except Exception as e:
-        return f"交叉验证异常: {e}"
-
+    except Exception as exc:
+        return f"交叉验证异常: {exc}"
     if isinstance(report, dict) and "error" in report:
         return f"交叉验证失败: {report['error']}"
-
     return str(report)
 
 
 def save_paper_card(filename: str, content: str) -> str:
-    """保存论文卡片到知识库 papers/ 目录。"""
     filepath = _KNOWLEDGE_PAPERS / filename
-
-    # 安全检查：确保写入路径在 papers/ 内
     try:
         filepath = filepath.resolve()
     except (OSError, RuntimeError):
         return f"文件名无效: {filename}"
-
     if not str(filepath).startswith(str(_KNOWLEDGE_PAPERS.resolve())):
-        return f"拒绝写入: {filename} 不在知识库 papers/ 目录内"
-
+        return f"拒绝写入: {filename}"
     filepath.parent.mkdir(parents=True, exist_ok=True)
-
     try:
         filepath.write_text(content, encoding="utf-8")
-    except OSError as e:
-        return f"保存失败: {e}"
-
-    return (
-        f"✅ 论文卡片已保存\n"
-        f"路径: knowledge/trajectory-prediction/papers/{filename}\n"
-        f"大小: {len(content)} 字符\n"
-        f"⚠️  记得更新 KNOWLEDGE_INDEX.md 的论文列表。"
-    )
+    except OSError as exc:
+        return f"保存失败: {exc}"
+    return f"✅ 已保存 knowledge/.../papers/{filename} ({len(content)} 字符)"
 
 
 # ── 调度 ──────────────────────────────────────────────────
 
-
 def execute(name: str, args: dict) -> str | None:
     if name == "analyze_paper":
         return analyze_paper(
-            title=args["title"],
-            abstract=args["abstract"],
+            title=args["title"], abstract=args["abstract"],
             contributions=args.get("contributions", ""),
             authors=args.get("authors", ""),
             conference=args.get("conference", ""),
@@ -235,13 +375,15 @@ def execute(name: str, args: dict) -> str | None:
         )
     if name == "cross_validate":
         return cross_validate(
-            title=args["title"],
-            abstract=args["abstract"],
+            title=args["title"], abstract=args["abstract"],
             contributions=args.get("contributions", ""),
         )
     if name == "save_paper_card":
-        return save_paper_card(
-            filename=args["filename"],
-            content=args["content"],
-        )
+        return save_paper_card(filename=args["filename"], content=args["content"])
+    if name == "scan_papers":
+        return scan_papers(queries=args["queries"])
+    if name == "read_papers":
+        return read_papers(ids=args["ids"])
+    if name == "paper_grid":
+        return paper_grid(area=args["area"], papers_json=args["papers_json"])
     return None

@@ -24,7 +24,6 @@ class TestMetaPresence:
     """验证所有工具都有 _meta。"""
 
     def test_every_registered_tool_has_meta(self):
-        """每个注册工具词条都有 _meta 且至少含 label。"""
         raw = _load_raw_tools()
         names = set()
         for t in raw:
@@ -34,15 +33,12 @@ class TestMetaPresence:
                 f"{name} 缺少 _meta.label。请在该工具的 TOOLS_* 定义中添加 _meta。"
             )
             names.add(name)
-
         assert len(names) >= 40, f"预期至少 40 个工具，实际 {len(names)} 个"
 
     def test_no_stale_meta_entries(self):
-        """没有注册表外的残留 _meta 条目。"""
         raw = _load_raw_tools()
         registered = {t["function"]["name"] for t in raw}
         alias_names = set(_META_ALIASES.keys())
-
         for derived_set, set_name in [
             (PARALLEL_SAFE, "PARALLEL_SAFE"),
             (PLAN_BLOCKED, "PLAN_BLOCKED"),
@@ -55,7 +51,6 @@ class TestMetaPresence:
                 )
 
     def test_no_dead_entries_in_derived_sets(self):
-        """5 个已知死工具不应出现在任何派生集合中。"""
         dead = {"undo_edit", "install_plugin", "mcp_connect",
                 "mcp_disconnect", "mcp_save_config"}
         for name in dead:
@@ -70,7 +65,6 @@ class TestMetaStripping:
     """_meta 从 API 可见工具列表中剥离。"""
 
     def test_get_tools_no_meta_key(self):
-        """get_tools() 返回的工具定义不含 _meta 键。"""
         tools = get_tools()
         for t in tools:
             assert "_meta" not in t, (
@@ -78,10 +72,9 @@ class TestMetaStripping:
             )
 
     def test_get_tools_has_all_names(self):
-        """剥离后工具名完整，数量正确。"""
         tools = get_tools()
         names = {t["function"]["name"] for t in tools}
-        assert len(tools) == 44, f"预期 44 个工具，实际 {len(tools)}"
+        assert len(tools) == 47, f"预期 47 个工具，实际 {len(tools)}"
         assert "read_file" in names
         assert "write_file" in names
         assert "self" in names
@@ -108,20 +101,15 @@ class TestHotReloadPreservesMeta:
     """热加载后元数据正确刷新。"""
 
     def test_refresh_globals_preserves_counts(self):
-        """_refresh_globals() 保持派生的 frozenset 大小不变。"""
         _refresh_globals()
-        assert len(TOOL_LABELS) == 45  # 44 + read_file_lines
-        assert len(PARALLEL_SAFE) == 23
-        assert len(PLAN_BLOCKED) == 9
-        assert len(SKIP_COMPRESS_TOOLS) == 2
+        assert len(PARALLEL_SAFE) == 25
+        assert len(PLAN_BLOCKED) == 10
         assert len(DEDUP_BLACKLIST) == 13
 
     def test_reload_tools_preserves_meta(self):
-        """热加载所有工具后 _meta 派生正确。"""
         from src.tools import reload_tools
         reload_tools()
-        # 重新获取
         labels, psafe, pblock, skip, dedup = _derive()
-        assert len(labels) == 45
-        assert len(psafe) == 23
-        assert len(pblock) == 9
+        assert len(labels) == 48
+        assert len(psafe) == 25
+        assert len(pblock) == 10

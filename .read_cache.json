@@ -1,0 +1,8 @@
+{
+  "2603.09086": {
+    "id": "2603.09086",
+    "title": "</span>Latent World Models for Automated Driving: A Unified Taxonomy, Evaluation Framework, and Open Challenges</h1>",
+    "abstract": "</span>Emerging generative world models and vision-language-action (VLA) systems are rapidly reshaping automated driving by enabling scalable simulation, long-horizon forecasting, and capability-rich decision making. Across these directions, latent representations serve as the central computational substrate: they compress high-dimensional multi-sensor observations, enable temporally coherent rollouts, and provide interfaces for planning, reasoning, and controllable generation. This paper propos",
+    "venue": "arxiv"
+  }
+}
