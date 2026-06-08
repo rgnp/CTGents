@@ -99,7 +99,8 @@ class TestEvolutionRunLifecycle:
 
     def test_phase_enum(self):
         assert EvolutionPhase.RESEARCH.value == "research"
-        assert EvolutionPhase.VERIFICATION.value == "verification"
+        assert EvolutionPhase.DECISION.value == "decision"
+        assert EvolutionPhase.COMPLETE.value == "complete"
 
 
 class TestStartSummary:

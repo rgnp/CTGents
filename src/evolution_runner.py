@@ -27,13 +27,11 @@ PROMPT_STATUS_LIMIT = EVOLUTION.prompt_status_limit
 
 
 class EvolutionPhase(StrEnum):
-    """Runner phases for a self-evolution attempt."""
+    """Runner 生命周期检查点。进化由 agent 自由驱动，runner 只记录这 3 个可达状态：
+    启动→验证后→提交完成。早期设想的 7 阶段流水线从未接通，已精简掉不可达阶段。
+    """
 
-    PREFLIGHT = "preflight"
     RESEARCH = "research"
-    SYNTHESIS = "synthesis"
-    GENERATION = "generation"
-    VERIFICATION = "verification"
     DECISION = "decision"
     COMPLETE = "complete"
 
@@ -122,17 +120,6 @@ def start_evolution_run(goal: str, root: Path | None = None) -> EvolutionRunStar
     _write_active_run(run)
 
     return EvolutionRunStart(run=run, summary=_format_start_summary(run))
-
-
-def advance_evolution_phase(run_id: str, phase: EvolutionPhase | str, note: str = "") -> EvolutionRun:
-    """Advance a persisted run to a new phase."""
-    run = load_evolution_run(run_id)
-    next_phase = phase.value if isinstance(phase, EvolutionPhase) else phase
-    run.phase = next_phase
-    run.updated_at = _utc_now()
-    run.events.append(_event("phase_advanced", {"phase": next_phase, "note": note}))
-    _save_run(run)
-    return run
 
 
 def record_validation_result(
