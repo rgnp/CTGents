@@ -641,10 +641,6 @@ def edit_file_lines(path: str, action: str, start_line: int,
 # ── 撤销 ──
 
 
-def undo_edit(path: str) -> str:
-    """已废弃。"""
-    return "⛔ undo_edit 已废弃"
-
 def count_lines(path: str) -> str:
     """统计文件的文本度量：行数、字符数、单词数。
 

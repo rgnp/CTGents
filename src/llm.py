@@ -117,9 +117,6 @@ class LLMBackend(ABC):
         """非流式调用。返回 (content, tool_calls)。"""
         ...
 
-    def get_model_info(self) -> ModelInfo:
-        return self.info
-
 
 # ═══════════════════════════════════════════════════════════════
 # DeepSeek 后端（兼容 OpenAI 协议）
@@ -291,18 +288,9 @@ _consecutive_simple_tasks: int = 0
 _STICKY_THRESHOLD: int = 3   # 连续 N 轮简单任务才从 pro 降回 flash
 
 
-def get_current_backend() -> LLMBackend:
-    return _current_backend
-
-
 def get_current_model_name() -> str:
     """返回当前模型的显示名称。"""
     return _current_backend.info.name
-
-
-def get_current_model_id() -> str:
-    """返回当前模型的 API ID。"""
-    return _current_backend.info.id
 
 
 def switch_model(name: str) -> tuple[bool, str]:

@@ -13,7 +13,6 @@ from src.tools.file import (
     _validate_imports,
     _validate_py,
     read_file,
-    undo_edit,
     write_file,
 )
 
@@ -55,13 +54,6 @@ class TestBackup:
             assert backups[0] == bp
         finally:
             os.chdir(old_cwd)
-
-    def test_undo_no_backup(self, tmp_path):
-        f = tmp_path / "nobackup.txt"
-        f.write_text("no backup", encoding="utf-8")
-        result = undo_edit(str(f))
-        # undo_edit 已废弃，始终返回空字符串
-        assert isinstance(result, str)
 
 
 class TestValidatePy:
