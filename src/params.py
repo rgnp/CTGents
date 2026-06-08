@@ -50,10 +50,6 @@ class ContextParams:
     compact_threshold: float = _env_float("CTG_COMPACT_THRESHOLD", 0.65)
     # 压缩后保留最近多少比例的消息
     compact_keep_ratio: float = _env_float("CTG_COMPACT_KEEP_RATIO", 0.40)
-    # 工具结果清理触发比例（贴近压缩点，过早会每轮断前缀缓存）
-    cleanup_threshold: float = _env_float("CTG_CLEANUP_THRESHOLD", 0.60)
-    # 一轮内工具结果达此数量才值得清理（太少不值得断缓存）
-    cleanup_min_tool_results: int = _env_int("CTG_CLEANUP_MIN_TOOL_RESULTS", 2)
 
 
 CONTEXT = ContextParams()

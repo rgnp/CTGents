@@ -22,8 +22,7 @@ def test_context_defaults():
     c = params.CONTEXT
     assert c.max_context_tokens == 960_000
     assert c.compact_threshold == 0.65
-    assert c.cleanup_threshold == 0.60
-    assert c.cleanup_min_tool_results == 2
+    assert c.compact_keep_ratio == 0.40
 
 
 def test_config_and_llm_source_from_params():
@@ -33,7 +32,7 @@ def test_config_and_llm_source_from_params():
     assert params.CONTEXT.max_context_tokens == config.MAX_CONTEXT_TOKENS
     assert params.CONTEXT.tool_loop_threshold == config.TOOL_LOOP_THRESHOLD
     assert params.CONTEXT.compact_threshold == llm._COMPACT_THRESHOLD
-    assert params.CONTEXT.cleanup_threshold == llm._CLEANUP_CONTEXT_THRESHOLD
+    assert params.CONTEXT.compact_keep_ratio == llm._COMPACT_KEEP_RATIO
 
 
 def test_rag_and_evolution_defaults():
@@ -70,13 +69,13 @@ def test_runtime_defaults_and_wiring():
 def test_env_override(monkeypatch):
     """CTG_* 环境变量覆盖默认值。"""
     monkeypatch.setenv("CTG_COMPACT_THRESHOLD", "0.5")
-    monkeypatch.setenv("CTG_CLEANUP_MIN_TOOL_RESULTS", "7")
+    monkeypatch.setenv("CTG_MAX_CONTEXT_TOKENS", "500000")
     reloaded = importlib.reload(params)
     try:
         assert reloaded.CONTEXT.compact_threshold == 0.5
-        assert reloaded.CONTEXT.cleanup_min_tool_results == 7
+        assert reloaded.CONTEXT.max_context_tokens == 500000
     finally:
         # 复原，避免污染同进程后续测试（reload 回干净 env）
         monkeypatch.delenv("CTG_COMPACT_THRESHOLD", raising=False)
-        monkeypatch.delenv("CTG_CLEANUP_MIN_TOOL_RESULTS", raising=False)
+        monkeypatch.delenv("CTG_MAX_CONTEXT_TOKENS", raising=False)
         importlib.reload(params)

@@ -561,8 +561,6 @@ def _compress_tool_result(tool_name: str, result: str) -> str:
 # 上下文/压缩旋钮统一定义在 params.CONTEXT；此处绑定本地名，保持模块内引用与可 monkeypatch。
 _COMPACT_THRESHOLD = CONTEXT.compact_threshold          # 滑窗压缩触发比例
 _COMPACT_KEEP_RATIO = CONTEXT.compact_keep_ratio        # 压缩后保留最近 N% 消息
-_CLEANUP_CONTEXT_THRESHOLD = CONTEXT.cleanup_threshold  # 工具结果清理门槛（贴近压缩点防每轮断缓存）
-_CLEANUP_MIN_TOOL_RESULTS = CONTEXT.cleanup_min_tool_results  # 一轮工具结果达此数才值得清理
 # 话题切换关键词（检测到后追加边界标记）
 _TOPIC_SWITCH_KEYWORDS = [
     "换个", "换一", "不谈", "不说", "跳过", "算了",
@@ -593,73 +591,6 @@ def _compact_context(ctx, user_input: str, force: bool = False):
         tmp = CacheContext(prefix_msgs=prefix, log_msgs=log)
         _compact_cache_context(tmp, user_input, force=force)
         return tmp.all
-
-
-def _cleanup_tool_results(ctx) -> None:
-    """任务完成后压缩中间工具结果：保留摘要，丢弃细节。
-
-    每轮任务（从用户输入到 LLM 最终回复）完成后调用。
-    工具结果占 log 膨胀的绝大部分——任务完成后它们不再有用，
-    替换为一行摘要可以在下次滑窗压缩前有效控制 log 大小。
-
-    门槛：仅当上下文用量 ≥ _CLEANUP_CONTEXT_THRESHOLD 时才清理。清理会删改 log
-    中间消息、断掉 DeepSeek 前缀缓存连续；短对话保留工具结果维持缓存命中（首要目标），
-    只有上下文真正变大、"甩掉臃肿工具结果"的收益超过"断一次缓存"的代价时才动手。
-    """
-    # 门槛 1：上下文还小 → 保留工具结果，维持缓存连续
-    if count_messages_tokens(ctx.all) < MAX_CONTEXT_TOKENS * _CLEANUP_CONTEXT_THRESHOLD:
-        return
-
-    log = ctx.log
-    # 找到最后一次 user 消息
-    last_user = None
-    for i in range(len(log) - 1, -1, -1):
-        if log[i].get("role") == "user":
-            last_user = i
-            break
-    if last_user is None:
-        return
-
-    tool_names: list[str] = []
-    tool_indices: list[int] = []
-
-    for i in range(last_user + 1, len(log)):
-        m = log[i]
-        if m.get("role") == "tool" and m.get("_tool_result_compressed"):
-            name = m.get("_tool_name", "?")
-            if name not in tool_names:
-                tool_names.append(name)
-            tool_indices.append(i)
-
-    if len(tool_indices) < _CLEANUP_MIN_TOOL_RESULTS:
-        return  # 太少，不值得断缓存压缩
-
-    summary = f"⏪ 已归档 {len(tool_indices)} 条工具结果: {', '.join(tool_names[:10])}"
-    if len(tool_names) > 10:
-        summary += f" 等共 {len(tool_names)} 种工具"
-
-    # 找到发起这些工具调用的所有 assistant 消息，去掉 tool_calls 字段
-    deleted_call_ids = {
-        log[idx].get("tool_call_id", "")
-        for idx in tool_indices
-    }
-    for i in range(last_user, len(log)):
-        m = log[i]
-        if m.get("role") == "assistant" and m.get("tool_calls"):
-            tc_ids = {tc.get("id", "") for tc in m["tool_calls"]}
-            if tc_ids and tc_ids <= deleted_call_ids:
-                if m.get("content"):
-                    m.pop("tool_calls", None)
-                else:
-                    log[i] = {"role": "assistant", "content": summary}
-
-    # 第一条工具结果替换为摘要，其余删除
-    first_idx = tool_indices[0]
-    log[first_idx] = {"role": "system", "content": summary, "_volatile": True}
-    for idx in reversed(tool_indices[1:]):
-        del log[idx]
-
-    logger.info("工具结果清理：%d → 1 条（%d 种工具）", len(tool_indices), len(tool_names))
 
 
 def _compact_cache_context(ctx, user_input: str, force: bool = False) -> None:
@@ -1095,7 +1026,6 @@ def run_conversation(
                         "tool_call_id": tc_data["id"],
                         "content": result,
                         "_tool_name": tool_name,
-                        "_tool_result_compressed": True,  # 标记可压缩
                     })
                 # 记忆变更后更新 ctx.log 中的记忆索引
                 from .tools.memory import clear_dirty, get_context, is_dirty
@@ -1129,5 +1059,4 @@ def run_conversation(
                 on_progress()
             if auto_plan:
                 set_plan_mode(False)
-            _cleanup_tool_results(ctx)
             return content or ""
