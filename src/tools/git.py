@@ -263,8 +263,36 @@ def _changed_paths_for_stage(workdir: str) -> list[str]:
     return sorted(set(paths))
 
 
+def _scope_paths_to_active_run(paths: list[str]) -> list[str]:
+    """进化 run 进行中时，把暂存范围限定为本轮真正改动的文件。
+
+    排除"启动前就已脏"的无关文件，避免一锅端（见 7da964e：补 docstring 的提交
+    把启动前已脏的 evolution_runner.py 砍了 82 行）。无 active run 时原样返回。
+    """
+    try:
+        from ..evolution_runner import (
+            append_run_event,
+            load_active_evolution_run,
+            run_owned_paths,
+        )
+        run = load_active_evolution_run()
+        if run is None:
+            return paths
+        owned = set(run_owned_paths(run))
+        scoped = [p for p in paths if p in owned]
+        skipped = [p for p in paths if p not in owned]
+        if skipped:
+            append_run_event(run.run_id, "commit_scoped", {
+                "committed": scoped, "skipped_preexisting_dirty": skipped,
+            })
+        return scoped
+    except Exception:
+        return paths  # 任何异常都不阻断正常提交
+
+
 def _stage_changed_files(workdir: str) -> str | None:
     paths = _changed_paths_for_stage(workdir)
+    paths = _scope_paths_to_active_run(paths)
     if not paths:
         return None
     r = _git(["add", "--", *paths], workdir)

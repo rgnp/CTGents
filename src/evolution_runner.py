@@ -82,6 +82,17 @@ def start_evolution_run(goal: str, root: Path | None = None) -> EvolutionRunStar
     it receives the goal as a regular user message, not a special prompt.
     """
     project_root = (root or PROJECT_ROOT).resolve()
+
+    # 干净基线闸（默认关）：脏树上拒绝启动，避免提交时把先前 WIP 一锅端
+    from .config import EVOLVE_REQUIRE_CLEAN
+    if EVOLVE_REQUIRE_CLEAN:
+        status = _run_git(project_root, ["status", "--porcelain"])
+        if status.stdout.strip():
+            raise RuntimeError(
+                "工作区已脏，EVOLVE_REQUIRE_CLEAN 拒绝在脏树上启动进化。"
+                "请先提交/暂存现有改动，或设 EVOLVE_REQUIRE_CLEAN=0。"
+            )
+
     run_id = _new_run_id()
     run_dir = RUNS_DIR / run_id
     run_dir.mkdir(parents=True, exist_ok=False)
@@ -231,8 +242,42 @@ def _collect_preflight(root: Path) -> dict[str, Any]:
         "branch": branch.stdout.strip(),
         "head": head.stdout.strip(),
         "dirty_files": _split_status(status.stdout),
+        "clean": status.exit_code == 0 and not status.stdout.strip(),
         "warnings": warnings,
     }
+
+
+def _status_path(entry: str) -> str:
+    """从 porcelain 行（已 strip，如 'M src/x.py' / '?? a.py' / 'R old -> new'）提取文件路径。"""
+    parts = entry.split(maxsplit=1)
+    path = parts[1] if len(parts) > 1 else entry
+    if " -> " in path:  # 重命名取新名
+        path = path.split(" -> ", 1)[1]
+    return path.strip().strip('"')
+
+
+def run_owned_paths(run: EvolutionRun, root: Path | None = None) -> list[str]:
+    """本轮 run 真正改动的文件 = 当前变更 − 启动时已脏的文件。
+
+    启动前就脏的文件属于先前的 WIP，不归本轮负责，提交时排除，避免一锅端
+    （见 7da964e：一个补 docstring 的提交把启动前已脏的 evolution_runner.py 砍了 82 行）。
+    """
+    project_root = (root or Path(run.root) if run.root else PROJECT_ROOT).resolve()
+    status = _run_git(project_root, ["status", "--porcelain"])
+    current = {_status_path(e) for e in _split_status(status.stdout)}
+    preflight_dirty = {_status_path(e) for e in run.preflight.get("dirty_files", [])}
+    return sorted(current - preflight_dirty)
+
+
+def append_run_event(run_id: str, name: str, data: dict | None = None) -> None:
+    """给 run 追加一条审计事件（可忽略失败，不阻断主流程）。"""
+    try:
+        run = load_evolution_run(run_id)
+    except (FileNotFoundError, json.JSONDecodeError, TypeError):
+        return
+    run.events.append(_event(name, data or {}))
+    run.updated_at = _utc_now()
+    _save_run(run)
 
 
 def _write_patch_snapshot(root: Path, patch_path: Path) -> dict[str, Any]:

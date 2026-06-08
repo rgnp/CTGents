@@ -34,6 +34,9 @@ TAVILY_API_KEY: str = _require_env("TAVILY_API_KEY")
 
 # ── 行为参数 ──
 TOOL_LOOP_THRESHOLD: float = 0.95
+# 进化干净基线：开启后，工作区已脏时 start_evolution_run 拒绝启动（避免脏树进化）。
+# 默认关——靠"按 run 圈定提交"已能防一锅端；此开关是额外的预防闸。
+EVOLVE_REQUIRE_CLEAN: bool = os.getenv("EVOLVE_REQUIRE_CLEAN", "0") == "1"
 MAX_RETRIES: int = 3
 RETRY_BASE_DELAY: float = 1.0
 MAX_EXEC_TIMEOUT: int = 5

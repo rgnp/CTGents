@@ -570,7 +570,11 @@ def _cmd_evolve(r: CmdResult, ctx, args, session_id) -> None:
         return
     goal = " ".join(args)
     from .evolution_runner import start_evolution_run
-    start = start_evolution_run(goal)
+    try:
+        start = start_evolution_run(goal)
+    except RuntimeError as exc:
+        r.message = f"进化未启动: {exc}"
+        return
     ctx.log.append({"role": "user", "content": goal})
     r.retry = True
     r.save = True
