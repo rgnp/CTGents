@@ -277,15 +277,8 @@ AVAILABLE_MODELS: dict[str, LLMBackend] = {
     )),
 }
 
-# 当前模型 — 始终 Pro
+# 当前模型 — 始终 Pro（DeepSeek KV 缓存按模型独立，固定单模型才能养肥长前缀）
 _current_backend: LLMBackend = AVAILABLE_MODELS["pro"]
-
-# ── 模型切换滞后计数器（避免 flash↔pro ping-pong 破坏前缀缓存） ──
-# DeepSeek KV 缓存按模型独立 — flash 和 pro 各有自己的缓存。
-# 频繁切换 = 两个模型都攒不起长前缀，缓存利用率暴跌。
-# 策略：升 pro 要快（复杂任务不能降质），降 flash 要慢（等缓存养肥）。
-_consecutive_simple_tasks: int = 0
-_STICKY_THRESHOLD: int = 3   # 连续 N 轮简单任务才从 pro 降回 flash
 
 
 def get_current_model_name() -> str:
@@ -295,12 +288,10 @@ def get_current_model_name() -> str:
 
 def switch_model(name: str) -> tuple[bool, str]:
     """切换当前模型。name 可以是 'flash'、'pro' 或完整模型 ID。"""
-    global _consecutive_simple_tasks
-    _consecutive_simple_tasks = 0  # 显式切换重置滞后计数
+    global _current_backend
 
     # 先按短名称查找
     if name in AVAILABLE_MODELS:
-        global _current_backend
         _current_backend = AVAILABLE_MODELS[name]
         info = _current_backend.info
         return True, f"已切换到 {info.name}（{info.id}）"
@@ -929,11 +920,9 @@ def run_conversation(
     reset_storm()
     reset_safe_stats()
 
-    # 自动选择模型
-    prev_backend = _current_backend  # 切换前快照（auto_select_model 会更新 _current_backend）
+    # 自动选择模型（始终 Pro）
     backend = auto_select_model(user_input)
-    model_name = backend.info.name
-    logger.info("路由: '%s...' → %s", user_input[:30], model_name)
+    logger.info("路由: '%s...' → %s", user_input[:30], backend.info.name)
 
     # ── 自动 Plan Mode：复杂任务先只读分析 ──
     auto_plan = False
@@ -941,10 +930,6 @@ def run_conversation(
         set_plan_mode(True)
         auto_plan = True
         on_token("📋 任务较复杂，先进入只读分析…\n\n")
-
-    # 模型变了 → 通知用户
-    if backend is not prev_backend:
-        on_token(f"\n[🤖 使用 {model_name} 处理此任务]\n\n")
 
     while True:
         used = count_messages_tokens(ctx.all)
@@ -954,7 +939,7 @@ def run_conversation(
                 f"上下文用量已达上限（{used}/{MAX_CONTEXT_TOKENS} tokens）。"
                 "请开启新会话或精简问题。"
             )
-        # Phase 3：自动压缩旧对话（超过 70% 时触发）
+        # 自动压缩旧对话（用量超过 _COMPACT_THRESHOLD 即触发）
         compact_limit = int(MAX_CONTEXT_TOKENS * _COMPACT_THRESHOLD)
         if used >= compact_limit:
             logger.info("触发上下文优化：%d >= %d (%.0f%%)", used, compact_limit, _COMPACT_THRESHOLD * 100)
