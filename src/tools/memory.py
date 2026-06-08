@@ -11,7 +11,8 @@ from ..config import MEMORY_DIR
 # 命中时挂一行易失提示，记不记、记什么仍是 agent 自愿调 remember。
 _SIGNAL_EXPLICIT = re.compile(r"记住|记一下|记下来|记下|帮我记|remember", re.I)
 _SIGNAL_CORRECTION = re.compile(
-    r"不对|不是这样|错了|搞错|应该是|其实是|并不是|别这样|不要这样|理解错|你弄错"
+    # 不对(?!劲)：摘掉"不对劲"——那是"感觉蹊跷"的成语，不是在纠正
+    r"不对(?!劲)|不是这样|错了|搞错|应该是|其实是|并不是|别这样|不要这样|理解错|你弄错"
 )
 _SIGNAL_PREFERENCE = re.compile(
     r"我喜欢|我习惯|我倾向|我更喜欢|我偏好|我们项目|我们的约定|以后都|以后请|每次都要|默认要|默认用"

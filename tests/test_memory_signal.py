@@ -37,6 +37,18 @@ def test_neutral_returns_none():
     assert detect_signal("帮我看看这个函数为什么报错") is None
 
 
+def test_buduijin_not_correction():
+    """'不对劲'是成语(感觉蹊跷)，不是纠正，不应触发。"""
+    assert detect_signal("这个测试不对劲，但我不确定原因") is None
+
+
+def test_buidui_comma_still_corrects():
+    """但真正的'不对，…'纠正仍要触发。"""
+    nudge = detect_signal("不对，是另一个文件")
+    assert nudge is not None
+    assert "纠正" in nudge
+
+
 def test_empty_returns_none():
     assert detect_signal("") is None
     assert detect_signal(None) is None
