@@ -955,7 +955,6 @@ def generate_agents_md(path: str | None = None, overwrite: bool = False) -> str:
 _DOC_SYNC_MAP: dict[str, list[str]] = {
     # 核心模块变更 → 影响哪些文档
     "src/llm.py":          ["AGENTS.md", "docs/architecture.md"],
-    "src/safety.py":       ["AGENTS.md", "docs/architecture.md"],
     "src/commands.py":     ["AGENTS.md", "README.md"],
     "src/main.py":         ["README.md", "docs/architecture.md"],
     "src/config.py":       [".env.example", "README.md"],
@@ -970,8 +969,6 @@ _DOC_SYNC_MAP: dict[str, list[str]] = {
     "src/tools/code.py":       ["AGENTS.md"],
     "src/tools/think.py":      ["AGENTS.md"],
     "src/tools/tokens.py":     ["AGENTS.md"],
-    "src/tools/discover.py":   ["AGENTS.md"],
-    "src/tools/plugin_mgr.py": ["AGENTS.md"],
 
     # 测试变更 → 至少更新 CHANGELOG
     "tests/":                  ["docs/changelog.md"],
