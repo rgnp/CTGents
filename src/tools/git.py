@@ -301,6 +301,23 @@ def _stage_changed_files(workdir: str) -> str | None:
     return None
 
 
+def _classify_porcelain(index: str, worktree: str) -> str:
+    """把 porcelain 的 XY 状态码分类到 staged/unstaged/untracked/conflict。
+
+    顺序要紧：untracked('??') 的 worktree 位也是 '?'，必须先于 worktree 判断，
+    否则会被误判为 unstaged（历史 bug）。
+    """
+    if index == "U" or worktree == "U":
+        return "conflict"
+    if index == "?":
+        return "untracked"
+    if index != " ":
+        return "staged"
+    if worktree != " ":
+        return "unstaged"
+    return ""
+
+
 def _format_diff_stats(diff_text: str) -> str:
     """从 diff 输出中提取统计信息。"""
     lines = diff_text.split("\n")
@@ -343,16 +360,15 @@ def git_status(path: str | None = None) -> str:
             worktree = line[1]
             filepath = line[3:].strip()
 
-            if index == "U" or worktree == "U":
+            bucket = _classify_porcelain(index, worktree)
+            if bucket == "conflict":
                 conflicts.append(filepath)
-            elif index != " " and index != "?":
+            elif bucket == "staged":
                 staged.append(filepath)
-            elif worktree != " ":
+            elif bucket == "unstaged":
                 unstaged.append(filepath)
-            elif index == "?":
+            elif bucket == "untracked":
                 untracked.append(filepath)
-            elif line.startswith("##"):
-                pass  # 分支信息行
 
     # 构建输出
     lines = [f"当前分支: {branch}\n"]
@@ -626,7 +642,7 @@ def _generate_commit_message(repo_path: str) -> str:
         if not line:
             continue
         # git diff --name-status 格式: M file.py
-        if line[0] in ("A", "M", "D", "R", "??"):
+        if line[0] in ("A", "M", "D", "R"):
             filename = line[1:].strip() if len(line) > 1 else ""
             if line.startswith("??") or line.startswith("A"):
                 added.append(filename)
