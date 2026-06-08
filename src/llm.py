@@ -23,7 +23,7 @@ from .config import (
     RETRY_BASE_DELAY,
     TOOL_LOOP_THRESHOLD,
 )
-from .params import CONTEXT
+from .params import CONTEXT, RUNTIME
 from .tools import execute_tool, get_tools, is_plan_mode, set_plan_mode
 
 # 工具显示标签（安全确认 + 终端回显共用）
@@ -499,8 +499,8 @@ def _invoke_llm(
 # 工具结果压缩（Phase 2：缓存优化）
 # ═══════════════════════════════════════════════════════════════
 
-# 压缩阈值（字符数，约等于 token 数）
-_TOOL_RESULT_COMPRESS_THRESHOLD = 1200
+# 压缩阈值（字符数，约等于 token 数）——真值在 params.RUNTIME
+_TOOL_RESULT_COMPRESS_THRESHOLD = RUNTIME.tool_result_compress_threshold
 
 
 def _compress_tool_result(tool_name: str, result: str) -> str:
@@ -867,7 +867,7 @@ def _find_valid_truncation_point(s: str) -> int:
 # 自动 Plan Mode — 长任务默认只读分析（LLM 可在 think 中推翻）
 # ═══════════════════════════════════════════════════════════════
 
-_AUTO_PLAN_MIN_CHARS = 300  # 超长描述意味着任务需要理解现状
+_AUTO_PLAN_MIN_CHARS = RUNTIME.auto_plan_min_chars  # 超长描述意味着任务需要理解现状
 
 
 def _should_auto_plan(user_input: str) -> bool:

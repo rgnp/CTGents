@@ -105,8 +105,12 @@ class RuntimeParams:
     max_exec_timeout: int = _env_int("CTG_MAX_EXEC_TIMEOUT", 5)
     # 单条工具结果允许占用的上下文比例上限
     tool_result_budget: float = _env_float("CTG_TOOL_RESULT_BUDGET", 0.15)
+    # 工具结果超过此字符数即压缩（read_file 等除外，见 SKIP_COMPRESS_TOOLS）
+    tool_result_compress_threshold: int = _env_int("CTG_TOOL_RESULT_COMPRESS_THRESHOLD", 1200)
     # token 估算：每字符约多少 token（无 tokenizer 时的粗估）
     token_per_char: float = _env_float("CTG_TOKEN_PER_CHAR", 0.5)
+    # 用户输入超过此字符数即自动进只读 Plan Mode（纯长度启发式）
+    auto_plan_min_chars: int = _env_int("CTG_AUTO_PLAN_MIN_CHARS", 300)
 
 
 RUNTIME = RuntimeParams()
