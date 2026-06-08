@@ -1,5 +1,4 @@
 import logging
-import os
 import re
 import sys
 import threading
@@ -9,7 +8,6 @@ from pathlib import Path
 
 from .cache_context import CacheContext
 from .commands import dispatch as dispatch_cmd
-from .config import SESSION_DIR
 from .llm import TokenCallback, clear_interrupt, request_interrupt, run_conversation
 from .session import list_sessions, load_session, save_session
 from .tools import is_plan_mode, set_plan_mode
@@ -90,15 +88,7 @@ def _append_volatile_context(ctx: CacheContext) -> None:
 def _print_sessions(sessions: list[str]) -> None:
     print("历史会话：")
     for i, sid in enumerate(sessions, 1):
-        summary_path = os.path.join(SESSION_DIR, sid, "summary.txt")
-        preview = ""
-        try:
-            if os.path.exists(summary_path):
-                with open(summary_path, encoding="utf-8") as f:
-                    preview = f.read()[:80].replace("\n", " ")
-        except Exception:
-            pass
-        print(f"  [{i}] {sid}  {preview}")
+        print(f"  [{i}] {sid}")
 
 
 def _print_recent(messages: list[dict], count: int = 4) -> None:
@@ -255,7 +245,7 @@ def main() -> None:
             idx = int(choice) - 1
             if 0 <= idx < len(sessions):
                 session_id = sessions[idx]
-                messages, _summary = load_session(session_id)
+                messages = load_session(session_id)
                 ctx = CacheContext(log_msgs=messages)
                 print(f"已加载会话 [{session_id}]，共 {len(ctx)} 条消息")
                 _print_recent(ctx.all)
@@ -316,7 +306,7 @@ def main() -> None:
                     print(f"会话已保存: [{session_id}]")
                 if r.load:
                     ctx.clear_log()
-                    loaded_msgs, _summary = load_session(r.load)
+                    loaded_msgs = load_session(r.load)
                     ctx.log.extend(loaded_msgs)
                     session_id = r.load
                     print(f"已加载会话 [{r.load}]，共 {len(ctx)} 条消息")

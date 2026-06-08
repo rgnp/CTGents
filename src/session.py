@@ -2,9 +2,7 @@ import json
 import os
 from datetime import datetime
 
-from openai import OpenAI
-
-from .config import DEEPSEEK_API_KEY, DEEPSEEK_BASE_URL, SESSION_DIR
+from .config import SESSION_DIR
 
 
 def list_sessions() -> list[str]:
@@ -23,10 +21,6 @@ def _session_path(session_id: str) -> str:
 
 def _messages_path(session_id: str) -> str:
     return os.path.join(_session_path(session_id), "messages.json")
-
-
-def _summary_path(session_id: str) -> str:
-    return os.path.join(_session_path(session_id), "summary.txt")
 
 
 def _meta_path(session_id: str) -> str:
@@ -85,41 +79,7 @@ def save_session(messages: list[dict], session_id: str | None = None) -> str:
     return session_id
 
 
-def load_session(session_id: str) -> tuple[list[dict], str]:
-    """加载会话，返回 (messages, summary)。"""
+def load_session(session_id: str) -> list[dict]:
+    """加载会话消息。"""
     with open(_messages_path(session_id), encoding="utf-8") as f:
-        messages = json.load(f)
-
-    summary_path = _summary_path(session_id)
-    if os.path.exists(summary_path):
-        with open(summary_path, encoding="utf-8") as f:
-            summary = f.read()
-    else:
-        summary = ""
-
-    return messages, summary
-
-
-def _generate_summary(messages: list[dict]) -> str:
-    """让 LLM 提炼会话摘要，关注任务主题和进行中事项。"""
-    if not messages:
-        return ""
-
-    prompt = (
-        "请用 1-2 句话提炼以下对话的核心内容："
-        "讨论了什么主题、有哪些进行中的任务或待办。"
-        "不要描述用户的身份或个人背景。只输出摘要本身。"
-    )
-
-    summary_messages: list[dict] = list(messages)
-    summary_messages.append({"role": "user", "content": prompt})
-    try:
-        client = OpenAI(api_key=DEEPSEEK_API_KEY, base_url=DEEPSEEK_BASE_URL)
-        from .config import MODEL_FLASH
-        response = client.chat.completions.create(
-            model=MODEL_FLASH,
-            messages=summary_messages,
-        )
-        return response.choices[0].message.content or ""
-    except Exception:
-        return ""
+        return json.load(f)
