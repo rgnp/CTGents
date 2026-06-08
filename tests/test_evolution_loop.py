@@ -1,23 +1,34 @@
 """evolution_runner.py tests — persistent run state."""
 import sys
-import tempfile
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
+import pytest
+
+import src.evolution_runner as er
 from src.evolution_runner import (
     EvolutionPhase,
     RunnerStatus,
-    EvolutionRun,
-    start_evolution_run,
+    _format_start_summary,
     complete_evolution_run,
     load_active_evolution_run,
-    load_evolution_run,
-    _format_start_summary,
-    PROJECT_ROOT,
-    RUN_ROOT,
-    RUNS_DIR,
+    start_evolution_run,
 )
+
+
+@pytest.fixture(autouse=True)
+def _isolate_evolution_state(tmp_path, monkeypatch):
+    """把 runner 状态目录重定向到 tmp，避免测试污染真实 ~/.ctgents/evolution/。
+
+    没有这层隔离时，每个调用 start_evolution_run 的测试都会在真实状态目录留下一个
+    活跃 run（goal="给 count_lines 补 docstring"），被误读为"卡死的自进化 runner"。
+    """
+    runs = tmp_path / "runs"
+    runs.mkdir()
+    monkeypatch.setattr(er, "RUN_ROOT", tmp_path)
+    monkeypatch.setattr(er, "RUNS_DIR", runs)
+    monkeypatch.setattr(er, "ACTIVE_RUN_FILE", tmp_path / "active.json")
 
 
 class TestEvolutionRunStart:
