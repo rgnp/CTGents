@@ -3,6 +3,9 @@
 # 暂存区含 .py 改动时，ruff + 全量 pytest 必须全绿，否则拒绝提交。
 # 这是 git_commit 工具内同名检查的兜底——后者可被 raw `git commit` 绕过，本钩子不会。
 #
+# 关键：只对【暂存快照】跑门禁（先 stash 掉未暂存/未跟踪改动），
+# 否则测的是工作树、提交的是暂存区，两者不一致会误判（尤其 scope 圈定提交）。
+#
 # 应急放行（仅人工、明确知情时）：git commit --no-verify
 set -e
 
@@ -11,15 +14,50 @@ if [ -z "$staged_py" ]; then
     exit 0
 fi
 
-echo "[pre-commit] 检测到 .py 改动，运行质量门禁……"
+# P2 可移植：探测 python 启动器（python / py / python3）
+PY=""
+for candidate in python py python3; do
+    if command -v "$candidate" >/dev/null 2>&1; then
+        PY="$candidate"
+        break
+    fi
+done
+if [ -z "$PY" ]; then
+    echo "[pre-commit] ⛔ 找不到 python，无法运行门禁。"
+    exit 1
+fi
 
-if ! py -m ruff check src/; then
+# P3 超时：有 timeout 命令就给 pytest 包 180s，防挂死卡住提交
+TIMEOUT=""
+if command -v timeout >/dev/null 2>&1; then
+    TIMEOUT="timeout 180"
+fi
+
+# P1 暂存快照：stash 掉未暂存+未跟踪改动，让门禁只看将要提交的内容
+stash_before=$(git rev-parse -q --verify refs/stash || true)
+git stash push --keep-index --include-untracked --quiet --message "pre-commit-$$" || true
+stash_after=$(git rev-parse -q --verify refs/stash || true)
+STASHED=0
+if [ "$stash_before" != "$stash_after" ]; then
+    STASHED=1
+fi
+
+restore_worktree() {
+    if [ "$STASHED" = "1" ]; then
+        git stash pop --quiet || echo "[pre-commit] ⚠️ stash pop 失败，未暂存改动仍在 stash 中，请手动 git stash pop。"
+    fi
+}
+trap restore_worktree EXIT
+
+echo "[pre-commit] 检测到 .py 改动，对【暂存快照】运行质量门禁……"
+
+if ! $PY -m ruff check src/; then
     echo "[pre-commit] ⛔ ruff check src/ 未通过，提交被拒绝。"
     exit 1
 fi
 
-if ! py -m pytest -q --tb=line -p no:cacheprovider; then
-    echo "[pre-commit] ⛔ pytest 未全绿，提交被拒绝。修复后重试，或 --no-verify 人工放行。"
+if ! $TIMEOUT $PY -m pytest -q --tb=line -p no:cacheprovider; then
+    echo "[pre-commit] ⛔ pytest 未全绿/超时，提交被拒绝。修复后重试，或 --no-verify 人工放行。"
     exit 1
 fi
 

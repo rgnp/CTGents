@@ -228,7 +228,20 @@ def _reload_dispatch():
 
 # ── 主入口 ──
 
+def _ensure_git_hooks() -> None:
+    """幂等确保 core.hooksPath 指向版本管理的钩子，堵掉"克隆后没钩子"。绝不阻塞启动。"""
+    try:
+        root = str(Path(__file__).resolve().parent.parent)
+        if root not in sys.path:
+            sys.path.insert(0, root)
+        from scripts.install_hooks import ensure_installed
+        ensure_installed()
+    except Exception:
+        pass
+
+
 def main() -> None:
+    _ensure_git_hooks()
     sessions = list_sessions()
     session_id: str | None = None
     messages: list[dict] = []
