@@ -507,16 +507,6 @@ class CodeChunk:
     def from_dict(cls, d: dict) -> "CodeChunk":
         return cls(**d)
 
-    @property
-    def short_path(self) -> str:
-        """返回简短文件路径（相对于项目根）。"""
-        return self.file_path
-
-    @property
-    def summary(self) -> str:
-        """返回块摘要（文件名+行号+名称）。"""
-        return f"{self.file_path}:{self.start_line}-{self.end_line} [{self.chunk_type}] {self.name}"
-
 
 def _chunk_python_file(file_path: Path, content: str, language: str) -> list[CodeChunk]:
     """按函数/类分割 Python 文件。"""
@@ -1302,62 +1292,6 @@ def query_research(query: str, top_k: int = 5) -> str:
         lines.append(f"{icon} [{src}] {r['title'][:80]}  (相关度 {r['score']})")
         lines.append(f"   {r['content'][:150]}")
         lines.append("用 read_file 查看详细内容")
-    return "\n".join(lines)
-
-
-def browse_research() -> str:
-    """浏览研究知识库全貌——只看标题和摘要，不看全文。"""
-    idx = _load_doc_index("research")
-    if not idx:
-        return "研究索引未建立。先运行 rag_index_research。"
-
-    # 按类型分组
-    groups: dict[str, list[dict]] = {}
-    for c in idx["chunks"]:
-        dtype = c.get("doc_type", "unknown")
-        groups.setdefault(dtype, [])
-
-    # 合并同一 source 的多个 chunk
-    lines = ["═══════════════════════════════", "       研究知识库浏览",
-             "═══════════════════════════════", ""]
-
-    for dtype, label in [("paper", "📄 论文"), ("note", "📝 笔记"), ("knowledge", "📚 知识文档")]:
-        if dtype not in groups:
-            continue
-        sources: dict[str, dict] = {}
-        for c in groups[dtype]:
-            sid = c["source"]
-            if sid not in sources:
-                sources[sid] = {"title": c["title"], "first_line": c["content"][:80]}
-        lines.append(f"── {label} ({len(sources)} 个) ──")
-        for sid, info in sorted(sources.items()):
-            lines.append(f"  [{sid}]")
-            lines.append(f"      {info['title'][:70]}")
-            if info["first_line"]:
-                lines.append(f"      {info['first_line']}")
-        lines.append("")
-
-    lines.append("用 rag_search(query) 搜索，read_file 查看详细内容。")
-    return "\n".join(lines)
-
-
-def read_research_doc(source_id: str) -> str:
-    """读取研究知识库中的完整文档内容。"""
-    idx = _load_doc_index("research")
-    if not idx:
-        return "研究索引未建立。"
-
-    # 收集所有属于此 source 的 chunk
-    chunks = [c for c in idx["chunks"] if c["source"] == source_id]
-    if not chunks:
-        return f"未找到文档: {source_id}"
-
-    # 拼接所有 chunk
-    full = "\n\n".join(c["content"] for c in chunks)
-    lines = [f"## {chunks[0]['title']}", f"来源: {source_id}", f"类型: {chunks[0]['doc_type']}", "",
-             full[:8000]]  # 最多 8000 字符
-    if len(full) > 8000:
-        lines.append(f"\n\n[已截断：全文 {len(full)} 字符，仅显示前 8000。用 rag_read 分段读取。]")
     return "\n".join(lines)
 
 
