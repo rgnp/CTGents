@@ -24,6 +24,11 @@ MAX_NESTING_DEPTH = 4
 MAX_PARAMETERS = 5
 HIGH_COMPLEXITY_THRESHOLD = 10
 
+# 函数节点类型：async def 是 AsyncFunctionDef，不是 FunctionDef 的子类，
+# 两者结构相同（name/args/body/decorator_list/lineno 全有），必须一起匹配，
+# 否则所有 async 函数对定义收集和坏味道检查完全隐形。
+_FUNC_TYPES = (ast.FunctionDef, ast.AsyncFunctionDef)
+
 MAGIC_METHODS = frozenset({
     "__init__", "__new__", "__del__", "__repr__", "__str__", "__len__",
     "__getitem__", "__setitem__", "__delitem__", "__iter__", "__next__",
@@ -169,7 +174,7 @@ class ProjectAnalyzer:
 
     def _collect_definitions(self, tree: ast.AST, filepath: str, module: str) -> None:
         for node in ast.walk(tree):
-            if isinstance(node, ast.FunctionDef):
+            if isinstance(node, _FUNC_TYPES):
                 parent = self._find_parent_class(node, tree)
                 kind = "method" if parent else "function"
                 self._defs[module].append(DefInfo(
@@ -186,7 +191,9 @@ class ProjectAnalyzer:
                     parent="", is_public=not node.name.startswith("_"),
                 ))
 
-    def _find_parent_class(self, func_node: ast.FunctionDef, tree: ast.AST) -> str:
+    def _find_parent_class(
+        self, func_node: ast.FunctionDef | ast.AsyncFunctionDef, tree: ast.AST
+    ) -> str:
         for node in ast.walk(tree):
             if isinstance(node, ast.ClassDef):
                 for child in ast.iter_child_nodes(node):
@@ -238,7 +245,7 @@ class ProjectAnalyzer:
             elif isinstance(node, ast.Assign):
                 self._collect_assign_value_refs(node, module)
             # 装饰器: 被装饰函数被装饰器消费，标记为"已引用"
-            elif isinstance(node, ast.FunctionDef) and node.decorator_list:
+            elif isinstance(node, _FUNC_TYPES) and node.decorator_list:
                 self._refs[module].add(node.name)
 
     def _collect_call_args_refs(self, node: ast.Call, module: str) -> None:
@@ -340,12 +347,14 @@ class ProjectAnalyzer:
 
     def _check_file_patterns(self, tree: ast.AST, filepath: str) -> None:
         for node in ast.walk(tree):
-            if isinstance(node, ast.FunctionDef):
+            if isinstance(node, _FUNC_TYPES):
                 self._check_function(node, filepath)
             elif isinstance(node, ast.ExceptHandler):
                 self._check_except(node, filepath)
 
-    def _check_function(self, node: ast.FunctionDef, filepath: str) -> None:
+    def _check_function(
+        self, node: ast.FunctionDef | ast.AsyncFunctionDef, filepath: str
+    ) -> None:
         start = node.lineno
         end = node.end_lineno or start
         length = end - start + 1
@@ -444,7 +453,9 @@ class ProjectAnalyzer:
         DepthVisitor().visit(node)
         return max_depth
 
-    def _has_inconsistent_return(self, node: ast.FunctionDef) -> bool:
+    def _has_inconsistent_return(
+        self, node: ast.FunctionDef | ast.AsyncFunctionDef
+    ) -> bool:
         returns: list[bool] = []
 
         class ReturnVisitor(ast.NodeVisitor):
@@ -457,7 +468,9 @@ class ProjectAnalyzer:
         has_bare = any(not r for r in returns)
         return has_value and has_bare
 
-    def _check_unreachable(self, func_node: ast.FunctionDef, filepath: str) -> None:
+    def _check_unreachable(
+        self, func_node: ast.FunctionDef | ast.AsyncFunctionDef, filepath: str
+    ) -> None:
         unreachable = (ast.Return, ast.Raise, ast.Break, ast.Continue)
         for i, stmt in enumerate(func_node.body):
             if isinstance(stmt, unreachable) and i < len(func_node.body) - 1:
