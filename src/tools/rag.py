@@ -974,46 +974,31 @@ def index_project(path: str | None = None, force: bool = False) -> str:
         # 没有现有索引，全量构建
         return index_project(path, force=True)
 
-    # 移除已删除文件的块
-    if deleted_files:
-        existing_index.documents = [
-            d for d in existing_index.documents
-            if d.file_path not in deleted_files
-        ]
-        # 重建倒排索引
-        existing_index = _rebuild_from_documents(existing_index.documents)
-        existing_index.num_docs = len(existing_index.documents)
-
-    # 重新索引变更的文件
+    # 重新分块变更的文件
     new_chunks: list[CodeChunk] = []
     for f in changed_files:
         try:
             rel = str(f.relative_to(project_root))
         except ValueError:
             rel = str(f)
-        ext = f.suffix.lower()
-        lang = SOURCE_EXTENSIONS.get(ext, "unknown")
-        chunks = _chunk_file(f, lang)
-        for c in chunks:
+        lang = SOURCE_EXTENSIONS.get(f.suffix.lower(), "unknown")
+        for c in _chunk_file(f, lang):
             c.file_path = rel
             new_chunks.append(c)
 
-    # 移除变更文件的旧块
-    changed_paths = set()
+    # 要剔除的旧块：已删除文件 + 已变更文件的旧块
+    drop_paths = set(deleted_files)
     for f in changed_files:
         try:
-            changed_paths.add(str(f.relative_to(project_root)))
+            drop_paths.add(str(f.relative_to(project_root)))
         except ValueError:
-            changed_paths.add(str(f))
+            drop_paths.add(str(f))
 
-    existing_index.documents = [
-        d for d in existing_index.documents
-        if d.file_path not in changed_paths
-    ]
+    kept_docs = [d for d in existing_index.documents if d.file_path not in drop_paths]
 
-    # 添加新块（add_document 自动更新倒排索引和计数）
-    for c in new_chunks:
-        existing_index.add_document(c)
+    # 从最终文档集一次性重建——保证 doc_id / 倒排索引 / num_docs / doc_norms 全一致。
+    # （原先就地过滤 documents 再 add_document 会留下错位 doc_id 与陈旧倒排表 → 索引损坏）
+    existing_index = _rebuild_from_documents(kept_docs + new_chunks)
 
     _save_index(project_root, existing_index)
     _write_hash_cache(project_root, new_hashes)
