@@ -796,6 +796,7 @@ def _repair_json(raw: str) -> str:
         s_single = _replace_single_quotes(s)
         if _try_parse(s_single):
             return s_single
+        s = s_single  # 去引号后未必单独可解析，但保留它让后续步骤(尾逗号/补括号)接力修
 
     # 3. 多轮尾部逗号移除
     for _ in range(3):
