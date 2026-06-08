@@ -158,6 +158,42 @@ def record_validation_result(
     return run
 
 
+# runner 终态 → 进化档案 outcome（积累支柱：成败都进档案，供 get_stats / find_similar）
+_RUNNER_OUTCOME = {
+    RunnerStatus.PASSED.value: "merged",
+    RunnerStatus.FAILED.value: "reverted",
+    RunnerStatus.STOPPED.value: "partial",
+}
+
+
+def _archive_run(run: EvolutionRun, final_status: str, note: str) -> None:
+    """把完成的 run 写入进化档案。失败不阻断 runner 关闭。
+
+    此前 complete_evolution_run 只关 runner、不写档案，导致 get_stats 永远为 0、
+    find_similar 无数据——自进化的"积累"支柱接了个寂寞。这里把它接通。
+    """
+    outcome = _RUNNER_OUTCOME.get(final_status)
+    if outcome is None:
+        return
+    try:
+        from .evolve import EvolutionRecord, record_attempt
+        changed: list[str] = []
+        for validation in run.validations:
+            for path in validation.get("changed_files", []):
+                if path not in changed:
+                    changed.append(path)
+        record_attempt(EvolutionRecord(
+            goal=run.goal,
+            files_changed=changed,
+            diff_summary=note,
+            outcome=outcome,
+            git_commit_before=run.preflight.get("head", ""),
+            tags=["runner"],
+        ))
+    except Exception:
+        pass
+
+
 def complete_evolution_run(run_id: str, status: RunnerStatus | str, note: str = "") -> EvolutionRun:
     """Mark an evolution run complete."""
     run = load_evolution_run(run_id)
@@ -167,6 +203,7 @@ def complete_evolution_run(run_id: str, status: RunnerStatus | str, note: str = 
     run.updated_at = _utc_now()
     run.events.append(_event("runner_completed", {"status": final_status, "note": note}))
     _save_run(run)
+    _archive_run(run, final_status, note)
     if _read_active_run_id() == run_id:
         ACTIVE_RUN_FILE.unlink(missing_ok=True)
     return run

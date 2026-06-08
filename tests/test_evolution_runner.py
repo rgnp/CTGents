@@ -6,6 +6,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 import src.evolution_runner as runner
+import src.evolve as ev
 
 
 def _redirect_runner(tmp_path, monkeypatch) -> None:
@@ -13,6 +14,9 @@ def _redirect_runner(tmp_path, monkeypatch) -> None:
     monkeypatch.setattr(runner, "RUN_ROOT", run_root)
     monkeypatch.setattr(runner, "RUNS_DIR", run_root / "runs")
     monkeypatch.setattr(runner, "ACTIVE_RUN_FILE", run_root / "active.json")
+    # complete 会写进化档案；隔离避免污染真实 evolution.jsonl
+    monkeypatch.setattr(ev, "EVOLVE_DIR", run_root)
+    monkeypatch.setattr(ev, "EVOLVE_LOG", run_root / "evolution.jsonl")
 
 
 def test_start_evolution_run_creates_state_and_prompt(tmp_path, monkeypatch):

@@ -7,6 +7,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 import pytest
 
 import src.evolution_runner as er
+import src.evolve as ev
 from src.evolution_runner import (
     EvolutionPhase,
     RunnerStatus,
@@ -29,6 +30,9 @@ def _isolate_evolution_state(tmp_path, monkeypatch):
     monkeypatch.setattr(er, "RUN_ROOT", tmp_path)
     monkeypatch.setattr(er, "RUNS_DIR", runs)
     monkeypatch.setattr(er, "ACTIVE_RUN_FILE", tmp_path / "active.json")
+    # 接通 runner→档案后，complete 会写进化档案；隔离它避免污染真实 evolution.jsonl
+    monkeypatch.setattr(ev, "EVOLVE_DIR", tmp_path)
+    monkeypatch.setattr(ev, "EVOLVE_LOG", tmp_path / "evolution.jsonl")
 
 
 class TestEvolutionRunStart:
@@ -74,6 +78,24 @@ class TestEvolutionRunLifecycle:
         start = start_evolution_run("测试清除 active")
         complete_evolution_run(start.run.run_id, RunnerStatus.PASSED)
         assert load_active_evolution_run() is None
+
+    def test_complete_passed_writes_archive(self):
+        """接通积累支柱：complete(PASSED) 写一条 merged 进化档案 → get_stats 可见。"""
+        start = start_evolution_run("测试: 接通档案")
+        complete_evolution_run(start.run.run_id, RunnerStatus.PASSED, "已提交 abc123")
+        stats = ev.get_stats()
+        assert stats["total_attempts"] == 1
+        assert stats["merged"] == 1
+        assert stats["success_rate"] == 100.0
+
+    def test_complete_failed_archived_as_reverted(self):
+        """失败也进档案（失败的教训同样积累），outcome=reverted。"""
+        start = start_evolution_run("测试: 失败也记")
+        complete_evolution_run(start.run.run_id, RunnerStatus.FAILED, "回退")
+        stats = ev.get_stats()
+        assert stats["total_attempts"] == 1
+        assert stats["reverted"] == 1
+        assert stats["merged"] == 0
 
     def test_phase_enum(self):
         assert EvolutionPhase.RESEARCH.value == "research"
