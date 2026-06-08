@@ -36,6 +36,26 @@ def test_config_and_llm_source_from_params():
     assert llm._CLEANUP_CONTEXT_THRESHOLD == params.CONTEXT.cleanup_threshold
 
 
+def test_rag_and_evolution_defaults():
+    assert params.RAG.default_top_k == 5
+    assert params.RAG.weight_name == 3.0
+    assert params.RAG.max_file_size == 512 * 1024
+    assert params.EVOLUTION.git_timeout_seconds == 10
+    assert params.EVOLUTION.require_clean is False
+
+
+def test_rag_and_evolution_wired_to_modules():
+    """rag.py / evolution_runner.py / config 的旧名 == params 单一来源。"""
+    import src.config as config
+    import src.evolution_runner as er
+    import src.tools.rag as rag
+    assert rag.DEFAULT_TOP_K == params.RAG.default_top_k
+    assert rag.WEIGHT_NAME == params.RAG.weight_name
+    assert rag.MAX_FILE_SIZE == params.RAG.max_file_size
+    assert er.GIT_TIMEOUT_SECONDS == params.EVOLUTION.git_timeout_seconds
+    assert config.EVOLVE_REQUIRE_CLEAN == params.EVOLUTION.require_clean
+
+
 def test_env_override(monkeypatch):
     """CTG_* 环境变量覆盖默认值。"""
     monkeypatch.setenv("CTG_COMPACT_THRESHOLD", "0.5")

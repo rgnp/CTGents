@@ -6,7 +6,7 @@ from pathlib import Path
 from dotenv import load_dotenv
 from tavily import TavilyClient
 
-from .params import CONTEXT
+from .params import CONTEXT, EVOLUTION
 
 load_dotenv(Path(__file__).parent.parent / ".env")
 
@@ -37,9 +37,8 @@ TAVILY_API_KEY: str = _require_env("TAVILY_API_KEY")
 # ── 行为参数 ──
 # 上下文/压缩旋钮已迁往 params.CONTEXT（按域分组）；此处绑定本地名，保持 import 兼容。
 TOOL_LOOP_THRESHOLD: float = CONTEXT.tool_loop_threshold
-# 进化干净基线：开启后，工作区已脏时 start_evolution_run 拒绝启动（避免脏树进化）。
-# 默认关——靠"按 run 圈定提交"已能防一锅端；此开关是额外的预防闸。
-EVOLVE_REQUIRE_CLEAN: bool = os.getenv("EVOLVE_REQUIRE_CLEAN", "0") == "1"
+# 进化干净基线开关已迁往 params.EVOLUTION.require_clean（仍由 EVOLVE_REQUIRE_CLEAN env 覆盖）。
+EVOLVE_REQUIRE_CLEAN: bool = EVOLUTION.require_clean
 MAX_RETRIES: int = 3
 RETRY_BASE_DELAY: float = 1.0
 MAX_EXEC_TIMEOUT: int = 5

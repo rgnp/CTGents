@@ -11,6 +11,8 @@ from enum import StrEnum
 from pathlib import Path
 from typing import Any
 
+from .params import EVOLUTION
+
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 RUN_ROOT = Path.home() / ".ctgents" / "evolution"
 RUNS_DIR = RUN_ROOT / "runs"
@@ -19,8 +21,9 @@ STATE_FILE_NAME = "state.json"
 PATCH_FILE_NAME = "before.patch"
 RUN_ID_TS_FORMAT = "%Y%m%d-%H%M%S"
 RUN_ID_UUID_CHARS = 8
-GIT_TIMEOUT_SECONDS = 10
-PROMPT_STATUS_LIMIT = 1600
+# 可调旋钮在 params.EVOLUTION；此处绑定本地名（run 目录/文件名等结构性细节留本模块）。
+GIT_TIMEOUT_SECONDS = EVOLUTION.git_timeout_seconds
+PROMPT_STATUS_LIMIT = EVOLUTION.prompt_status_limit
 
 
 class EvolutionPhase(StrEnum):

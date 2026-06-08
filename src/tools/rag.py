@@ -25,6 +25,8 @@ import time
 from collections import Counter
 from pathlib import Path
 
+from ..params import RAG
+
 # ═══════════════════════════════════════════════════════════════
 # 配置
 # ═══════════════════════════════════════════════════════════════
@@ -36,28 +38,24 @@ RAG_INDEX_DIR = ".rag-index"
 RAG_INDEX_FILE = "index.json"
 RAG_META_FILE = "meta.json"
 
-# 分块配置
-MAX_CHUNK_LINES = 50        # 非结构化文件每块最大行数
-MIN_CHUNK_LINES = 10        # 最小块行数
-MAX_CHUNK_CHARS = 2000      # 每块最大字符数
+# 可调旋钮统一在 params.RAG；此处绑定本地名（结构性的文件名/正则/忽略表仍在本模块）。
+MAX_CHUNK_LINES = RAG.max_chunk_lines        # 非结构化文件每块最大行数
+MIN_CHUNK_LINES = RAG.min_chunk_lines        # 最小块行数
+MAX_CHUNK_CHARS = RAG.max_chunk_chars        # 每块最大字符数
 
-# 搜索配置
-DEFAULT_TOP_K = 5           # 默认返回前 N 个结果
-SEARCH_MIN_SCORE = 0.05     # 最低匹配分数
+DEFAULT_TOP_K = RAG.default_top_k            # 默认返回前 N 个结果
+SEARCH_MIN_SCORE = RAG.search_min_score      # 最低匹配分数
 
-# 关键词权重
-WEIGHT_NAME = 3.0           # 函数名/类名
-WEIGHT_COMMENT = 2.0        # 注释/docstring
-WEIGHT_CODE = 1.0           # 代码正文
-WEIGHT_IDENTIFIER = 1.5     # 标识符（变量名等）
+WEIGHT_NAME = RAG.weight_name                # 函数名/类名
+WEIGHT_COMMENT = RAG.weight_comment          # 注释/docstring
+WEIGHT_CODE = RAG.weight_code                # 代码正文
+WEIGHT_IDENTIFIER = RAG.weight_identifier    # 标识符（变量名等）
 
-# 自动注入配置
-
-# 增量更新：缓存文件 hash，跳过未变更的文件
+# 增量更新：缓存文件 hash，跳过未变更的文件（结构性，留原地）
 HASH_CACHE_FILE = "hashes.json"
 
 # 文件大小限制（超过此大小的文件跳过索引，单位字节）
-MAX_FILE_SIZE = 512 * 1024  # 512KB
+MAX_FILE_SIZE = RAG.max_file_size
 
 # ═══════════════════════════════════════════════════════════════
 # 支持的源文件扩展名

@@ -33,6 +33,11 @@ def _env_int(key: str, default: int) -> int:
     return int(raw) if raw is not None else default
 
 
+def _env_bool(key: str, default: bool) -> bool:
+    raw = os.getenv(key)
+    return raw == "1" if raw is not None else default
+
+
 @dataclass(frozen=True)
 class ContextParams:
     """上下文窗口与压缩/清理相关旋钮。"""
@@ -52,3 +57,41 @@ class ContextParams:
 
 
 CONTEXT = ContextParams()
+
+
+@dataclass(frozen=True)
+class RagParams:
+    """RAG 索引/检索旋钮（结构性的文件名、正则、忽略表留在 rag.py）。"""
+
+    # 分块
+    max_chunk_lines: int = _env_int("CTG_RAG_MAX_CHUNK_LINES", 50)
+    min_chunk_lines: int = _env_int("CTG_RAG_MIN_CHUNK_LINES", 10)
+    max_chunk_chars: int = _env_int("CTG_RAG_MAX_CHUNK_CHARS", 2000)
+    # 检索
+    default_top_k: int = _env_int("CTG_RAG_TOP_K", 5)
+    search_min_score: float = _env_float("CTG_RAG_MIN_SCORE", 0.05)
+    # 关键词权重
+    weight_name: float = _env_float("CTG_RAG_WEIGHT_NAME", 3.0)
+    weight_comment: float = _env_float("CTG_RAG_WEIGHT_COMMENT", 2.0)
+    weight_code: float = _env_float("CTG_RAG_WEIGHT_CODE", 1.0)
+    weight_identifier: float = _env_float("CTG_RAG_WEIGHT_IDENTIFIER", 1.5)
+    # 超过此大小（字节）的文件跳过索引
+    max_file_size: int = _env_int("CTG_RAG_MAX_FILE_SIZE", 512 * 1024)
+
+
+RAG = RagParams()
+
+
+@dataclass(frozen=True)
+class EvolutionParams:
+    """自进化 runner 旋钮（run 目录/状态文件名等结构性细节留在 evolution_runner.py）。"""
+
+    # git 子命令超时（秒）
+    git_timeout_seconds: int = _env_int("CTG_EVOLVE_GIT_TIMEOUT", 10)
+    # 写入 run 事件的 git status 预览最大字符数
+    prompt_status_limit: int = _env_int("CTG_EVOLVE_STATUS_LIMIT", 1600)
+    # 干净基线闸：开启后脏树拒绝启动进化（默认关）
+    require_clean: bool = _env_bool("EVOLVE_REQUIRE_CLEAN", False)
+
+
+EVOLUTION = EvolutionParams()
