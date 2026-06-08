@@ -5,10 +5,9 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-import pytest
-from src.tools import get_tools, set_plan_mode, is_plan_mode, _PLAN_BLOCKED
-from src.commands import dispatch
 from src.cache_context import CacheContext
+from src.commands import dispatch
+from src.tools import _PLAN_BLOCKED, get_tools, is_plan_mode, set_plan_mode
 
 
 class TestPlanModeTools:
@@ -19,7 +18,7 @@ class TestPlanModeTools:
 
     def test_normal_mode_all_tools(self):
         tools = get_tools()
-        assert len(tools) == 41, f"Expected 41 tools, got {len(tools)}"
+        assert len(tools) == 44, f"Expected 44 tools, got {len(tools)}"
         names = {t["function"]["name"] for t in tools}
         assert "write_file" in names
         assert "edit_file_lines" in names
@@ -28,7 +27,7 @@ class TestPlanModeTools:
     def test_plan_mode_filters_write_tools(self):
         set_plan_mode(True)
         tools = get_tools()
-        assert len(tools) == 33, f"Expected 33 tools, got {len(tools)}"
+        assert len(tools) == 35, f"Expected 35 tools, got {len(tools)}"
         names = {t["function"]["name"] for t in tools}
         assert "write_file" not in names
         assert "edit_file_lines" not in names
@@ -45,9 +44,9 @@ class TestPlanModeTools:
 
     def test_restore_after_plan_mode(self):
         set_plan_mode(True)
-        assert len(get_tools()) == 33
+        assert len(get_tools()) == 35
         set_plan_mode(False)
-        assert len(get_tools()) == 41
+        assert len(get_tools()) == 44
 
     def test_is_plan_mode_flag(self):
         assert not is_plan_mode()
