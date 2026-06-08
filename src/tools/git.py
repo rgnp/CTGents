@@ -551,7 +551,7 @@ def git_review(path: str | None = None) -> str:
     result += f"## LLM 审查\n{llm_review or '（无结果）'}"
     return result
 def git_commit(message: str | None = None, auto_stage: bool = True, path: str | None = None) -> str:
-    """暂存变更并提交。含 .py 文件的变更必须先通过测试才能提交。"""
+    """暂存变更并提交。含 .py 变更由 pre-commit 钩子强制先过 ruff+测试。"""
     if not _is_git_repo(path):
         return "当前目录不是 Git 仓库（未找到 .git 目录）"
 
@@ -568,53 +568,18 @@ def git_commit(message: str | None = None, auto_stage: bool = True, path: str | 
     if not r_check["stdout"].strip():
         return "没有需要提交的变更"
 
-    # ── 提交前验证：有 .py 变更时必须先通过测试 ──
-    changed = r_check["stdout"]
-    has_py_changes = any(
-        line.strip() and (line.split()[-1].endswith(".py") if len(line.split()) > 1 else False)
-        for line in changed.split("\n")
-    )
-    if has_py_changes:
-        import subprocess as sp
-        try:
-            lint_result = sp.run(
-                ["py", "-m", "ruff", "check", "src/"],
-                cwd=str(workdir),
-                capture_output=True,
-                timeout=120,
-                encoding="utf-8", errors="replace",
-            )
-            if lint_result.returncode != 0:
-                return (
-                    "⛔ 提交被拒绝：ruff check src/ 未通过。请修复后重试。\n\n"
-                    f"{lint_result.stdout[-1500:]}{lint_result.stderr[-500:]}"
-                )
-
-            test_result = sp.run(
-                ["py", "-m", "pytest", "-q", "--tb=line", "-p", "no:cacheprovider"],
-                cwd=str(workdir),
-                capture_output=True,
-                timeout=120,
-                encoding="utf-8", errors="replace",
-            )
-            if test_result.returncode != 0:
-                return (
-                    f"⛔ 提交被拒绝：测试未通过。请修复后重试。\n\n"
-                    f"{test_result.stdout[-1500:]}{test_result.stderr[-500:]}"
-                )
-        except sp.TimeoutExpired:
-            return "⛔ 提交被拒绝：测试超时（>120s）。请修复性能问题后重试。"
-        except FileNotFoundError:
-            return "⛔ 提交被拒绝：pytest 或 ruff 不可用，无法完成提交前验证。"
+    # 提交前质量门禁（ruff + pytest）由 pre-commit 钩子对【暂存快照】强制执行，
+    # 不在此内联重跑：内联测的是整个工作区（含未暂存脏改动）→ 双跑且可能假阴性误拒。
 
     # 如果没有提供 message，自动分析变更生成
     if not message:
         message = _generate_commit_message(str(workdir))
 
-    # 提交
+    # 提交（pre-commit 钩子在此跑质量门禁；门禁失败输出多在 stdout）
     r2 = _git(["commit", "-m", message], str(workdir))
     if not r2["success"]:
-        return f"提交失败:\n{r2['stderr']}"
+        detail = (r2["stdout"] + r2["stderr"]).strip()
+        return f"提交失败（可能是 pre-commit 质量门禁未通过）:\n{detail[-1800:]}"
 
     # 提交后触发变更追踪：提醒需要同步的文档
     from .file import _track_changes
