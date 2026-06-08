@@ -95,3 +95,22 @@ class EvolutionParams:
 
 
 EVOLUTION = EvolutionParams()
+
+
+@dataclass(frozen=True)
+class RuntimeParams:
+    """运行时旋钮：LLM 重试、代码执行、token 预算/估算。"""
+
+    # LLM 调用最大重试次数
+    max_retries: int = _env_int("CTG_MAX_RETRIES", 3)
+    # 重试退避基数（秒），实际延迟 = base * 2**(attempt-1)
+    retry_base_delay: float = _env_float("CTG_RETRY_BASE_DELAY", 1.0)
+    # run_python 代码执行超时（秒）
+    max_exec_timeout: int = _env_int("CTG_MAX_EXEC_TIMEOUT", 5)
+    # 单条工具结果允许占用的上下文比例上限
+    tool_result_budget: float = _env_float("CTG_TOOL_RESULT_BUDGET", 0.15)
+    # token 估算：每字符约多少 token（无 tokenizer 时的粗估）
+    token_per_char: float = _env_float("CTG_TOKEN_PER_CHAR", 0.5)
+
+
+RUNTIME = RuntimeParams()

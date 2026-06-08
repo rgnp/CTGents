@@ -56,6 +56,17 @@ def test_rag_and_evolution_wired_to_modules():
     assert config.EVOLVE_REQUIRE_CLEAN == params.EVOLUTION.require_clean
 
 
+def test_runtime_defaults_and_wiring():
+    assert params.RUNTIME.max_retries == 3
+    assert params.RUNTIME.max_exec_timeout == 5
+    assert params.RUNTIME.token_per_char == 0.5
+    import src.config as config
+    assert config.MAX_RETRIES == params.RUNTIME.max_retries
+    assert config.MAX_EXEC_TIMEOUT == params.RUNTIME.max_exec_timeout
+    assert config.TOOL_RESULT_BUDGET == params.RUNTIME.tool_result_budget
+    assert config.TOKEN_PER_CHAR == params.RUNTIME.token_per_char
+
+
 def test_env_override(monkeypatch):
     """CTG_* 环境变量覆盖默认值。"""
     monkeypatch.setenv("CTG_COMPACT_THRESHOLD", "0.5")

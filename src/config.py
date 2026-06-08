@@ -6,7 +6,7 @@ from pathlib import Path
 from dotenv import load_dotenv
 from tavily import TavilyClient
 
-from .params import CONTEXT, EVOLUTION
+from .params import CONTEXT, EVOLUTION, RUNTIME
 
 load_dotenv(Path(__file__).parent.parent / ".env")
 
@@ -34,23 +34,19 @@ PRO_MAX_TOKENS: int = int(os.getenv("PRO_MAX_TOKENS", "65536"))
 # Tavily 搜索
 TAVILY_API_KEY: str = _require_env("TAVILY_API_KEY")
 
-# ── 行为参数 ──
-# 上下文/压缩旋钮已迁往 params.CONTEXT（按域分组）；此处绑定本地名，保持 import 兼容。
+# ── 行为旋钮（真值在 params.py 按域分组；此处仅绑定本地名保持 import 兼容）──
 TOOL_LOOP_THRESHOLD: float = CONTEXT.tool_loop_threshold
-# 进化干净基线开关已迁往 params.EVOLUTION.require_clean（仍由 EVOLVE_REQUIRE_CLEAN env 覆盖）。
-EVOLVE_REQUIRE_CLEAN: bool = EVOLUTION.require_clean
-MAX_RETRIES: int = 3
-RETRY_BASE_DELAY: float = 1.0
-MAX_EXEC_TIMEOUT: int = 5
-TOOL_RESULT_BUDGET: float = 0.15
+MAX_CONTEXT_TOKENS: int = CONTEXT.max_context_tokens
+EVOLVE_REQUIRE_CLEAN: bool = EVOLUTION.require_clean  # 仍由 EVOLVE_REQUIRE_CLEAN env 覆盖
+MAX_RETRIES: int = RUNTIME.max_retries
+RETRY_BASE_DELAY: float = RUNTIME.retry_base_delay
+MAX_EXEC_TIMEOUT: int = RUNTIME.max_exec_timeout
+TOOL_RESULT_BUDGET: float = RUNTIME.tool_result_budget
+TOKEN_PER_CHAR: float = RUNTIME.token_per_char
 
 # ── 路径 ──
 SESSION_DIR: str = str(Path(__file__).parent.parent / "sessions")
 MEMORY_DIR: str = str(Path(__file__).parent.parent / "memory")
-
-# ── Token 预算 ──
-MAX_CONTEXT_TOKENS: int = CONTEXT.max_context_tokens
-TOKEN_PER_CHAR: float = 0.5
 
 # 客户端（模块级单例，惰性初始化）
 _tavily_client: TavilyClient | None = None
