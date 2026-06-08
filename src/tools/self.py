@@ -21,8 +21,8 @@ TOOLS_SELF = [
                 "properties": {
                     "scope": {
                         "type": "string",
-                        "enum": ["full", "capabilities", "architecture", "connections", "runtime"],
-                        "description": "full=全部/capabilities/architecture/connections/runtime",
+                        "enum": ["full", "capabilities", "architecture", "connections", "runtime", "params"],
+                        "description": "full=全部/capabilities/architecture/connections/runtime/params(可调旋钮)",
                     },
                 },
                 "required": [],
@@ -192,6 +192,9 @@ def build_self_portrait(scope: str = "full") -> str:
     if scope in ("full", "runtime"):
         lines.append(_runtime_section())
 
+    if scope in ("full", "params"):
+        lines.append(_params_section())
+
     return "\n".join(lines)
 
 
@@ -353,6 +356,38 @@ def _runtime_section() -> str:
     except Exception:
         pass
 
+    lines.append("")
+    return "\n".join(lines)
+
+
+# ═══════════════════════════════════════════════════════════════
+# 可调旋钮（params.py 各域当前值 + env 覆盖情况）
+# ═══════════════════════════════════════════════════════════════
+
+def _params_section() -> str:
+    from dataclasses import fields
+
+    from .. import params
+
+    domains = [
+        ("上下文 CONTEXT", params.CONTEXT),
+        ("RAG", params.RAG),
+        ("进化 EVOLUTION", params.EVOLUTION),
+        ("运行时 RUNTIME", params.RUNTIME),
+    ]
+    lines = ["## 可调旋钮（params.py）", ""]
+    for title, obj in domains:
+        lines.append(f"### {title}")
+        for f in fields(obj):
+            lines.append(f"  {f.name} = {getattr(obj, f.name)}")
+        lines.append("")
+
+    overrides = sorted(
+        k for k in os.environ
+        if k.startswith("CTG_") or k == "EVOLVE_REQUIRE_CLEAN"
+    )
+    lines.append(f"env 覆盖中: {', '.join(overrides) if overrides else '无（全部默认）'}")
+    lines.append("用 CTG_<NAME> 环境变量可覆盖任意旋钮（改完需重启生效）。")
     lines.append("")
     return "\n".join(lines)
 
