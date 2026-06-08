@@ -209,6 +209,7 @@ class TestGenerateAgentsMd:
         """对没有 AGENTS.md 的项目自动生成。"""
         result = generate_agents_md(path=str(tmp_empty_project), overwrite=True)
         assert "AGENTS.md" in result
+        assert "已生成" in result  # 原本不存在 → 应报"已生成"而非"已更新"
         generated = tmp_empty_project / "AGENTS.md"
         assert generated.exists()
         content = generated.read_text(encoding="utf-8")
@@ -222,7 +223,7 @@ class TestGenerateAgentsMd:
     def test_overwrite_existing(self, tmp_project):
         """设 overwrite=True → 覆盖。"""
         result = generate_agents_md(path=str(tmp_project), overwrite=True)
-        assert "已更新" in result or "已生成" in result
+        assert "已更新" in result  # 已存在 + overwrite → 应报"已更新"
         assert (tmp_project / "AGENTS.md").exists()
 
     def test_invalid_path(self):

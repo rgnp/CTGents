@@ -811,8 +811,9 @@ def _build_file_tree(root: Path, depth: int = 2, prefix: str = "") -> str:
 
     entries = [e for e in entries if e.name not in exclude]
 
-    for i, entry in enumerate(entries[:25]):
-        is_last = i == len(entries) - 1
+    shown = entries[:25]  # is_last 须对照实际展示的切片，否则截断时末项连接符错位
+    for i, entry in enumerate(shown):
+        is_last = i == len(shown) - 1
         connector = "└── " if is_last else "├── "
         if entry.is_dir():
             lines.append(f"{prefix}{connector}{entry.name}/")
@@ -879,7 +880,7 @@ def _generate_agents_md_content(root: Path, output_path: Path) -> None:
         lines.append("- 文档字符串: 模块和公共函数必须有")
         lines.append("- 格式化: 使用 ruff 或 black")
         lines.append("")
-    if "JavaScript" in " ".join(stack) or "TypeScript" in " ".join(stack):
+    if "Node.js" in " ".join(stack):  # _detect_tech_stack 用 "Node.js" 标识 JS/TS 项目
         lines.append("- 使用 Prettier 格式化，ESLint 检查")
         lines.append("")
 
@@ -938,9 +939,10 @@ def generate_agents_md(path: str | None = None, overwrite: bool = False) -> str:
             f"或使用 check_project(fix=True) 来检查并修复其他规范问题。"
         )
 
+    existed = agents_md.exists()  # 写入前快照：区分"已生成"(新建) vs "已更新"(覆盖)
     try:
         _generate_agents_md_content(root, agents_md)
-        action = "已更新" if agents_md.exists() else "已生成"
+        action = "已更新" if existed else "已生成"
         return f"{action} AGENTS.md: {agents_md}\n\n请检查并根据项目实际情况调整内容。"
     except Exception as e:
         return f"生成 AGENTS.md 失败: {e}"
