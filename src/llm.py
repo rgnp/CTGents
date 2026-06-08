@@ -575,7 +575,8 @@ _COMPACT_THRESHOLD = 0.65
 _COMPACT_KEEP_RATIO = 0.40
 # 工具结果清理门槛：上下文用量低于此比例时不清理，保留工具结果以维持前缀缓存连续。
 # 清理会删改 log 中间消息（断缓存），仅当上下文够大、收益(甩掉臃肿工具结果)>代价时才做。
-_CLEANUP_CONTEXT_THRESHOLD = 0.40
+# 贴近压缩点 0.65：清理是压缩前的轻量步骤，过早触发会每轮断缓存（首要目标是缓存命中）。
+_CLEANUP_CONTEXT_THRESHOLD = 0.60
 # 一轮内工具结果达到此数量才考虑清理（太少不值得断缓存）
 _CLEANUP_MIN_TOOL_RESULTS = 2
 # 话题切换关键词（检测到后追加边界标记）
@@ -592,20 +593,21 @@ def _is_topic_switch(user_input: str) -> bool:
     return any(kw.lower() in text for kw in _TOPIC_SWITCH_KEYWORDS)
 
 
-def _compact_context(ctx, user_input: str):
+def _compact_context(ctx, user_input: str, force: bool = False):
     """In-place compaction. Returns None for CacheContext, list for legacy flat list.
 
     Accepts CacheContext (preferred) or legacy flat list[dict].
+    force=True 跳过 65% 门槛，无条件压缩（供手动 /compact 命令使用）。
     """
     from .cache_context import CacheContext
 
     if isinstance(ctx, CacheContext):
-        _compact_cache_context(ctx, user_input)
+        _compact_cache_context(ctx, user_input, force=force)
     else:
         prefix = [m for m in ctx if m.get("role") == "system"]
         log = [m for m in ctx if m.get("role") != "system"]
         tmp = CacheContext(prefix_msgs=prefix, log_msgs=log)
-        _compact_cache_context(tmp, user_input)
+        _compact_cache_context(tmp, user_input, force=force)
         return tmp.all
 
 
@@ -676,11 +678,12 @@ def _cleanup_tool_results(ctx) -> None:
     logger.info("工具结果清理：%d → 1 条（%d 种工具）", len(tool_indices), len(tool_names))
 
 
-def _compact_cache_context(ctx, user_input: str) -> None:
+def _compact_cache_context(ctx, user_input: str, force: bool = False) -> None:
     """滑窗压缩：超阈值时驱旧消息，替换为摘要。
 
     固定前缀保持不变（保障 DeepSeek 缓存命中）。
     log 区旧消息被摘要替代，释放空间供新对话继续。
+    force=True 时无视 65% 门槛，直接压缩（手动 /compact）。
     """
     from .tools.tokens import count_messages_tokens
 
@@ -693,7 +696,7 @@ def _compact_cache_context(ctx, user_input: str) -> None:
     used = count_messages_tokens(all_msgs)
     limit = MAX_CONTEXT_TOKENS * _COMPACT_THRESHOLD
 
-    if used < limit and not _is_topic_switch(user_input):
+    if not force and used < limit and not _is_topic_switch(user_input):
         return  # 不需要压缩
 
     # ── 话题切换：加标记，不驱旧 ──

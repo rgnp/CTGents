@@ -65,6 +65,25 @@ class TestDispatch:
         # 未知命令不崩溃，message 可能为空
         assert isinstance(r.message, str)
 
+    def test_compact_empty_noop(self):
+        r = cmds.dispatch("/compact", self.ctx, None)
+        assert "无可压缩" in r.message
+        assert r.save is False
+
+    def test_compact_forces_below_threshold(self):
+        """对话远未到 65% 也能手动压缩（force=True 绕过门槛）。"""
+        log = []
+        for i in range(12):
+            log.append({"role": "user", "content": f"问题{i} " + "x" * 50})
+            log.append({"role": "assistant", "content": f"回答{i} " + "y" * 50})
+        ctx = CacheContext(log_msgs=log)
+        before = len(ctx.log)
+        r = cmds.dispatch("/compact", ctx, "s")
+        assert r.save is True
+        assert "已压缩" in r.message
+        assert len(ctx.log) < before
+        assert any("归档" in (m.get("content") or "") for m in ctx.log)
+
     def test_evolve_needs_args(self):
         r = cmds.dispatch("/evolve", self.ctx, None)
         assert "用法" in r.message

@@ -415,6 +415,26 @@ def _cmd_context(r: CmdResult, ctx, _args, _sid) -> None:
     r.message = "\n".join(lines)
 
 
+@builtin("/compact", description="手动压缩上下文：驱逐旧对话换摘要（不必等 65% 自动触发）")
+def _cmd_compact(r: CmdResult, ctx, _args, _sid) -> None:
+    from .llm import MAX_CONTEXT_TOKENS, _compact_context
+    from .tools.tokens import count_messages_tokens
+
+    before = count_messages_tokens(ctx.all)
+    _compact_context(ctx, "", force=True)
+    after = count_messages_tokens(ctx.all)
+
+    if after >= before:
+        r.message = "无可压缩内容（对话太短或已是最简）。"
+        return
+    freed_pct = (before - after) / MAX_CONTEXT_TOKENS * 100
+    r.save = True
+    r.message = (
+        f"已压缩：{before:,} → {after:,} tokens"
+        f"（释放约 {freed_pct:.1f}% 上限空间）"
+    )
+
+
 # ═══════════════════════════════════════════════════════════════
 # Plan Mode — 只读门：模型只能读/分析，不能写
 # ═══════════════════════════════════════════════════════════════
