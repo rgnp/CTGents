@@ -8,37 +8,62 @@ import time
 
 from openai.types.chat import ChatCompletionMessageToolCall
 
-from ._tool_meta import _BUILTIN_MODULES
 from ._tool_meta import PLAN_BLOCKED as _PLAN_BLOCKED
 
 logger = logging.getLogger(__name__)
 
 _TOOL_SOURCES: list[list[dict]] = []
 _EXECUTORS: list = []
+# 故障隔离记录：上次初始化中导入失败、已被跳过的模块 (模块路径, 错误)。
+_FAILED_MODULES: list[tuple[str, str]] = []
+
 
 def _register_builtin(tools: list[dict], executor):
     _TOOL_SOURCES.append(tools)
     _EXECUTORS.append(executor)
 
+
+def get_failed_modules() -> list[tuple[str, str]]:
+    """返回上次注册表初始化中被隔离的工具模块。
+
+    含两类：发现阶段语法错误（ast.parse 失败）+ 导入阶段运行时错误。
+    """
+    from ._tool_meta import get_discovery_skipped
+    return list(_FAILED_MODULES) + get_discovery_skipped()
+
+
 def _init_registry():
-    """初始化注册表（首次启动时调用，热加载时也调用）。"""
+    """初始化注册表（首次启动时调用，热加载时也调用）。
+
+    先重新发现工具模块（捡起新增/删除的文件），再逐个加载。故障隔离：单个工具模块
+    导入失败（如自进化长出的工具有运行时错误）不拖垮整个注册表——坏模块被跳过并记入
+    _FAILED_MODULES，其余工具照常注册，系统保持可用。
+    """
     global _tools_cache
     _tools_cache = None
     _TOOL_SOURCES.clear()
     _EXECUTORS.clear()
-
-    for mod_path, tools_attr, exec_attr in _BUILTIN_MODULES:
-        full = f"src.tools{mod_path}"
-        if full in sys.modules:
-            importlib.reload(sys.modules[full])
-        mod = importlib.import_module(full)
-        tools_list = getattr(mod, tools_attr, [])
-        exec_fn = getattr(mod, exec_attr, None)
-        if tools_list or exec_fn:
-            _register_builtin(tools_list, exec_fn)
+    _FAILED_MODULES.clear()
 
     from . import _tool_meta
+    _tool_meta.refresh_modules()
+    for mod_path, tools_attr, exec_attr in _tool_meta._BUILTIN_MODULES:
+        full = f"src.tools{mod_path}"
+        try:
+            if full in sys.modules:
+                importlib.reload(sys.modules[full])
+            mod = importlib.import_module(full)
+            tools_list = getattr(mod, tools_attr, [])
+            exec_fn = getattr(mod, exec_attr, None)
+            if tools_list or exec_fn:
+                _register_builtin(tools_list, exec_fn)
+        except Exception as e:
+            _FAILED_MODULES.append((full, f"{type(e).__name__}: {e}"))
+            logger.error("工具模块加载失败，已隔离跳过: %s — %s", full, e)
+            sys.modules.pop(full, None)
+
     _tool_meta._refresh_globals()
+
 
 _init_registry()
 
@@ -188,13 +213,14 @@ def reload_tools() -> list[str]:
     loaded: list[str] = []
 
     # 1. 清除模块缓存，强制重新导入
-    for mod_path, _, _ in _BUILTIN_MODULES:
+    from . import _tool_meta
+    for mod_path, _, _ in _tool_meta._BUILTIN_MODULES:
         full = f"src.tools{mod_path}"
         if full in sys.modules:
             del sys.modules[full]
             loaded.append(full)
 
-    # 2. 重新初始化注册表
+    # 2. 重新初始化注册表（会重新发现工具文件，捡起新增的）
     _init_registry()
 
     return loaded

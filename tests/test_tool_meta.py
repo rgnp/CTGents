@@ -81,7 +81,7 @@ class TestMetaStripping:
         """剥离后工具名完整，数量正确。"""
         tools = get_tools()
         names = {t["function"]["name"] for t in tools}
-        assert len(tools) == 40, f"预期 40 个工具，实际 {len(tools)}"
+        assert len(tools) == 41, f"预期 41 个工具，实际 {len(tools)}"
         assert "read_file" in names
         assert "write_file" in names
         assert "self" in names
@@ -110,8 +110,8 @@ class TestHotReloadPreservesMeta:
     def test_refresh_globals_preserves_counts(self):
         """_refresh_globals() 保持派生的 frozenset 大小不变。"""
         _refresh_globals()
-        assert len(TOOL_LABELS) == 41  # 40 + read_file_lines
-        assert len(PARALLEL_SAFE) == 20
+        assert len(TOOL_LABELS) == 42  # 41 + read_file_lines
+        assert len(PARALLEL_SAFE) == 21
         assert len(PLAN_BLOCKED) == 8
         assert len(SKIP_COMPRESS_TOOLS) == 2
         assert len(DEDUP_BLACKLIST) == 12
@@ -122,6 +122,6 @@ class TestHotReloadPreservesMeta:
         reload_tools()
         # 重新获取
         labels, psafe, pblock, skip, dedup = _derive()
-        assert len(labels) == 41
-        assert len(psafe) == 20
+        assert len(labels) == 42
+        assert len(psafe) == 21
         assert len(pblock) == 8
