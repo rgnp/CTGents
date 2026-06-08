@@ -573,6 +573,11 @@ def _compress_tool_result(tool_name: str, result: str) -> str:
 _COMPACT_THRESHOLD = 0.65
 # 保留比例：滑窗压缩后保留最近 N% 的消息
 _COMPACT_KEEP_RATIO = 0.40
+# 工具结果清理门槛：上下文用量低于此比例时不清理，保留工具结果以维持前缀缓存连续。
+# 清理会删改 log 中间消息（断缓存），仅当上下文够大、收益(甩掉臃肿工具结果)>代价时才做。
+_CLEANUP_CONTEXT_THRESHOLD = 0.40
+# 一轮内工具结果达到此数量才考虑清理（太少不值得断缓存）
+_CLEANUP_MIN_TOOL_RESULTS = 2
 # 话题切换关键词（检测到后追加边界标记）
 _TOPIC_SWITCH_KEYWORDS = [
     "换个", "换一", "不谈", "不说", "跳过", "算了",
@@ -610,7 +615,15 @@ def _cleanup_tool_results(ctx) -> None:
     每轮任务（从用户输入到 LLM 最终回复）完成后调用。
     工具结果占 log 膨胀的绝大部分——任务完成后它们不再有用，
     替换为一行摘要可以在下次滑窗压缩前有效控制 log 大小。
+
+    门槛：仅当上下文用量 ≥ _CLEANUP_CONTEXT_THRESHOLD 时才清理。清理会删改 log
+    中间消息、断掉 DeepSeek 前缀缓存连续；短对话保留工具结果维持缓存命中（首要目标），
+    只有上下文真正变大、"甩掉臃肿工具结果"的收益超过"断一次缓存"的代价时才动手。
     """
+    # 门槛 1：上下文还小 → 保留工具结果，维持缓存连续
+    if count_messages_tokens(ctx.all) < MAX_CONTEXT_TOKENS * _CLEANUP_CONTEXT_THRESHOLD:
+        return
+
     log = ctx.log
     # 找到最后一次 user 消息
     last_user = None
@@ -632,8 +645,8 @@ def _cleanup_tool_results(ctx) -> None:
                 tool_names.append(name)
             tool_indices.append(i)
 
-    if len(tool_indices) < 2:
-        return  # 太少，不值得压缩
+    if len(tool_indices) < _CLEANUP_MIN_TOOL_RESULTS:
+        return  # 太少，不值得断缓存压缩
 
     summary = f"⏪ 已归档 {len(tool_indices)} 条工具结果: {', '.join(tool_names[:10])}"
     if len(tool_names) > 10:
