@@ -308,8 +308,6 @@ def _do_read_page(url: str) -> tuple[str, int | None]:
 
     return text, status
 
-    return text
-
 
 def execute(name: str, args: dict) -> str | None:
     if name == "search_web":

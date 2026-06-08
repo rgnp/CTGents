@@ -223,21 +223,6 @@ def scan_papers(queries: str) -> str:
 
     return "\n".join(lines)
 
-    by_area = defaultdict(list)
-    for aid, area_label in sorted(new_papers.items()):
-        by_area[area_label].append(aid)
-
-    for area_label, pid_list in sorted(by_area.items()):
-        lines.append(f"\n## {area_label} ({len(pid_list)})")
-        for pid in pid_list:
-            lines.append(f"  [{'25' if pid.startswith('250') else '26'}] {pid}")
-
-    cache_path = _PROJECT_ROOT / ".scan_cache.json"
-    cache_path.write_text(json.dumps(new_papers, ensure_ascii=False, indent=2), encoding="utf-8")
-    lines.append("\n💾 已缓存 .scan_cache.json")
-
-    return "\n".join(lines)
-
 
 def read_papers(ids: str) -> str:
     try:
