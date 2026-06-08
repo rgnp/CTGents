@@ -435,6 +435,23 @@ def _cmd_compact(r: CmdResult, ctx, _args, _sid) -> None:
     )
 
 
+@builtin("/task", description="查看/清空/归档当前长任务", usage="/task [clear | archive <简述>]")
+def _cmd_task(r: CmdResult, _ctx, args, _sid) -> None:
+    from .tasks import archive_current, clear_current, read_current
+
+    if not args:
+        text = read_current()
+        r.message = text or "当前无长任务（tasks/current.md 为空）。"
+        return
+    sub = args[0].lower()
+    if sub == "clear":
+        r.message = clear_current()
+    elif sub == "archive":
+        r.message = archive_current(" ".join(args[1:]))
+    else:
+        r.message = "用法: /task [clear | archive <简述>]"
+
+
 # ═══════════════════════════════════════════════════════════════
 # Plan Mode — 只读门：模型只能读/分析，不能写
 # ═══════════════════════════════════════════════════════════════

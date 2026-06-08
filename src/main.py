@@ -75,10 +75,14 @@ def _make_agents_message() -> dict:
 
 
 def _append_volatile_context(ctx: CacheContext) -> None:
-    """注入仅上下文——当前只有记忆。RAG 提示已移除（工具定义自带说明）。"""
+    """注入 volatile 上下文：记忆 + 未完成长任务（均缓存安全，挂在 log 尾）。"""
     mem_ctx = _make_memory_context()
     if mem_ctx:
         ctx.log.append(mem_ctx)
+    from .tasks import make_task_context_message
+    task_ctx = make_task_context_message()
+    if task_ctx:
+        ctx.log.append(task_ctx)
 
 
 # ── UI 辅助 ──
