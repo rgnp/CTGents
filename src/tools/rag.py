@@ -558,7 +558,7 @@ def _chunk_python_file(file_path: Path, content: str, language: str) -> list[Cod
             if len(chunk_content) > MAX_CHUNK_CHARS:
                 # 超大块，按子函数再分
                 sub_chunks = _split_large_chunk(
-                    file_path, content, language,
+                    file_path, language,
                     chunk_content, start, name,
                 )
                 chunks.extend(sub_chunks)
@@ -659,7 +659,7 @@ def _chunk_generic_file(file_path: Path, content: str, language: str) -> list[Co
 
 
 def _split_large_chunk(
-    file_path: Path, full_content: str, language: str,
+    file_path: Path, language: str,
     chunk_content: str, offset: int, parent_name: str,
 ) -> list[CodeChunk]:
     """拆分超大块（如巨大的类），按行数切分。"""

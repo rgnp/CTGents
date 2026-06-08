@@ -25,11 +25,6 @@ TOOLS_PROJECT = [
                         "type": "integer",
                         "description": "文件树深度，默认 2，最大 4",
                     },
-                    "include_patterns": {
-                        "type": "array",
-                        "items": {"type": "string"},
-                        "description": "额外文件模式，如 ['*.rs', '*.go']",
-                    },
                 },
                 "required": [],
             },
@@ -369,8 +364,7 @@ def _build_tree(root: Path, depth: int = 2, current_depth: int = 0,
     return lines
 
 
-def scan_project(path: str | None = None, depth: int = 2,
-                 include_patterns: list[str] | None = None) -> str:
+def scan_project(path: str | None = None, depth: int = 2) -> str:
     """扫描项目，返回结构化概览。"""
     root = Path(path).resolve() if path else Path.cwd()
 
@@ -523,6 +517,5 @@ def execute(name: str, args: dict) -> str | None:
         return scan_project(
             path=args.get("path"),
             depth=args.get("depth", 2),
-            include_patterns=args.get("include_patterns"),
         )
     return None
