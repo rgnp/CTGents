@@ -17,6 +17,7 @@
   - 增量更新：只重新索引变更的文件
 """
 
+import fnmatch
 import json
 import math
 import os
@@ -279,8 +280,14 @@ def _should_ignore_dir(name: str) -> bool:
 
 
 def _should_ignore_file(name: str, ext: str) -> bool:
-    if name in _IGNORE_FILES:
-        return True
+    # _IGNORE_FILES 含精确名（package-lock.json…）与 glob（*.min.js…）；
+    # 精确名直接比，glob 用 fnmatch（否则 "name in set" 永不匹配通配符）。
+    for pat in _IGNORE_FILES:
+        if "*" in pat or "?" in pat:
+            if fnmatch.fnmatch(name, pat):
+                return True
+        elif name == pat:
+            return True
     if ext in (".pyc", ".pyo", ".so", ".o", ".class", ".jar", ".war"):
         return True
     # 忽略测试缓存快照
@@ -358,7 +365,7 @@ _CHUNK_PATTERNS: dict[str, tuple[str, str]] = {
         r"(^\s*#.*$|'''[\s\S]*?'''|\"\"\"[\s\S]*?\"\"\")",
     ),
     "javascript": (
-        r"^(function |class |export (default )?(function|class)|const \w+ = (\(|\(?)",
+        r"^(function |class |export (default )?(function|class)|const \w+ = \(?)",
         r"(^\s*//.*$|/\*[\s\S]*?\*/)",
     ),
     "typescript": (
@@ -374,7 +381,7 @@ _CHUNK_PATTERNS: dict[str, tuple[str, str]] = {
         r"(^\s*//.*$|///.*$|/\*[\s\S]*?\*/)",
     ),
     "java": (
-        r"^(public |private |protected )?(static )?(class |interface |enum |void |\w+ )?\w+\(|@\w+)",
+        r"^((public |private |protected )?(static )?(class |interface |enum |void |\w+ )?\w+\(|@\w+)",
         r"(^\s*//.*$|/\*[\s\S]*?\*/)",
     ),
     "cpp": (
@@ -627,8 +634,9 @@ def _chunk_generic_file(file_path: Path, content: str, language: str) -> list[Co
         for start in range(0, len(lines), MAX_CHUNK_LINES):
             end = min(start + MAX_CHUNK_LINES, len(lines))
             chunk_content = "\n".join(lines[start:end])
-            if len(chunk_content.strip()) < MIN_CHUNK_LINES:
-                # 太短的块合并到上一个
+            if len(chunk_content.strip().split("\n")) < MIN_CHUNK_LINES:
+                # 太短的块（行数 < MIN_CHUNK_LINES）合并到上一个
+                # （原先误用 len(字符) 比行数阈值 → 几乎从不触发合并）
                 if chunks:
                     prev = chunks[-1]
                     prev.end_line = end

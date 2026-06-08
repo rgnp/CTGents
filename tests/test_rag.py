@@ -26,6 +26,20 @@ def _assert_index_consistent(idx) -> None:
     assert max_doc_id < len(idx.documents), "倒排表 doc_id 越界 → 索引损坏"
 
 
+def test_all_chunk_patterns_compile():
+    """回归：_CHUNK_PATTERNS 的正则必须全部可编译。
+
+    javascript.fn / java.fn 曾括号不平衡 → 对应语言文件一索引就 re.error 崩溃。
+    """
+    import re
+
+    for _lang, (fn, comment) in rag._CHUNK_PATTERNS.items():
+        re.compile(fn)      # 不抛 re.error 即通过
+        re.compile(comment)
+    re.compile(rag._DEFAULT_FN_PATTERN)
+    re.compile(rag._DEFAULT_COMMENT_PATTERN)
+
+
 def test_index_and_query(tmp_path):
     proj = _make_project(tmp_path)
     (proj / "alpha.py").write_text(
@@ -53,6 +67,17 @@ def test_incremental_update_keeps_index_consistent(tmp_path):
     _assert_index_consistent(idx)
     # 新名查得到（search 不抛异常），旧块已被替换
     assert "func_a_renamed" in rag.query_index("func_a_renamed", path=str(proj))
+
+
+def test_min_js_glob_ignored(tmp_path):
+    """回归：_IGNORE_FILES 的 glob（*.min.js）需真正生效，压缩文件不进索引。"""
+    proj = _make_project(tmp_path)
+    (proj / "app.js").write_text("function realCode() { return 'indexme'; }\n", encoding="utf-8")
+    (proj / "vendor.min.js").write_text("function mininfied(){return 'skipme_token';}\n", encoding="utf-8")
+    rag.index_project(str(proj), force=True)
+    idx = rag._load_index(rag._find_project_root(str(proj)))
+    assert all("vendor.min.js" not in d.file_path for d in idx.documents)
+    assert any("app.js" in d.file_path for d in idx.documents)
 
 
 def test_incremental_handles_deleted_file(tmp_path):
