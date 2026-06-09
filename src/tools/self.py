@@ -48,7 +48,7 @@ SYSTEM_MAP = {
         "name": "LLM 对话系统",
         "files": "src/llm.py",
         "what": "模型调用、流式输出、工具批处理、前缀缓存命中追踪。始终使用 Pro 模型",
-        "why": "DeepSeek 前缀缓存按字节匹配，工具定义序列化一致保障缓存命中；粘性模型避免切换",
+        "why": "DeepSeek 前缀缓存按字节匹配，工具定义序列化一致保障缓存命中；固定单一 Pro 模型，无切换以稳住前缀",
         "tools": [],
         "connections": {
             "config": "读取 API key、模型 ID、超时参数",
@@ -132,15 +132,17 @@ SYSTEM_MAP = {
     },
     "memory": {
         "name": "记忆系统",
-        "files": "src/tools/memory.py + ~/.claude/projects/.../memory/",
+        "files": "src/tools/memory.py + memory/（项目级目录，frontmatter .md + MEMORY.md 索引）",
         "what": (
-            "remember/recall/forget。混合检索——RAG 语义搜索优先，关键词回退。"
-            "时间衰减评分（相似度×0.6+新近度×0.3+重要性×0.1）"
+            "remember/recall/forget + 写信号探测。存储为带 frontmatter 的 .md 文件，"
+            "MEMORY.md 是名称+摘要索引；recall 按子串匹配命中文件、返回片段（非语义检索）；"
+            "remember/forget 后重建索引。detect_signal 机械探测「该记」的时机，写入仍由 agent 自愿"
         ),
-        "why": "agent 需要跨会话记住用户偏好和重要事实。不是存了就完——会衰减、会浮现、会关联",
+        "why": "agent 需要跨会话记住用户偏好和重要事实；索引进前缀随时可见，详情按需 recall",
         "tools": ["remember", "recall", "forget"],
         "connections": {
-            "main": "启动时 get_context() 注入上下文",
+            "main": "启动时 get_context() 注入索引；新 user 消息经 detect_signal 挂写信号",
+            "llm": "压缩时若记忆变脏（is_dirty）则刷新注入的索引",
         },
     },
     "rag": {
@@ -243,7 +245,7 @@ def _architecture_section() -> str:
         "",
         "### 设计哲学",
         "1. 缓存优先 — DeepSeek 前缀缓存按字节匹配，前缀不变则全命中。",
-        "   因此 system prompt 极简（24 token），粘性模型避免切换，工具定义序列化一致。",
+        "   因此前缀保持稳定，固定单一 Pro 模型（无 flash/无切换），工具定义序列化一致。",
         "2. 渐进披露 — 不是所有信息都塞上下文。自省用 self 工具，搜索用 RAG。",
         "3. 测试门禁 — agent 理论上能改任何代码，靠 is_protected() 硬保护 guard.py + 覆盖率门槛控制。",
         "4. 自洽 — 写完代码自动更新 RAG 索引，不需要人工记得。",
@@ -402,12 +404,14 @@ def _render_tree(path: Path, prefix: str, root: str) -> list[str]:
         entries = sorted(path.iterdir(), key=lambda e: (not e.is_dir(), e.name))
     except PermissionError:
         return result
-    for i, entry in enumerate(entries):
-        if entry.name.startswith("__pycache__"):
-            continue
-        if entry.name.startswith(".") and entry.name != ".gitkeep":
-            continue
-        is_last = i == len(entries) - 1
+    # 先过滤再 enumerate：否则被跳过的尾项会让最后一个可见项错配 ├──（应为 └──）
+    visible = [
+        e for e in entries
+        if not e.name.startswith("__pycache__")
+        and not (e.name.startswith(".") and e.name != ".gitkeep")
+    ]
+    for i, entry in enumerate(visible):
+        is_last = i == len(visible) - 1
         connector = "└── " if is_last else "├── "
         result.append(f"{prefix}{connector}{entry.name}")
         if entry.is_dir():
