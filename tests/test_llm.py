@@ -92,6 +92,58 @@ def test_smoke_user_interrupt_returns_clean(monkeypatch):
     assert "已中断" in out
 
 
+def test_smoke_pin_rides_tail(monkeypatch):
+    """一轮内 agent 调 pin → 钉板消息落在 send() 的最末尾(近因高注意力区),不进 prefix。
+
+    走真实派发(execute_tool → session_pins.add_pin) + llm.py 轮内刷新,
+    验证整条接线:pin 工具 → store → 尾部系统消息 → send() 搬到 API 末尾。
+    """
+    import src.session_pins as sp
+    sp.clear_pins()
+    responses = iter([
+        ("", [_tool_call("pin", {"content": "决定:走内存易失版"})]),
+        ("好了", []),
+    ])
+    monkeypatch.setattr(llm, "_invoke_llm", lambda *_a, **_k: next(responses))
+    ctx = _ctx()
+    try:
+        out = llm.run_conversation(
+            ctx, "记住这个决定",
+            on_token=lambda _t: None, on_tool=lambda *_a: None, session_id="",
+        )
+        assert out == "好了"
+        api = ctx.send()
+        assert sp.PINBOARD_MARKER in (api[-1].get("content") or "")  # 钉在最末尾
+        assert api[-1]["role"] == "system"
+        assert "走内存易失版" in api[-1]["content"]
+        # 不在 prefix(prefix 只有测试桩,钉板绝不破坏缓存前缀)
+        assert all(sp.PINBOARD_MARKER not in (m.get("content") or "") for m in ctx.prefix)
+    finally:
+        sp.clear_pins()
+
+
+def test_smoke_unpin_removes_tail_message(monkeypatch):
+    """全部 unpin 后,尾部钉板消息被移除(不残留空钉板)。"""
+    import src.session_pins as sp
+    sp.clear_pins()
+    sp.add_pin("旧决定")
+    responses = iter([
+        ("", [_tool_call("unpin", {"content": "旧决定"})]),
+        ("取下了", []),
+    ])
+    monkeypatch.setattr(llm, "_invoke_llm", lambda *_a, **_k: next(responses))
+    ctx = _ctx()
+    try:
+        llm.run_conversation(
+            ctx, "取下那条",
+            on_token=lambda _t: None, on_tool=lambda *_a: None, session_id="",
+        )
+        api = ctx.send()
+        assert all(sp.PINBOARD_MARKER not in (m.get("content") or "") for m in api)
+    finally:
+        sp.clear_pins()
+
+
 def test_smoke_malformed_tool_args_handled(monkeypatch):
     """工具参数是坏 JSON → 走 _repair_json/error 分支补上 tool 结果，循环不崩。
 

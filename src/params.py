@@ -114,3 +114,16 @@ class RuntimeParams:
 
 
 RUNTIME = RuntimeParams()
+
+
+@dataclass(frozen=True)
+class PinboardParams:
+    """会话钉板旋钮(structural 的标记串/渲染格式留在 session_pins.py)。"""
+
+    # 钉板最多容纳几条(超出踢最旧整条;小到能"一眼扫完",不复制中段衰减)
+    max_items: int = _env_int("CTG_PINBOARD_MAX_ITEMS", 8)
+    # 每条 pin 最多几字(逼原子化;超出写入侧截断,绝不切某条中间)
+    max_chars: int = _env_int("CTG_PINBOARD_MAX_CHARS", 80)
+
+
+PINBOARD = PinboardParams()

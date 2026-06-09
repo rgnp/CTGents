@@ -1028,6 +1028,16 @@ def run_conversation(
                     elif new_ctx and old_idx < 0:
                         ctx.log.append({"role": "system", "content": new_ctx, "_volatile": True})
                     clear_dirty()
+                # 钉板变更后刷新 ctx.log 中的钉板消息（轮内 pin/unpin 即时生效，缓存安全挂尾）
+                from .session_pins import is_pinboard_msg, render_tail
+                pin_idx = next((i for i, m in enumerate(ctx.log) if is_pinboard_msg(m)), -1)
+                pin_content = render_tail()
+                if pin_content and pin_idx >= 0:
+                    ctx.log[pin_idx] = {"role": "system", "content": pin_content, "_volatile": True}
+                elif pin_content and pin_idx < 0:
+                    ctx.log.append({"role": "system", "content": pin_content, "_volatile": True})
+                elif not pin_content and pin_idx >= 0:
+                    ctx.log.pop(pin_idx)  # 全 unpin 后移除空钉板消息
                 # on_progress 不在循环内调用——移到最后只调用一次
             except Exception:
                 # 异常时补上 tool 结果消息，防止下次 API 调用因缺少 tool 消息而 400

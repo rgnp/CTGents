@@ -74,7 +74,7 @@ def _make_agents_message() -> dict:
 
 
 def _append_volatile_context(ctx: CacheContext) -> None:
-    """注入 volatile 上下文：记忆 + 未完成长任务（均缓存安全，挂在 log 尾）。"""
+    """注入 volatile 上下文：记忆 + 未完成长任务 + 会话钉板（均缓存安全，挂在 log 尾）。"""
     mem_ctx = _make_memory_context()
     if mem_ctx:
         ctx.log.append(mem_ctx)
@@ -82,6 +82,10 @@ def _append_volatile_context(ctx: CacheContext) -> None:
     task_ctx = make_task_context_message()
     if task_ctx:
         ctx.log.append(task_ctx)
+    from .session_pins import render_tail
+    pinboard = render_tail()
+    if pinboard:
+        ctx.log.append({"role": "system", "content": pinboard, "_volatile": True})
 
 
 def _inject_memory_signal(ctx: CacheContext, user_text: str) -> None:
@@ -349,8 +353,10 @@ def main() -> None:
                     prefix_msgs = []
                     prefix_msgs.append(_make_agents_message())
                     ctx.rebuild_prefix(prefix_msgs)
-                    if r.save:   # /new: 同时重置 session
+                    if r.save:   # /new: 同时重置 session + 清空会话钉板
                         session_id = None
+                        from .session_pins import clear_pins
+                        clear_pins()
                     _append_volatile_context(ctx)
                 if r.retry:
                     last_user = ctx.last_user_content() or ""
