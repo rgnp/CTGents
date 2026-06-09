@@ -31,6 +31,14 @@ def test_portrait_describes_actual_recall():
     assert "子串" in out and "非语义检索" in out
 
 
+def test_portrait_no_fictional_tracker_reflect():
+    """工具系统不得宣称不存在的 tracker/reflect 子系统（代码从未实现）。"""
+    out = build_self_portrait("capabilities")
+    assert "tracker" not in out, "自画像仍宣称未实现的 tracker"
+    assert "reflect" not in out, "自画像仍宣称未实现的 reflect"
+    assert "失败调用触发反思" not in out
+
+
 # ── _render_tree：先过滤再判 is_last ────────────────────────
 
 def test_render_tree_skipped_last_entry_uses_correct_connector(tmp_path):

@@ -65,8 +65,6 @@ SYSTEM_MAP = {
         "tools": ["self"],
         "connections": {
             "storm": "同轮重复调用被去重，返回缓存结果",
-            "tracker": "每次工具调用记录耗时和成败",
-            "reflect": "失败调用触发反思记录",
             "rag": "写入文件后增量更新代码索引",
         },
     },
