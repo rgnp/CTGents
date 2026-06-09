@@ -109,8 +109,6 @@ class RuntimeParams:
     tool_result_compress_threshold: int = _env_int("CTG_TOOL_RESULT_COMPRESS_THRESHOLD", 1200)
     # token 估算：每字符约多少 token（无 tokenizer 时的粗估）
     token_per_char: float = _env_float("CTG_TOKEN_PER_CHAR", 0.5)
-    # 用户输入超过此字符数即自动进只读 Plan Mode（纯长度启发式）
-    auto_plan_min_chars: int = _env_int("CTG_AUTO_PLAN_MIN_CHARS", 300)
 
 
 RUNTIME = RuntimeParams()

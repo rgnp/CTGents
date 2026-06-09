@@ -24,7 +24,7 @@ from .config import (
     TOOL_LOOP_THRESHOLD,
 )
 from .params import CONTEXT, RUNTIME
-from .tools import execute_tool, get_tools, is_plan_mode, set_plan_mode
+from .tools import execute_tool, get_tools
 
 # 工具显示标签（安全确认 + 终端回显共用）
 from .tools._tool_meta import PARALLEL_SAFE as _PARALLEL_SAFE
@@ -879,18 +879,6 @@ def _find_valid_truncation_point(s: str) -> int:
     return last_valid
 
 
-# ═══════════════════════════════════════════════════════════════
-# 自动 Plan Mode — 长任务默认只读分析（LLM 可在 think 中推翻）
-# ═══════════════════════════════════════════════════════════════
-
-_AUTO_PLAN_MIN_CHARS = RUNTIME.auto_plan_min_chars  # 超长描述意味着任务需要理解现状
-
-
-def _should_auto_plan(user_input: str) -> bool:
-    """纯长度启发式，不做关键词匹配。LLM 若认为不需要可用 think 自行退出。"""
-    return len(user_input) >= _AUTO_PLAN_MIN_CHARS
-
-
 def run_conversation(
     ctx: CacheContext,
     user_input: str,
@@ -928,13 +916,6 @@ def run_conversation(
     # 自动选择模型（始终 Pro）
     backend = auto_select_model(user_input)
     logger.info("路由: '%s...' → %s", user_input[:30], backend.info.name)
-
-    # ── 自动 Plan Mode：复杂任务先只读分析 ──
-    auto_plan = False
-    if _should_auto_plan(user_input) and not is_plan_mode():
-        set_plan_mode(True)
-        auto_plan = True
-        on_token("📋 任务较复杂，先进入只读分析…\n\n")
 
     while True:
         used = count_messages_tokens(ctx.all)
@@ -1057,6 +1038,4 @@ def run_conversation(
             ctx.log.append({"role": "assistant", "content": content or ""})
             if on_progress:
                 on_progress()
-            if auto_plan:
-                set_plan_mode(False)
             return content or ""

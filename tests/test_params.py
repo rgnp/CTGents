@@ -60,16 +60,14 @@ def test_runtime_defaults_and_wiring():
     assert params.RUNTIME.max_exec_timeout == 5
     assert params.RUNTIME.token_per_char == 0.5
     assert params.RUNTIME.tool_result_compress_threshold == 1200
-    assert params.RUNTIME.auto_plan_min_chars == 300
     import src.config as config
     import src.llm as llm
     assert params.RUNTIME.max_retries == config.MAX_RETRIES
     assert params.RUNTIME.max_exec_timeout == config.MAX_EXEC_TIMEOUT
     assert params.RUNTIME.tool_result_budget == config.TOOL_RESULT_BUDGET
     assert params.RUNTIME.token_per_char == config.TOKEN_PER_CHAR
-    # 两个原 llm.py 内联 magic number 现绑定到 params.RUNTIME
+    # 原 llm.py 内联 magic number 现绑定到 params.RUNTIME
     assert params.RUNTIME.tool_result_compress_threshold == llm._TOOL_RESULT_COMPRESS_THRESHOLD
-    assert params.RUNTIME.auto_plan_min_chars == llm._AUTO_PLAN_MIN_CHARS
 
 
 def test_env_override(monkeypatch):
