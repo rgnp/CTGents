@@ -258,3 +258,57 @@ def detect_anomalies(session_id: str, baseline: dict | None = None) -> list[dict
                 })
 
     return anomalies
+
+
+# ═══════════════════════════════════════════════════════════════
+# 会话后反思（分析层入口，由 session.save_session 调用）
+# ═══════════════════════════════════════════════════════════════
+
+_REFLECTION_SUFFIX = "_reflection.json"
+
+
+def reflect_on_session(session_id: str) -> dict | None:
+    """会话结束后自动反思：异常检测 + 基线对比。
+
+    写入 stats/{session_id}_reflection.json。
+    返回反思结果（供程序化使用），无发现则返回 None。
+    """
+    flush()
+    anomalies = detect_anomalies(session_id)
+    if not anomalies:
+        return None
+
+    baseline = get_cross_session_baseline()
+
+    reflection = {
+        "session_id": session_id,
+        "timestamp": datetime.now(UTC).isoformat(),
+        "anomalies": anomalies,
+        "baseline_sessions": baseline.get("sessions_analyzed", 0),
+    }
+
+    try:
+        _STATS_DIR.mkdir(parents=True, exist_ok=True)
+        path = _STATS_DIR / f"{session_id}{_REFLECTION_SUFFIX}"
+        path.write_text(json.dumps(reflection, ensure_ascii=False, indent=2), encoding="utf-8")
+    except OSError:
+        pass
+
+    return reflection
+
+
+def get_latest_reflections(limit: int = 5) -> list[dict]:
+    """获取最近的会话反思，供 agent 在启动时读取。"""
+    if not _STATS_DIR.exists():
+        return []
+    reflections: list[dict] = []
+    for f in sorted(_STATS_DIR.iterdir(), reverse=True):
+        if f.name.endswith(_REFLECTION_SUFFIX):
+            try:
+                data = json.loads(f.read_text(encoding="utf-8"))
+                reflections.append(data)
+            except (OSError, json.JSONDecodeError):
+                pass
+            if len(reflections) >= limit:
+                break
+    return reflections

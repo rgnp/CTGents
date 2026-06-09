@@ -34,19 +34,41 @@ def has_unfinished() -> bool:
     text = read_current()
     return bool(text) and any(marker in text for marker in _UNFINISHED_MARKERS)
 
-
 def make_task_context_message() -> dict | None:
-    """有未完成长任务时，生成 volatile 系统消息提醒 agent 续做（否则 None）。"""
-    if not has_unfinished():
-        return None
-    content = (
-        "⚠️ 你有一个未完成的长任务（tasks/current.md），上次没做完。"
-        "请从未完成步骤（[ ] / [o]）的断点继续，不要从头重来；"
-        "在步骤旁记录细进度（如 47/250），完成后按 AGENTS.md 清空并归档。\n\n"
-        + read_current()
-    )
-    return {"role": "system", "content": content, "_volatile": True}
+    """生成 volatile 上下文消息：未完成长任务 + 被动进化反思（如有）。"""
+    parts: list[str] = []
 
+    # ── 未完成长任务 ──
+    if has_unfinished():
+        parts.append(
+            "⚠️ 你有一个未完成的长任务（tasks/current.md），上次没做完。"
+            "请从未完成步骤（[ ] / [o]）的断点继续，不要从头重来；"
+            "在步骤旁记录细进度（如 47/250），完成后按 AGENTS.md 清空并归档。\n\n"
+            + read_current()
+        )
+
+    # ── 被动进化反思 ──
+    from .tracker import get_latest_reflections as _get_reflections
+    reflections = _get_reflections(limit=3)  # noqa: F811
+    if reflections:
+        ref_lines = ["🔍 被动进化发现了以下值得关注的问题："]
+        for i, ref in enumerate(reflections, 1):
+            for a in ref.get("anomalies", []):
+                icon = {"crit": "🔴", "warn": "🟡"}.get(a.get("severity", ""), "⚪")
+                ref_lines.append(
+                    f"  {icon} [{a.get('type', '?')}] {a.get('detail', '')}"
+                )
+            if i >= 2:
+                break
+        ref_lines.append(
+            "如果需要修复，可以说 '处理这些' 或 '看看第一个'。"
+            "我会用 /evolve 机制分析、修改、测试、提交。"
+        )
+        parts.append("\n".join(ref_lines))
+
+    if not parts:
+        return None
+    return {"role": "system", "content": "\n\n".join(parts), "_volatile": True}
 
 def _derive_slug(text: str) -> str:
     """从首个 Markdown 标题派生归档用 slug；取不到用 fallback。"""

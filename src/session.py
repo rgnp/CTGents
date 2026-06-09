@@ -83,3 +83,6 @@ def load_session(session_id: str) -> list[dict]:
     """加载会话消息。"""
     with open(_messages_path(session_id), encoding="utf-8") as f:
         return json.load(f)
+    # ── 被动进化：会话保存后自动反思 ──
+    from .tracker import reflect_on_session as _reflect
+    _reflect(session_id)
