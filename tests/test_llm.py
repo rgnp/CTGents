@@ -73,3 +73,45 @@ def test_smoke_tool_call_then_final(monkeypatch):
     assert any(
         m.get("role") == "tool" and m.get("_tool_name") == "think" for m in ctx.log
     )
+
+
+def test_smoke_user_interrupt_returns_clean(monkeypatch):
+    """LLM 调用中途用户中断（UserInterruptError）→ 清理并返回中断标记，不外抛。
+
+    覆盖 956-958 的中断分支（含 clear_interrupt 接线）——进化改动 LLM 调用
+    封装时容易碰坏这条。
+    """
+    def _boom(*_a, **_k):
+        raise llm.UserInterruptError("Esc")
+
+    monkeypatch.setattr(llm, "_invoke_llm", _boom)
+    out = llm.run_conversation(
+        _ctx(), "你好",
+        on_token=lambda _t: None, on_tool=lambda *_a: None, session_id="",
+    )
+    assert "已中断" in out
+
+
+def test_smoke_malformed_tool_args_handled(monkeypatch):
+    """工具参数是坏 JSON → 走 _repair_json/error 分支补上 tool 结果，循环不崩。
+
+    覆盖 972-988 的 JSON 修复/兜底接线。坏参数的工具调用也必须补一条 tool
+    结果消息，否则下一轮 API 因缺 tool 消息 400。
+    """
+    responses = iter([
+        ("", [{"id": "call_x", "type": "function",
+               "function": {"name": "think", "arguments": "{坏的"}}]),
+        ("收尾", []),
+    ])
+    monkeypatch.setattr(llm, "_invoke_llm", lambda *_a, **_k: next(responses))
+    ctx = _ctx()
+    out = llm.run_conversation(
+        ctx, "做事",
+        on_token=lambda _t: None, on_tool=lambda *_a: None, session_id="",
+    )
+    assert out == "收尾"
+    # 坏参数的工具调用也补上了 tool 结果消息（否则下一轮 API 会 400）
+    assert any(
+        m.get("role") == "tool" and m.get("tool_call_id") == "call_x"
+        for m in ctx.log
+    )
