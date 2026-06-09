@@ -134,6 +134,32 @@ TOOLS_RESEARCH = [
 # ═══════════════════════════════════════════════════════════
 
 
+def _arxiv_year(aid: str) -> str | None:
+    """Arxiv id 形如 YYMM.NNNNN，前两位是年份。返回 '2025'/'2026'，否则 None。
+
+    注意：不能用 startswith('250')——那只匹配月份 01-09，会漏掉 10/11/12 月
+    （2510/2511/2512 这类 id），年份判定必须只看前两位。
+    """
+    if aid.startswith("25"):
+        return "2025"
+    if aid.startswith("26"):
+        return "2026"
+    return None
+
+
+def _iter_query_pairs(query_list: list) -> list[tuple]:
+    """从 [[领域, 搜索词], ...] 安全取出 (领域, 搜索词)，跳过结构不符的条目。
+
+    LLM 可能给出畸形条目（元素数不对/不是列表），直接解包会抛 ValueError
+    令整个 scan 崩溃；这里逐条校验、跳过坏条目，best-effort 处理其余。
+    """
+    pairs: list[tuple] = []
+    for entry in query_list:
+        if isinstance(entry, (list, tuple)) and len(entry) == 2:
+            pairs.append((entry[0], entry[1]))
+    return pairs
+
+
 def _load_known_ids() -> set[str]:
     known: set[str] = set()
     kb_dir = _KNOWLEDGE_AD2026 / "topics"
@@ -181,7 +207,7 @@ def scan_papers(queries: str) -> str:
     known = _load_known_ids()
     found: dict[str, str] = {}
 
-    for area, raw_query in query_list:
+    for area, raw_query in _iter_query_pairs(query_list):
         for year in ("2025", "2026"):
             q = f"{raw_query} {year} arxiv"
             try:
@@ -191,7 +217,7 @@ def scan_papers(queries: str) -> str:
                 text = json.dumps(result.get("results", []))
                 ids = re.findall(r'arxiv\.org/(?:abs|html)/(\d{4}\.\d{4,5})', text)
                 for aid in ids:
-                    if aid.startswith(("250", "260")) and aid not in found:
+                    if _arxiv_year(aid) and aid not in found:
                         found[aid] = area
             except Exception:
                 pass
@@ -199,8 +225,8 @@ def scan_papers(queries: str) -> str:
 
     new_papers = {k: v for k, v in found.items() if k not in known}
     overlap = {k: v for k, v in found.items() if k in known}
-    y25 = sum(1 for k in new_papers if k.startswith("250"))
-    y26 = sum(1 for k in new_papers if k.startswith("260"))
+    y25 = sum(1 for k in new_papers if _arxiv_year(k) == "2025")
+    y26 = sum(1 for k in new_papers if _arxiv_year(k) == "2026")
 
     lines = [
         f"搜索 {len(query_list)} 领域 → {len(found)} 篇",
@@ -215,7 +241,7 @@ def scan_papers(queries: str) -> str:
     for area_label, pid_list in sorted(by_area.items()):
         lines.append(f"\n## {area_label} ({len(pid_list)})")
         for pid in pid_list:
-            lines.append(f"  [{'25' if pid.startswith('250') else '26'}] {pid}")
+            lines.append(f"  [{(_arxiv_year(pid) or '????')[2:]}] {pid}")
 
     cache_path = _PROJECT_ROOT / ".scan_cache.json"
     cache_path.write_text(json.dumps(new_papers, ensure_ascii=False, indent=2), encoding="utf-8")
