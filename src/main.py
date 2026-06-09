@@ -104,6 +104,22 @@ def _inject_memory_signal(ctx: CacheContext, user_text: str) -> None:
         )
 
 
+def _inject_completion_audit(ctx: CacheContext) -> None:
+    """收尾取证自检：剥上一轮的审计提示，若日志里留下"改动晚于绿测"则挂尾提示。
+
+    治"谎报完成"：事实（最近改动 vs 最近绿测）机械供给，"算不算完成"留给 agent。
+    走全 log 扫描 → 提示持续到补跑为止；volatile 系统块挂尾，只重算尾、不碰前缀缓存。
+    流式下首句已落屏，本提示在下一轮被 agent 看到 → 迟一轮纠正（已与用户交底）。
+    """
+    ctx.log[:] = [m for m in ctx.log if not m.get("_completion_audit")]
+    from .completion_audit import audit_completion
+    nudge = audit_completion(ctx.log)
+    if nudge:
+        ctx.log.append(
+            {"role": "system", "content": nudge, "_volatile": True, "_completion_audit": True}
+        )
+
+
 # ── UI 辅助 ──
 
 def _print_sessions(sessions: list[str]) -> None:
@@ -401,6 +417,8 @@ def main() -> None:
                 finally:
                     _stop_esc_listener()
                 session_id = sid[0]
+                # 收尾取证自检：本轮若留下未验证的代码改动，挂尾提示（下一轮 agent 见）
+                _inject_completion_audit(ctx)
                 if has_output():
                     print()
                 if is_plan_mode():
