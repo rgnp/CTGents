@@ -89,7 +89,11 @@ TOOLS_RESEARCH = [
         "type": "function",
         "function": {
             "name": "scan_papers",
-            "description": "批量搜索。输入JSON数组[[领域,搜索词],...]自动搜索2025+2026，提取arxiv ID去重，缓存结果。",
+            "description": (
+                "找最新论文的首选：走 arxiv 官方 API 按提交日期倒序检索，直接命中 arxiv 最新"
+                "（找论文别用 search_web——网页搜索有索引滞后且偏旧）。"
+                "输入JSON数组[[领域,搜索词],...]，过滤2025/2026、去重、缓存。"
+            ),
             "parameters": {
                 "type": "object",
                 "properties": {
