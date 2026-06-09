@@ -5,8 +5,9 @@
 → 很可能凭印象编的。编造的其余部分（API/库行为、概念过度自信）是判断题，
 留三态标注纪律（AGENTS.md），不在此机械化——同 recall 硬规则被否决的判别器。
 
-与 completion_audit 的区别：耦合**松**——靠"被引文件名出现在工具活动文本里"
-判 grounded，不依赖某个精确输出 marker，故格式微调不破它，无需 C16 契约测试。
+与 completion_audit 的区别：耦合**松**——靠"被引文件名出现在 agent 可见上下文里"
+(工具读取 + 预读 + 用户粘贴，见 _context_text)判 grounded，不依赖某个精确输出
+marker，故格式微调不破它，无需 C16 契约测试。
 保守：basename 子串命中即算 grounded（宁漏判不误报；nudge 最怕狼来了）。
 """
 from __future__ import annotations
@@ -42,15 +43,22 @@ def _extract_citations(text: str) -> set[str]:
     return out
 
 
-def _tool_activity_text(log: list[dict]) -> str:
-    """本会话所有工具活动文本：tool_calls 参数 + tool 结果内容（grounding haystack）。"""
+def _context_text(log: list[dict]) -> str:
+    """取证 haystack —— agent 能看到的上下文文本：tool_calls 参数 + tool 结果
+    + **user 消息内容**。
+
+    grounded = 被引文件在 agent 可见的上下文里——不管来自工具读取、还是 main 的
+    preread / 用户直接粘贴（预读把文件内容拼进 user 消息、不入 tool 消息，故必须收
+    user 内容，否则预读过的文件会被误报"没读过"）。不收 assistant 自己的话——
+    否则它能用自己的叙述给自己的引用背书。
+    """
     parts: list[str] = []
     for msg in log:
         for tc in msg.get("tool_calls") or []:
             args = tc.get("function", {}).get("arguments")
             if args:
                 parts.append(args)
-        if msg.get("role") == "tool":
+        if msg.get("role") in ("tool", "user"):
             parts.append(msg.get("content") or "")
     return "\n".join(parts)
 
@@ -60,7 +68,7 @@ def audit_citations(log: list[dict]) -> str | None:
     cites = _extract_citations(_last_assistant_text(log))
     if not cites:
         return None
-    haystack = _tool_activity_text(log)
+    haystack = _context_text(log)
     ungrounded = sorted(c for c in cites if c not in haystack)
     if not ungrounded:
         return None

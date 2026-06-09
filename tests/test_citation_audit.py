@@ -51,10 +51,24 @@ def test_grounded_via_read_file():
 
 
 def test_grounded_via_preread():
-    """用户提到的文件被预读 → tool 结果含路径 → grounded。"""
+    """预读把文件内容拼进 user 消息(main 的真实形态，非 tool 消息)→ grounded。
+
+    回归:曾把 preread 误建模成 tool 消息，导致 grounding 漏扫 user 消息 →
+    预读过的文件被误报"没读过"。真实路径里预读内容在 user 消息里。
+    """
     log = [
-        _tool_result("p1", "read_file", "[预读] D:\\project\\src\\config.py\n...内容..."),
+        {"role": "user", "content": "[以下文件已预读]\n\n[预读] D:\\project\\src\\config.py\n"
+                                    "x = 1\n\n── 用户问题 ──\n修一下 config.py 的 bug"},
         _reply("配置在 config.py:12。"),
+    ]
+    assert audit_citations(log) is None
+
+
+def test_grounded_via_user_message():
+    """用户直接粘贴/提到的文件名出现在 user 消息里 → grounded（agent 看得见）。"""
+    log = [
+        {"role": "user", "content": "这是 foo.py 的内容：\ndef f(): ..."},
+        _reply("入口是 foo.py:1。"),
     ]
     assert audit_citations(log) is None
 
