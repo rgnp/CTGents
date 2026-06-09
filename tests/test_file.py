@@ -10,8 +10,8 @@ from src.tools.file import (
     _backup,
     _read_cached,
     _resolve,
-    _validate_imports,
     _validate_py,
+    edit_file_lines,
     read_file,
     write_file,
 )
@@ -83,36 +83,6 @@ class TestValidatePy:
         assert err is None
 
 
-class TestValidateImports:
-    """Import 校验测试。"""
-
-    def test_valid_imports_pass(self, tmp_path):
-        f = tmp_path / "valid_imports.py"
-        f.write_text("import os\nfrom pathlib import Path\n", encoding="utf-8")
-        err = _validate_imports(f, None)
-        assert err is None
-
-    def test_missing_import_rollback(self, tmp_path):
-        # _validate_imports 需要文件路径含 "src"
-        src_dir = tmp_path / "src"
-        src_dir.mkdir()
-        f = src_dir / "bad_import.py"
-        f.write_text("x = 1\n", encoding="utf-8")
-        backup = _backup(f)
-        f.write_text("import nonexistent_module_xyz_123\nx = 1\n", encoding="utf-8")
-        err = _validate_imports(f, backup)
-        assert err is not None
-        assert "回滚" in err or "不存在" in err
-        # 应回滚
-        assert f.read_text(encoding="utf-8") == "x = 1\n"
-
-    def test_std_lib_imports_pass(self, tmp_path):
-        f = tmp_path / "stdlib.py"
-        f.write_text("import json, os, sys, re, math, time\n", encoding="utf-8")
-        err = _validate_imports(f, None)
-        assert err is None
-
-
 class TestReadWrite:
     """读写测试。"""
 
@@ -147,12 +117,53 @@ class TestReadWrite:
         assert "已写入" in result
         assert f.exists()
 
-    def test_write_syntax_error_rejected(self, tmp_path, monkeypatch):
+    def test_write_new_syntax_error_rejected_and_removed(self, tmp_path, monkeypatch):
+        """新建 .py 有语法错 → 拒绝并删除（无备份可回滚）。"""
         monkeypatch.chdir(tmp_path)
         f = tmp_path / "broken.py"
         result = write_file(str(f), "def broken(:\n    pass\n")
-        # write_file 不再校验语法，直接写入成功
-        assert "已写入" in result
+        assert "已写入" not in result
+        assert "语法" in result or "SyntaxError" in result
+        assert not f.exists(), "语法错误的新文件应被删除"
+
+    def test_overwrite_syntax_error_rolls_back(self, tmp_path, monkeypatch):
+        """覆写已有 .py 引入语法错 → 还原原内容。"""
+        monkeypatch.chdir(tmp_path)
+        f = tmp_path / "ok.py"
+        write_file(str(f), "good = 1\n")
+        result = write_file(str(f), "def broken(:\n")
+        assert "已写入" not in result
+        assert f.read_text(encoding="utf-8") == "good = 1\n", "应回滚到原内容"
+
+
+class TestEditFileLines:
+    """行级编辑：成功路径 + 语法错自动回滚。"""
+
+    def test_edit_replace_success(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        f = tmp_path / "m.py"
+        f.write_text("a = 1\nb = 2\nc = 3\n", encoding="utf-8")
+        result = edit_file_lines(str(f), "replace", 2, 2, "b = 20")
+        assert "已编辑" in result
+        assert f.read_text(encoding="utf-8") == "a = 1\nb = 20\nc = 3\n"
+
+    def test_edit_insert_success(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        f = tmp_path / "m.py"
+        f.write_text("a = 1\nc = 3\n", encoding="utf-8")
+        edit_file_lines(str(f), "insert", 1, None, "b = 2")
+        assert f.read_text(encoding="utf-8") == "a = 1\nb = 2\nc = 3\n"
+
+    def test_edit_syntax_error_rolls_back(self, tmp_path, monkeypatch):
+        """编辑引入语法错 → 自动回滚，文件保持原样。"""
+        monkeypatch.chdir(tmp_path)
+        f = tmp_path / "m.py"
+        original = "def f():\n    return 1\n"
+        f.write_text(original, encoding="utf-8")
+        result = edit_file_lines(str(f), "replace", 1, 1, "def f(:")
+        assert "已编辑" not in result
+        assert "语法" in result or "SyntaxError" in result
+        assert f.read_text(encoding="utf-8") == original, "应回滚到编辑前"
 
 
 class TestResolve:
@@ -204,7 +215,7 @@ if __name__ == "__main__":
     import inspect
 
     tests = []
-    for cls in [TestBackup, TestValidatePy, TestValidateImports,
+    for cls in [TestBackup, TestValidatePy, TestEditFileLines,
                 TestReadWrite, TestResolve, TestReadCached]:
         instance = cls()
         for name in dir(instance):

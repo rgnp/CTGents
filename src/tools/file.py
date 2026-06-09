@@ -388,65 +388,6 @@ def _validate_py(filepath: Path, backup_path: Path | None) -> str | None:
         )
 
 
-def _validate_imports(filepath: Path, backup_path: Path | None) -> str | None:
-    """Import 校验：语法正确不代表 import 不报错。
-
-    用子进程隔离执行 import——捕获 ImportError/ModuleNotFoundError。
-    这类错误在用户重启时会直接崩溃，必须在编辑阶段拦截。
-    """
-    import os
-    import subprocess
-
-    if filepath.suffix != ".py":
-        return None
-
-    # 从文件路径推断 Python 模块名
-    # D:/project/agent/src/tools/git.py      → src.tools.git
-    # D:/project/agent/src/tools/__init__.py → src.tools
-    # D:/project/agent/src/llm.py            → src.llm
-    parts = list(filepath.parts)
-    try:
-        src_idx = parts.index("src")
-    except ValueError:
-        return None  # 不在 src 包内，跳过
-
-    module_parts = list(parts[src_idx:])
-    module_parts[-1] = module_parts[-1].replace(".py", "")
-    if module_parts[-1] == "__init__":
-        module_parts.pop()
-    module_name = ".".join(module_parts)
-
-    # 项目根是 src 的父目录
-    project_root = Path(*parts[:src_idx])
-
-    try:
-        r = subprocess.run(
-            ["py", "-c", f"import {module_name}"],
-            capture_output=True, encoding="utf-8", errors="replace", timeout=15,
-            cwd=str(project_root),
-            env={**os.environ, "PYTHONDONTWRITEBYTECODE": "1"},
-        )
-        if r.returncode != 0:
-            stderr = r.stderr.strip()
-            # 只拦截真正的 import 错误，不拦截运行时初始化错误（如缺失 .env）
-            if "ImportError" in stderr or "ModuleNotFoundError" in stderr:
-                if backup_path and backup_path.exists():
-                    shutil.copy2(backup_path, filepath)
-                else:
-                    # 新文件无备份，直接删除
-                    with contextlib.suppress(OSError):
-                        filepath.unlink(missing_ok=True)
-                return (
-                    f"导入校验失败——语法正确但 import 会崩溃，已自动回滚！\n"
-                    f"  模块: {module_name}\n"
-                    f"  {stderr[:600]}\n"
-                    f"  请修正后重试。"
-                )
-        return None
-    except Exception:
-        return None  # 子进程异常不阻塞编辑
-
-
 def _invalidate_pyc(filepath: Path) -> None:
     """删除 .py 文件对应的 __pycache__ 中的字节码缓存。
 
@@ -547,7 +488,10 @@ def read_file_lines(path: str, start_line: int | None = None, end_line: int | No
 
 
 def write_file(path: str, content: str) -> str:
-    """创建或覆写文件。写入前自动备份，.py 文件自动语法校验。"""
+    """创建或覆写文件。已存在则先备份；.py 写后做语法校验，失败自动回滚。
+
+    回滚：覆写已有文件 → 还原备份；新建文件 → 删除（无备份可还原）。
+    """
     filepath = _resolve(path)
     _ensure_in_workspace(filepath)
     from ..guard import is_protected
@@ -557,12 +501,17 @@ def write_file(path: str, content: str) -> str:
     allowed, reason = can_modify(str(filepath))
     if not allowed:
         return f"⛔ 覆盖率门禁未通过: {reason}"
+    backup = _backup(filepath) if filepath.exists() else None
     try:
         filepath.parent.mkdir(parents=True, exist_ok=True)
         filepath.write_text(content, encoding="utf-8")
-        return f"已写入: {filepath}（{len(content)} 字符）"
     except OSError as e:
         return f"写入失败: {e}"
+    err = _validate_py(filepath, backup)
+    if err:
+        return err
+    _invalidate_pyc(filepath)
+    return f"已写入: {filepath}（{len(content)} 字符）"
 
 
 # ── 行级编辑（核心）──
@@ -616,8 +565,13 @@ def edit_file_lines(path: str, action: str, start_line: int,
     else:
         return f"未知操作: {action}（可选: replace/delete/insert）"
 
-    # ── 写回 ──
+    # ── 写回（先备份，.py 写后语法校验，失败自动回滚）──
+    backup = _backup(filepath)  # 文件必存在（已 _assert_file）
     filepath.write_text("\n".join(result), encoding="utf-8")
+    err = _validate_py(filepath, backup)
+    if err:
+        return err
+    _invalidate_pyc(filepath)
 
     old_count = (e - s + 1) if action in ("replace", "delete") else 0
     new_count = len(new_content_lines)
