@@ -127,3 +127,22 @@ class PinboardParams:
 
 
 PINBOARD = PinboardParams()
+
+
+@dataclass(frozen=True)
+class MemoryParams:
+    """记忆 recall 排序检索旋钮(结构性的正则/片段长度留在 memory.py)。"""
+
+    # 排序后最多返回几条
+    recall_top_k: int = _env_int("CTG_MEMORY_RECALL_TOP_K", 5)
+    # 低于此分的记忆不返回(默认 0 = 只要命中任一 token 就算)
+    recall_min_score: float = _env_float("CTG_MEMORY_RECALL_MIN_SCORE", 0.0)
+    # 命中字段权重:name > description > body
+    weight_name: float = _env_float("CTG_MEMORY_WEIGHT_NAME", 3.0)
+    weight_desc: float = _env_float("CTG_MEMORY_WEIGHT_DESC", 2.0)
+    weight_body: float = _env_float("CTG_MEMORY_WEIGHT_BODY", 1.0)
+    # 完整查询作为子串命中的强力加成(保留精确短语优先)
+    exact_bonus: float = _env_float("CTG_MEMORY_EXACT_BONUS", 5.0)
+
+
+MEMORY = MemoryParams()

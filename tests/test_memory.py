@@ -81,3 +81,54 @@ def test_dashes_in_content_keep_index_desc(mem):
     })
     ctx = mem.get_context()
     assert "边界笔记" in ctx, f"索引 desc 因 frontmatter 错位丢失: {ctx!r}"
+
+
+# ── recall 排序检索 ──────────────────────────────────────────
+
+def test_tokenize_ascii_and_cjk_bigram():
+    toks = memory._tokenize("AD科研 paper")
+    assert "ad" in toks and "paper" in toks  # ASCII alnum
+    assert "科研" in toks                      # 2 字 CJK → 1 bigram
+
+
+def test_recall_matches_reordered_terms(mem):
+    """换序也命中:存'分析论文…',搜'论文分析'(bigram 重叠,旧子串匹配做不到)。"""
+    mem.execute("remember", {"name": "p", "content": "如何分析论文的方法论", "type": "knowledge"})
+    out = mem.execute("recall", {"query": "论文分析"})
+    assert "p" in out
+
+
+def test_recall_ranks_name_match_above_body(mem):
+    """字段 name 命中权重 > body:词在 name 的记忆排在仅 body 命中的之前。"""
+    mem.execute("remember", {"name": "driving-research", "content": "无关内容", "type": "user"})
+    mem.execute("remember", {"name": "misc", "content": "driving 只在正文里", "type": "user"})
+    out = mem.execute("recall", {"query": "driving"})
+    assert out.index("driving-research") < out.index("misc")
+
+
+def test_recall_top_k_caps_shown(mem, monkeypatch):
+    """top-K 只显示前 K 条,但总数仍如实报全。"""
+    from dataclasses import replace
+    monkeypatch.setattr(memory, "_PARAMS", replace(memory._PARAMS, recall_top_k=2))
+    for i in range(4):
+        mem.execute("remember", {"name": f"m{i}", "content": "common_tok 内容", "type": "user"})
+    out = mem.execute("recall", {"query": "common_tok"})
+    assert sum(1 for i in range(4) if f"m{i}" in out) == 2  # 只显示 2 条名字
+    assert "找到 4 条" in out                                # 总数报全
+
+
+def test_recall_exact_phrase_still_found(mem):
+    """精确子串短语仍能命中(exact_bonus 保留旧语义)。"""
+    mem.execute("remember", {"name": "phrase", "content": "一句完整的话 abc_def_ghi", "type": "user"})
+    assert "phrase" in mem.execute("recall", {"query": "abc_def_ghi"})
+
+
+def test_recall_ignores_frontmatter_structure_words(mem):
+    """打分只看语义字段:frontmatter 结构词(metadata/type/'ad'∈metadata)不得命中。
+
+    回归:旧实现对整个文件(含 frontmatter)做 exact 子串 → 'metadata'/'type'/'ad'
+    误命中所有记忆。'metadata' 每个文件都有,若误匹配则永远返回全部。
+    """
+    mem.execute("remember", {"name": "zzz", "content": "纯净中文内容", "type": "knowledge"})
+    assert "未找到" in mem.execute("recall", {"query": "metadata"})
+    assert "未找到" in mem.execute("recall", {"query": "ad"})  # 'ad' ∈ 'metadata' 不算

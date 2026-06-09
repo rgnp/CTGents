@@ -5,6 +5,13 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from ..config import MEMORY_DIR
+from ..params import MEMORY as _PARAMS
+
+# recall 片段长度(结构性常量,留本模块)。
+_SNIPPET_CHARS = 200
+# 分词:ASCII alnum 词 + 中文连续块(下方切 bigram)。
+_TOKEN_ASCII = re.compile(r"[a-z0-9]+")
+_TOKEN_CJK = re.compile(r"[一-鿿]+")
 
 # ── 记忆写入信号（机械探测"该考虑记"的时刻；写入仍由 agent 判断） ──
 # 固定触发的错在于把"探测"和"写入"捆死。这里只机械探测语义事件，
@@ -240,11 +247,49 @@ def _remember(name: str, content: str, mem_type: str) -> str:
     return f"已记住: {name}"
 
 
+def _tokenize(text: str) -> set[str]:
+    """分词:ASCII alnum 词 + 中文相邻 bigram(单字 CJK 退化为单字)。
+
+    bigram 让"分析论文"与"论文分析"互相命中(换序/换说法),无需分词词典。
+    """
+    text = text.lower()
+    tokens: set[str] = set(_TOKEN_ASCII.findall(text))
+    for run in _TOKEN_CJK.findall(text):
+        if len(run) == 1:
+            tokens.add(run)
+        else:
+            tokens.update(run[i:i + 2] for i in range(len(run) - 1))
+    return tokens
+
+
+def _score_memory(q_tokens: set[str], q_lower: str,
+                  name: str, desc: str, body: str) -> float:
+    """给一条记忆打分:每个 token 取命中的最高权重字段累加 + 精确子串加成。
+
+    只对语义字段(name/description/body)打分,绝不碰 frontmatter 结构词
+    (metadata/type/updated…),否则 'ad' 会误命中 'met·ad·ata'、'type' 命中所有记忆。
+    """
+    fields = ((name.lower(), _PARAMS.weight_name),
+              (desc.lower(), _PARAMS.weight_desc),
+              (body.lower(), _PARAMS.weight_body))
+    score = 0.0
+    for tok in q_tokens:
+        best = 0.0
+        for field_text, weight in fields:
+            if weight > best and tok in field_text:
+                best = weight
+        score += best
+    if q_lower and any(q_lower in field_text for field_text, _w in fields):
+        score += _PARAMS.exact_bonus
+    return score
+
+
 def _recall(query: str) -> str:
-    """搜索记忆，返回匹配结果。"""
+    """搜索记忆:分词加权打分 → 相关度排序 → top-K(换说法也能命中)。"""
     d = _dir()
-    results: list[tuple[str, str, str]] = []  # (name, type, snippet)
-    q = query.lower()
+    q_lower = query.lower().strip()
+    q_tokens = _tokenize(query)
+    scored: list[tuple[float, str, str, str, str]] = []  # (score, updated, name, type, snippet)
 
     for f in sorted(d.glob("*.md")):
         if f.name == "MEMORY.md":
@@ -253,19 +298,21 @@ def _recall(query: str) -> str:
             full = f.read_text(encoding="utf-8")
         except Exception:
             continue
-        if q not in full.lower():
-            continue
-
         meta, body = _split_frontmatter(full)
-        mem_type = meta.get("type", "")
-        snippet = body[:200].replace("\n", " ")
-        results.append((f.stem, mem_type, snippet))
+        s = _score_memory(q_tokens, q_lower, meta.get("name", f.stem),
+                          meta.get("description", ""), body)
+        if s <= _PARAMS.recall_min_score:
+            continue
+        snippet = body[:_SNIPPET_CHARS].replace("\n", " ")
+        scored.append((s, meta.get("updated", ""), f.stem, meta.get("type", ""), snippet))
 
-    if not results:
+    if not scored:
         return f"未找到与「{query}」相关的记忆。"
 
-    lines = [f"找到 {len(results)} 条相关记忆：\n"]
-    for name, mtype, snippet in results:
+    scored.sort(key=lambda r: (r[0], r[1]), reverse=True)  # 分数高优先,平手按时间近因
+    top = scored[:_PARAMS.recall_top_k]
+    lines = [f"找到 {len(scored)} 条相关记忆（按相关度，显示前 {len(top)}）：\n"]
+    for _s, _u, name, mtype, snippet in top:
         tag = f"[{mtype}]" if mtype else ""
         lines.append(f"  {name} {tag}")
         lines.append(f"    {snippet}")
