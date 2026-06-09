@@ -705,12 +705,12 @@ def _tracked_execute_tool(tc):
     try:
         result = execute_tool(tc)
         elapsed_ms = (time.perf_counter() - t0) * 1000
-        from ..tracker import record_tool_call
+        from .tracker import record_tool_call
         record_tool_call(tc.function.name, elapsed_ms, success=True)
         return result
     except Exception as e:
         elapsed_ms = (time.perf_counter() - t0) * 1000
-        from ..tracker import record_tool_call
+        from .tracker import record_tool_call
         record_tool_call(tc.function.name, elapsed_ms, success=False, error=type(e).__name__)
         raise
 
@@ -920,7 +920,7 @@ def run_conversation(
     from .tools.storm import reset_storm
     reset_storm()
     # ── 感知层：设当前会话，工具调用统计自动归入 ──
-    from ..tracker import set_session as _tracker_set_session
+    from .tracker import set_session as _tracker_set_session
     _tracker_set_session(session_id)
 
     reset_safe_stats()
