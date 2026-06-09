@@ -45,6 +45,30 @@ _context_cache: str | None = None
 _context_dirty: bool = True
 
 
+def _split_frontmatter(text: str) -> tuple[dict[str, str], str]:
+    """解析 frontmatter，返回 (扁平键值对, 正文)。
+
+    闭合分隔符必须是「单独成行的 ---」，逐行匹配而非 find("---") 子串查找——
+    否则 description 或正文里出现 '---' 会被误当成闭合，导致 type 丢失、正文
+    串入 metadata、索引摘要丢空。键值按行 strip 后取首个冒号前后，故顶层的
+    name/description 与 metadata 下缩进的 type 都进同一扁平字典（无命名冲突）。
+    """
+    if not text.startswith("---"):
+        return {}, text
+    lines = text.split("\n")
+    close = next((i for i in range(1, len(lines)) if lines[i].strip() == "---"), None)
+    if close is None:
+        return {}, text
+    meta: dict[str, str] = {}
+    for raw in lines[1:close]:
+        line = raw.strip()
+        if ":" in line:
+            key, value = line.split(":", 1)
+            meta[key.strip()] = value.strip()
+    body = "\n".join(lines[close + 1:]).strip()
+    return meta, body
+
+
 def _build_context() -> str | None:
     """从文件构建记忆索引字符串。"""
     mem_dir = Path(MEMORY_DIR)
@@ -57,17 +81,9 @@ def _build_context() -> str | None:
         if f.name == "MEMORY.md" or f.suffix != ".md":
             continue
         try:
-            text = f.read_text(encoding="utf-8")
-            name, desc = f.stem, ""
-            if text.startswith("---"):
-                end = text.find("---", 3)
-                if end != -1:
-                    for line in text[3:end].split("\n"):
-                        line = line.strip()
-                        if line.startswith("name:"):
-                            name = line.split(":", 1)[1].strip()
-                        elif line.startswith("description:"):
-                            desc = line.split(":", 1)[1].strip().rstrip(".")
+            meta, _ = _split_frontmatter(f.read_text(encoding="utf-8"))
+            name = meta.get("name", f.stem)
+            desc = meta.get("description", "").rstrip(".")
             short = desc.split("。")[0].split("，")[0][:30] if desc else ""
             entries.append((name, short))
         except Exception:
@@ -193,20 +209,9 @@ def _rebuild_index() -> None:
         if f.name == "MEMORY.md":
             continue
         try:
-            text = f.read_text(encoding="utf-8")
-            # 从 frontmatter 提取 name 和 description
-            name = f.stem
-            desc = ""
-            if text.startswith("---"):
-                end = text.find("---", 3)
-                if end != -1:
-                    for line in text[3:end].split("\n"):
-                        line = line.strip()
-                        if line.startswith("name:"):
-                            name = line.split(":", 1)[1].strip()
-                        elif line.startswith("description:"):
-                            desc = line.split(":", 1)[1].strip()
-            # 获取第一段正文作摘要
+            meta, _ = _split_frontmatter(f.read_text(encoding="utf-8"))
+            name = meta.get("name", f.stem)
+            desc = meta.get("description", "")
             entries.append(f"- [{name}]({f.name}) — {desc}")
         except Exception:
             continue
@@ -245,24 +250,14 @@ def _recall(query: str) -> str:
         if f.name == "MEMORY.md":
             continue
         try:
-            text = f.read_text(encoding="utf-8").lower()
+            full = f.read_text(encoding="utf-8")
         except Exception:
             continue
-        if q not in text:
+        if q not in full.lower():
             continue
 
-        # 读取 frontmatter 获取元信息
-        full = f.read_text(encoding="utf-8")
-        mem_type = ""
-        body = full
-        if full.startswith("---"):
-            end = full.find("---", 3)
-            if end != -1:
-                for line in full[3:end].split("\n"):
-                    if line.strip().startswith("type:"):
-                        mem_type = line.split(":", 1)[1].strip()
-                body = full[end + 3:].strip()
-
+        meta, body = _split_frontmatter(full)
+        mem_type = meta.get("type", "")
         snippet = body[:200].replace("\n", " ")
         results.append((f.stem, mem_type, snippet))
 
