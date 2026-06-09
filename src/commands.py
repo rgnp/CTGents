@@ -244,17 +244,12 @@ def _cmd_context(r: CmdResult, ctx, _args, _sid) -> None:
     else:
         status_tag = "✅ 正常"
 
-    # Plan Mode 状态
-    from .tools import is_plan_mode as _is_plan
-    plan_tag = "📋 只读分析中" if _is_plan() else "🔧 正常"
-
     lines = [
         "╔══════════════════════════════╗",
         "║      对话上下文诊断          ║",
         "╚══════════════════════════════╝",
         "",
         f"  状态:      {status_tag}",
-        f"  模式:      {plan_tag}",
         f"  Token:     {used_tokens:,} / {MAX_CONTEXT_TOKENS:,} ({usage_pct:.1f}%)",
         f"  消息数:    {msg_count} 条",
         "",
@@ -452,29 +447,13 @@ def _cmd_task(r: CmdResult, _ctx, args, _sid) -> None:
 
 
 # ═══════════════════════════════════════════════════════════════
-# Plan Mode — 只读门：模型只能读/分析，不能写
+# 热加载 /reload
 # ═══════════════════════════════════════════════════════════════
 
 @builtin("/reload", description="热加载代码改动（指令+工具），无需重启")
 def _cmd_reload(r: CmdResult, _ctx, _args, _sid) -> None:
     r.message = "reload 由 main.py 拦截处理，此 handler 仅供 /help 注册。"
-# Plan Mode — 只读门：模型只能读/分析，不能写
-# ═══════════════════════════════════════════════════════════════
 
-@builtin("/plan", description="切换 Plan Mode：只读探索，写工具禁用，批准后才解锁")
-def _cmd_plan(r: CmdResult, _ctx, _args, _sid) -> None:
-    from .tools import is_plan_mode, set_plan_mode
-    if is_plan_mode():
-        set_plan_mode(False)
-        r.message = "🔓 Plan Mode 已退出 — 写工具已恢复。"
-    else:
-        set_plan_mode(True)
-        r.message = (
-            "📋 Plan Mode 已激活 — 写工具已禁用。\n"
-            "   可用: 读文件/搜索/分析/思考\n"
-            "   禁用: write_file / edit / delete / git_commit\n"
-            "   持续只读，审阅方案后再次 /plan 批准并解锁。"
-        )
 
 # ═══════════════════════════════════════════════════════════════
 # 自省 /self — Agent 查看自己的架构、工具、命令、插件

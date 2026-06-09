@@ -9,7 +9,6 @@ from src.tools._tool_meta import (
     _META_ALIASES,
     DEDUP_BLACKLIST,
     PARALLEL_SAFE,
-    PLAN_BLOCKED,
     SKIP_COMPRESS_TOOLS,
     TOOL_LABELS,
     _derive,
@@ -39,7 +38,6 @@ class TestMetaPresence:
         alias_names = set(_META_ALIASES.keys())
         for derived_set, set_name in [
             (PARALLEL_SAFE, "PARALLEL_SAFE"),
-            (PLAN_BLOCKED, "PLAN_BLOCKED"),
             (SKIP_COMPRESS_TOOLS, "SKIP_COMPRESS_TOOLS"),
             (DEDUP_BLACKLIST, "DEDUP_BLACKLIST"),
         ]:
@@ -53,7 +51,6 @@ class TestMetaPresence:
                 "mcp_disconnect", "mcp_save_config"}
         for name in dead:
             assert name not in PARALLEL_SAFE
-            assert name not in PLAN_BLOCKED
             assert name not in SKIP_COMPRESS_TOOLS
             assert name not in DEDUP_BLACKLIST
             assert name not in TOOL_LABELS, f"{name} 不应出现在 TOOL_LABELS"
@@ -101,16 +98,14 @@ class TestHotReloadPreservesMeta:
     def test_refresh_globals_preserves_counts(self):
         _refresh_globals()
         assert len(PARALLEL_SAFE) == 26
-        assert len(PLAN_BLOCKED) == 10
         assert len(DEDUP_BLACKLIST) == 15
 
     def test_reload_tools_preserves_meta(self):
         from src.tools import reload_tools
         reload_tools()
-        labels, psafe, pblock, skip, dedup = _derive()
+        labels, psafe, skip, dedup = _derive()
         assert len(labels) == 51
         assert len(psafe) == 26
-        assert len(pblock) == 10
 
 
 class TestDispatchContract:

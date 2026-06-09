@@ -130,7 +130,7 @@ def is_dirty() -> bool:
 
 TOOLS_MEMORY = [
     {
-        "_meta": {"label": "记住", "plan_blocked": True, "dedup_blacklist": True},
+        "_meta": {"label": "记住", "dedup_blacklist": True},
         "type": "function",
         "function": {
             "name": "remember",
@@ -166,7 +166,7 @@ TOOLS_MEMORY = [
         },
     },
     {
-        "_meta": {"label": "忘记", "plan_blocked": True, "dedup_blacklist": True},
+        "_meta": {"label": "忘记", "dedup_blacklist": True},
         "type": "function",
         "function": {
             "name": "forget",

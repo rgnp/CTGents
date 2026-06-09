@@ -94,7 +94,6 @@ _META_ALIASES: dict[str, dict] = {
 
 TOOL_LABELS: dict[str, str] = {}
 PARALLEL_SAFE: frozenset[str] = frozenset()
-PLAN_BLOCKED: frozenset[str] = frozenset()
 SKIP_COMPRESS_TOOLS: frozenset[str] = frozenset()
 DEDUP_BLACKLIST: frozenset[str] = frozenset()
 
@@ -113,14 +112,13 @@ def _load_raw_tools() -> list[dict]:
     return tools
 
 
-def _derive() -> tuple[dict[str, str], frozenset[str], frozenset[str],
+def _derive() -> tuple[dict[str, str], frozenset[str],
                        frozenset[str], frozenset[str]]:
     """从工具定义的 _meta 字段派生所有元数据集合。"""
     tools = _load_raw_tools()
 
     labels: dict[str, str] = {}
     parallel_safe: set[str] = set()
-    plan_blocked: set[str] = set()
     skip_compress: set[str] = set()
     dedup_blacklist: set[str] = set()
 
@@ -131,8 +129,6 @@ def _derive() -> tuple[dict[str, str], frozenset[str], frozenset[str],
         labels[name] = meta.get("label", name)
         if meta.get("parallel_safe"):
             parallel_safe.add(name)
-        if meta.get("plan_blocked"):
-            plan_blocked.add(name)
         if meta.get("skip_compress"):
             skip_compress.add(name)
         if meta.get("dedup_blacklist"):
@@ -143,8 +139,6 @@ def _derive() -> tuple[dict[str, str], frozenset[str], frozenset[str],
         labels[alias_name] = alias_meta.get("label", alias_name)
         if alias_meta.get("parallel_safe"):
             parallel_safe.add(alias_name)
-        if alias_meta.get("plan_blocked"):
-            plan_blocked.add(alias_name)
         if alias_meta.get("skip_compress"):
             skip_compress.add(alias_name)
         if alias_meta.get("dedup_blacklist"):
@@ -153,7 +147,6 @@ def _derive() -> tuple[dict[str, str], frozenset[str], frozenset[str],
     return (
         labels,
         frozenset(parallel_safe),
-        frozenset(plan_blocked),
         frozenset(skip_compress),
         frozenset(dedup_blacklist),
     )
@@ -161,8 +154,8 @@ def _derive() -> tuple[dict[str, str], frozenset[str], frozenset[str],
 
 def _refresh_globals() -> None:
     """重新派生并更新模块级全局变量。供热加载调用。"""
-    global TOOL_LABELS, PARALLEL_SAFE, PLAN_BLOCKED, SKIP_COMPRESS_TOOLS, DEDUP_BLACKLIST
-    (TOOL_LABELS, PARALLEL_SAFE, PLAN_BLOCKED,
+    global TOOL_LABELS, PARALLEL_SAFE, SKIP_COMPRESS_TOOLS, DEDUP_BLACKLIST
+    (TOOL_LABELS, PARALLEL_SAFE,
      SKIP_COMPRESS_TOOLS, DEDUP_BLACKLIST) = _derive()
 
 

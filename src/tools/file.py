@@ -223,7 +223,7 @@ TOOLS_FILE = [
         },
     },
     {
-        "_meta": {"label": "写入文件", "plan_blocked": True, "dedup_blacklist": True},
+        "_meta": {"label": "写入文件", "dedup_blacklist": True},
         "type": "function",
         "function": {
             "name": "write_file",
@@ -245,7 +245,7 @@ TOOLS_FILE = [
         },
     },
     {
-        "_meta": {"label": "行级编辑", "plan_blocked": True, "dedup_blacklist": True},
+        "_meta": {"label": "行级编辑", "dedup_blacklist": True},
         "type": "function",
         "function": {
             "name": "edit_file_lines",
@@ -295,7 +295,7 @@ TOOLS_FILE = [
         },
     },
     {
-        "_meta": {"label": "删除文件", "plan_blocked": True, "dedup_blacklist": True},
+        "_meta": {"label": "删除文件", "dedup_blacklist": True},
         "type": "function",
         "function": {
             "name": "delete_file",

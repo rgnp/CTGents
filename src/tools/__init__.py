@@ -8,8 +8,6 @@ import time
 
 from openai.types.chat import ChatCompletionMessageToolCall
 
-from ._tool_meta import PLAN_BLOCKED as _PLAN_BLOCKED
-
 logger = logging.getLogger(__name__)
 
 _TOOL_SOURCES: list[list[dict]] = []
@@ -71,26 +69,9 @@ _init_registry()
 # ── 工具列表缓存 ──
 _tools_cache: list[dict] | None = None
 
-# ── Plan Mode ──
-_plan_mode: bool = False
-
-
-def set_plan_mode(enabled: bool) -> None:
-    """切换 Plan Mode。只读模式：禁用写工具，仅保留读/分析工具。
-
-    不修改消息结构、不改变 prefix —— 纯粹的工具列表过滤。
-    """
-    global _plan_mode, _tools_cache
-    _plan_mode = enabled
-    _tools_cache = None  # 强制重建工具列表
-
-
-def is_plan_mode() -> bool:
-    return _plan_mode
-
 
 def get_tools() -> list[dict]:
-    """返回工具列表。plan mode 下过滤写工具。
+    """返回全部工具列表。
 
     剥离 _meta 后缓存——API 不可见元数据。
     结果缓存复用，确保每轮返回的 tools 是同一个 list 对象，
@@ -103,10 +84,6 @@ def get_tools() -> list[dict]:
     tools: list[dict] = []
     for src in _TOOL_SOURCES:
         tools.extend(src)
-
-    if _plan_mode:
-        tools = [t for t in tools
-                 if t.get("function", {}).get("name") not in _PLAN_BLOCKED]
 
     # 剥离 _meta（API 不可见）
     tools = [{k: v for k, v in t.items() if k != "_meta"} for t in tools]

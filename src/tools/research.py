@@ -72,7 +72,7 @@ TOOLS_RESEARCH = [
         },
     },
     {
-        "_meta": {"label": "保存论文卡片", "plan_blocked": True, "dedup_blacklist": True},
+        "_meta": {"label": "保存论文卡片", "dedup_blacklist": True},
         "type": "function",
         "function": {
             "name": "save_paper_card",
@@ -142,7 +142,7 @@ TOOLS_RESEARCH = [
         },
     },
     {
-        "_meta": {"label": "论文评分表", "plan_blocked": True},
+        "_meta": {"label": "论文评分表"},
         "type": "function",
         "function": {
             "name": "paper_grid",
