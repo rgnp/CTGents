@@ -134,6 +134,40 @@ def _inject_citation_audit(ctx: CacheContext) -> None:
         )
 
 
+def process_turn(
+    ctx: CacheContext,
+    user_input: str,
+    on_token: TokenCallback,
+    on_tool: Callable[[str, dict], None],
+    on_progress: Callable[[], None] | None = None,
+    session_id: str = "",
+) -> str:
+    """一轮对话的数据管线：记忆信号 → 预读 → run_conversation → 收尾两审计。
+
+    main 的 REPL 与 test_integration_turn 的交互网共用此唯一定义——网即权威，
+    管线一改两边同步，杜绝"测试对着旧副本继续绿"的 drift。I/O（显示/Esc 监听/
+    会话保存/打印）由调用方负责，不进此函数。
+    """
+    # 记忆信号用原始输入探测（预读包装前），命中挂尾部提示
+    _inject_memory_signal(ctx, user_input)
+    # 预读优化：用户提到了文件路径，先读入上下文
+    pre_msgs = _preread_files(user_input, ctx)
+    if pre_msgs:
+        contents = "\n\n".join(m["content"] for m in pre_msgs)
+        user_input = (
+            f"[以下文件已预读，可直接基于其内容回答]\n\n{contents}\n\n"
+            f"── 用户问题 ──\n{user_input}"
+        )
+    reply = run_conversation(
+        ctx, user_input, on_token, on_tool,
+        on_progress=on_progress, session_id=session_id,
+    )
+    # 收尾取证自检：未验证的代码改动 + 没取证过的代码引用，挂尾提示（下一轮 agent 见）
+    _inject_completion_audit(ctx)
+    _inject_citation_audit(ctx)
+    return reply
+
+
 # ── UI 辅助 ──
 
 def _print_sessions(sessions: list[str]) -> None:
@@ -408,22 +442,11 @@ def main() -> None:
                 continue
 
             try:
-                # ── 记忆信号：用原始输入探测（预读包装前），命中挂尾部提示 ──
-                _inject_memory_signal(ctx, user_input)
-                # ── 预读优化：用户提到了文件路径，先读入上下文 ──
-                pre_msgs = _preread_files(user_input, ctx)
-                if pre_msgs:
-                    contents = "\n\n".join(m["content"] for m in pre_msgs)
-                    user_input = (
-                        f"[以下文件已预读，可直接基于其内容回答]\n\n{contents}\n\n"
-                        f"── 用户问题 ──\n{user_input}"
-                    )
-
                 on_token, has_output = _make_display()
                 sid = [session_id]
                 _start_esc_listener()
                 try:
-                    run_conversation(
+                    process_turn(
                         ctx, user_input, on_token, _on_tool,
                         on_progress=lambda sid=sid: sid.__setitem__(0, save_session(ctx.all, sid[0])),
                         session_id=session_id,
@@ -431,9 +454,6 @@ def main() -> None:
                 finally:
                     _stop_esc_listener()
                 session_id = sid[0]
-                # 收尾取证自检：未验证的代码改动 + 没取证过的代码引用，挂尾提示（下一轮 agent 见）
-                _inject_completion_audit(ctx)
-                _inject_citation_audit(ctx)
                 if has_output():
                     print()
             except BaseException as e:
