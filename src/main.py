@@ -3,6 +3,7 @@ import re
 import sys
 import threading
 import time
+import traceback
 from collections.abc import Callable
 from pathlib import Path
 
@@ -146,6 +147,21 @@ def _on_tool(name: str, args: dict) -> None:
     if len(detail) > 80:
         detail = detail[:77] + "..."
     print(f"  [{label}] {detail}")
+
+
+def _render_turn_error(e: BaseException) -> tuple[list[str], bool]:
+    """分类一轮对话的残余异常（KeyboardInterrupt / SystemExit(0) 已在上游处理）。
+
+    Exception → 友好展示 traceback、不退出循环；其它 BaseException（SystemExit
+    非零等）→ 简短提示并退出。返回 (待打印行, 是否 break)。
+    旧实现两段都会跑，普通异常被重复报告，故拆成互斥两支。
+    """
+    if isinstance(e, Exception):
+        lines = [f"\n💥 错误: {type(e).__name__}: {e}"]
+        lines += [f"   {ln.strip()}" for ln in traceback.format_exception(type(e), e, e.__traceback__)[-5:]]
+        lines.append("")
+        return lines, False
+    return [f"\n  请求失败: {e}\n"], isinstance(e, SystemExit)
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -414,19 +430,13 @@ def main() -> None:
                 if isinstance(e, SystemExit) and e.code == 0:
                     break
 
-                # 显示错误信息
-                if isinstance(e, Exception):
-                    print(f"\n💥 错误: {type(e).__name__}: {e}")
-                    import traceback
-                    tb_lines = traceback.format_exception(type(e), e, e.__traceback__)
-                    for line in tb_lines[-5:]:
-                        print(f"   {line.strip()}")
-                    print()
-
-                # ── 非 Exception 的 BaseException（SystemExit 非零等）──
-                logger.error("对话出错: %s", e)
-                print(f"\n  请求失败: {e}\n")
-                if isinstance(e, SystemExit):
+                # 显示错误信息（Exception 友好展示且继续；其它 BaseException 记日志并退出）
+                err_lines, should_break = _render_turn_error(e)
+                for ln in err_lines:
+                    print(ln)
+                if not isinstance(e, Exception):
+                    logger.error("对话出错: %s", e)
+                if should_break:
                     break
     finally:
         # 只有存在至少一条 assistant 回复时才保存（避免网络错误等空会话落盘）
