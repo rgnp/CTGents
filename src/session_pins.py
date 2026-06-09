@@ -13,10 +13,18 @@
 
 from __future__ import annotations
 
+import hashlib
+import re
+
 from .params import PINBOARD
 
 # 钉板消息在 log 中的定位标记(用于轮内原地替换刷新,见 llm.py)。
 PINBOARD_MARKER = "📌 本会话已钉住"
+
+# 转存进 memory 时的 name slug:正文部分最多取几字(结构性常量,留本模块)。
+_NAME_SLUG_MAXLEN = 24
+# 内容哈希后缀长度,保证同一 pin 跨会话转存同名→覆盖去重。
+_NAME_HASH_LEN = 8
 
 # 本进程内存态:本场会话的 pin 列表。每项 {"text": str, "durable": bool}。
 _pins: list[dict] = []
@@ -81,3 +89,25 @@ def render_tail() -> str | None:
 def is_pinboard_msg(msg: dict) -> bool:
     """判断一条 log 消息是否是钉板消息(轮内刷新定位用)。"""
     return msg.get("role") == "system" and PINBOARD_MARKER in (msg.get("content") or "")
+
+
+def _promote_name(text: str) -> str:
+    """从 pin 正文派生 memory name:可读 slug + 内容哈希(同文本同名→覆盖去重)。"""
+    base = re.sub(r"[^\w一-鿿]+", "-", text).strip("-")[:_NAME_SLUG_MAXLEN] or "pin"
+    digest = hashlib.sha256(text.encode("utf-8")).hexdigest()[:_NAME_HASH_LEN]
+    return f"pin-{base}-{digest}"
+
+
+def promote_durable() -> int:
+    """会话结束:把 durable 的 pin 转存进 memory(下次 recall 可捞)。返回转存条数。
+
+    钉板治"本场不漂"(易失);转存把够耐久的决定接力给跨会话记忆系统——
+    两条需求(会话内不漂 / 新会话有记忆)在此衔接。同文本同 name → 覆盖,不累积重复。
+    """
+    from .tools.memory import _remember
+    count = 0
+    for p in _pins:
+        if p.get("durable"):
+            _remember(_promote_name(p["text"]), p["text"], "knowledge")
+            count += 1
+    return count

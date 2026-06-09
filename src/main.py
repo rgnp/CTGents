@@ -450,6 +450,11 @@ def main() -> None:
         if has_response:
             session_id = save_session(ctx.all, session_id)
             print(f"会话已保存: [{session_id}]")
+        # 会话结束：把 durable 钉板转存进记忆（会话内不漂 → 新会话可 recall）
+        from .session_pins import promote_durable
+        promoted = promote_durable()
+        if promoted:
+            print(f"已把 {promoted} 条耐久 pin 转存进记忆。")
         print("退出")
 
 

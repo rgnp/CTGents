@@ -80,3 +80,27 @@ def test_is_pinboard_msg():
     assert sp.is_pinboard_msg({"role": "system", "content": sp.render_tail()})
     assert not sp.is_pinboard_msg({"role": "system", "content": "别的系统消息"})
     assert not sp.is_pinboard_msg({"role": "user", "content": sp.render_tail()})
+
+
+def test_promote_only_durable(monkeypatch):
+    """只有 durable 的 pin 转存进 memory;转存调用 _remember(name, content, knowledge)。"""
+    import src.tools.memory as mem
+    calls: list[tuple] = []
+    monkeypatch.setattr(
+        mem, "_remember",
+        lambda name, content, mtype: calls.append((name, content, mtype)) or "ok",
+    )
+    sp.add_pin("耐久决定X", durable=True)
+    sp.add_pin("普通决定Y", durable=False)
+    assert sp.promote_durable() == 1
+    assert len(calls) == 1
+    name, content, mtype = calls[0]
+    assert content == "耐久决定X"
+    assert mtype == "knowledge"
+    assert name.startswith("pin-")
+
+
+def test_promote_name_deterministic_for_dedup():
+    """同文本 → 同 name(跨会话转存覆盖去重,不累积重复记忆)。"""
+    assert sp._promote_name("同样的决定") == sp._promote_name("同样的决定")
+    assert sp._promote_name("决定A") != sp._promote_name("决定B")

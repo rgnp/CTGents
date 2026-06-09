@@ -27,12 +27,12 @@
   - L0:`test_invariants.py` 越界导入用例自动覆盖 session_pins/pin。
   - L2 `tests/test_llm.py`(+2):pin → `send()` 尾部出现、不进 prefix;全 unpin → 钉板消失。
   - 计数护栏更新:test_tool_meta(48→50/13→15/49→51)、test_plan_mode(48→50/38→40)。C16 机械捕获生效。
-- [o] Step 7: 全绿(495 passed)+ ruff 通过,按特定文件 commit。
+- [x] Step 7: 全绿(495 passed)+ ruff 通过,commit cfdea3d。
 
 ### Phase 2 — 转存钩子
-- [ ] Step 8: `session_pins.py` 加 `promote_durable()`:把标记耐久/会话结束仍在的 pin → 调 memory `_remember`。
-- [ ] Step 9: 接线会话结束路径(session 保存/退出处)调用 promote。
-- [ ] Step 10: 测试(转存后 memory 出现对应条目)+ commit。
+- [x] Step 8: `session_pins.py` 加 `promote_durable()`:durable pin → `_remember`;name=可读 slug+内容哈希(同文本覆盖去重)。
+- [x] Step 9: 接线 `main.py` 会话结束 finally:promote_durable + 提示转存条数。
+- [x] Step 10: 测试(只转存 durable、调用签名、name 确定性)+ commit。
 
 ### Phase 3 — 可选,默认不做
 - [ ] Step 11(可选): 扩 `detect_signal` 加"决定点提示该 pin"。**先搁置,噪音风险大,确有需要再开。**
