@@ -52,6 +52,7 @@ tasks/            任务追踪（current.md + archive/）
 | C13 | **lint 零错误** — `ruff check src/` 零 F/E 错误再提交 | CI |
 | C14 | **文件放对目录** — `.py`→`src/`，测试→`tests/`，文档→`docs/`，记忆中→`memory/`。不在根目录新建 `.py` `.json` `.txt` `.log` | 工具拦截（tool_guard：write_file 在根建禁用后缀即拒） |
 | C15 | **复杂任务先拆解** — 涉及 3+ 次编辑或跨文件修改时，先写入 `tasks/current.md` 并展示步骤，每步完成后更新状态。禁止跳步。 | 审查 |
+| C16 | **新接线即新不变量** — 新增模块/跨模块接线（注册工具、函数内 import 新模块、注入依赖）时，必须同步加对应的「缝」测试，而非只测新模块自身：**已知失败类**（越界导入、派发契约、自画像保真…）扩 `tests/test_invariants.py` 的 L0 不变量；**关键执行路径**（如 `run_conversation` 接线）加 L2 冒烟。单元测试全绿 ≠ 缝被覆盖——本季 rag 派发、tracker 导入都是各模块单测全绿却在缝里崩。 | 审查 + L0 门禁（test_invariants 机械捕获已知类） |
 
 ---
 
