@@ -105,3 +105,38 @@ def test_async_unused_flagged_dead(tmp_path):
 def test_async_mutable_default_flagged(tmp_path):
     a = _build(tmp_path, {"src/m.py": "async def f(x=[]):\n    return x\n"})
     assert any("可变默认参数" in m for m in _cats(a, "anti_pattern")), "async 坏味道未被检查"
+
+
+# ── 回归：相对导入解析（点号在 node.level，修复前失败）────────
+
+def test_relative_import_resolved_absolute(tmp_path):
+    """常规模块 src.a 里 `from .b import x` 应解析为绝对名 src.b。"""
+    a = _build(tmp_path, {
+        "src/a.py": "from .b import thing\n\ndef use():\n    return thing()\n",
+        "src/b.py": "def thing():\n    return 1\n",
+    })
+    deps = a._report.module_deps.get("src.a", set())  # noqa: SLF001
+    assert "src.b" in deps, f"相对导入未解析为绝对名: {deps}"
+
+
+def test_from_dot_import_recorded(tmp_path):
+    """`from . import sub`（module=None）不应被整段跳过。"""
+    a = _build(tmp_path, {
+        "src/pkg/__init__.py": "from . import sub\n",
+        "src/pkg/sub.py": "def f():\n    return 1\n",
+    })
+    deps = a._report.module_deps.get("src.pkg", set())  # noqa: SLF001
+    assert "src.pkg" in deps, f"from . import 被跳过: {deps}"
+
+
+def test_reexported_symbol_not_dead(tmp_path):
+    """只在 __init__ re-export、内部不调用的符号不应被误报为死代码。"""
+    a = _build(tmp_path, {
+        "src/pkg/__init__.py": "from .impl import exported\n",
+        "src/pkg/impl.py": (
+            "def exported():\n    return 1\n\n\ndef truly_dead():\n    return 2\n"
+        ),
+    })
+    dead = _cats(a, "dead_code")
+    assert not any("exported" in m for m in dead), "re-export 符号被误报死代码"
+    assert any("truly_dead" in m for m in dead), "真正的死代码应被检出（对照）"

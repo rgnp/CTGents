@@ -93,6 +93,7 @@ class ProjectAnalyzer:
         self._module_deps: dict[str, set[str]] = defaultdict(set)
         self._findings: list[Finding] = []
         self._current_module: str = ""
+        self._packages: set[str] = set()  # 由 __init__.py 折叠而来的包模块名
 
     # ── 入口 ──────────────────────────────────────────────
 
@@ -104,6 +105,8 @@ class ProjectAnalyzer:
         for fpath in py_files:
             mod = self._file_to_module(fpath)
             self._current_module = mod
+            if fpath.name == "__init__.py":
+                self._packages.add(mod)
             try:
                 tree = ast.parse(fpath.read_text(encoding="utf-8"), filename=str(fpath))
                 self._collect_definitions(tree, str(fpath), mod)
@@ -143,6 +146,7 @@ class ProjectAnalyzer:
         self._module_deps.clear()
         self._findings.clear()
         self._current_module = ""
+        self._packages.clear()
 
     # ── 文件收集 ──────────────────────────────────────────
 
@@ -208,24 +212,38 @@ class ProjectAnalyzer:
                     self._imports[module][alias.asname or alias.name] = alias.name
                     self._module_deps[module].add(alias.name)
             elif isinstance(node, ast.ImportFrom):
-                if node.module is None:
-                    continue
-                base = self._resolve_relative_import(node.module, module)
-                self._module_deps[module].add(base)
+                # 相对导入的点号在 node.level，不在 node.module；module 可能为 None
+                # （`from . import x`），不能直接跳过，否则丢失该依赖。
+                base = self._resolve_relative_import(node.module, node.level, module)
+                if base:
+                    self._module_deps[module].add(base)
                 for alias in node.names:
                     imported_name = alias.asname or alias.name
-                    self._imports[module][imported_name] = f"{base}.{alias.name}"
+                    full = f"{base}.{alias.name}" if base else alias.name
+                    self._imports[module][imported_name] = full
 
-    def _resolve_relative_import(self, target: str, current_module: str) -> str:
-        if not target.startswith("."):
-            return target
+    def _resolve_relative_import(
+        self, target: str | None, level: int, current_module: str
+    ) -> str:
+        """把 import 目标解析为绝对模块名。level>0 为相对导入（用 node.level）。
+
+        锚点是当前模块所在的包：常规模块 src.a.b 需先去掉自身段（drop=level），
+        而 __init__ 已被 _file_to_module 折叠成包名、自身即锚点（drop=level-1）。
+        """
+        if level == 0:
+            return target or ""
         parts = current_module.split(".")
-        dots = len(target) - len(target.lstrip("."))
-        target_name = target.lstrip(".")
-        if dots > len(parts):
-            return target_name
-        base = ".".join(parts[:-dots]) if dots < len(parts) else ""
-        return f"{base}.{target_name}" if base else target_name
+        drop = level - 1 if current_module in self._packages else level
+        if drop <= 0:
+            base_parts = parts
+        elif drop < len(parts):
+            base_parts = parts[:-drop]
+        else:
+            base_parts = []
+        base = ".".join(base_parts)
+        if target:
+            return f"{base}.{target}" if base else target
+        return base
 
     # ── Pass 2: 引用收集 ──────────────────────────────────
     def _collect_references(self, tree: ast.AST, module: str) -> None:
@@ -325,12 +343,12 @@ class ProjectAnalyzer:
         mod = ".".join(fqn.split(".")[:-1])
         if d.name in self._refs.get(mod, set()):
             return True
-        # 被 __init__.py re-export
-        for imp_mod, imp_map in self._imports.items():
-            if imp_mod.endswith("__init__"):
-                for _, full_name in imp_map.items():
-                    if full_name == fqn:
-                        return True
+        # 被包的 __init__ re-export（_file_to_module 已把 __init__ 折叠成包名，
+        # 模块名永不以 __init__ 结尾，故按 _packages 集合判定）
+        for imp_mod in self._packages:
+            for full_name in self._imports.get(imp_mod, {}).values():
+                if full_name == fqn:
+                    return True
         return False
 
     # ── 坏味道检测 ─────────────────────────────────────────
