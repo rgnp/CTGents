@@ -13,9 +13,12 @@ import json
 import re
 import sys
 import time
+import urllib.parse
 import urllib.request
 from collections import defaultdict
 from pathlib import Path
+
+_ARXIV_API = "http://export.arxiv.org/api/query"
 
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 _KNOWLEDGE_TOOLS = _PROJECT_ROOT / "knowledge" / "trajectory-prediction" / "tools"
@@ -160,6 +163,46 @@ def _iter_query_pairs(query_list: list) -> list[tuple]:
     return pairs
 
 
+def _parse_arxiv_feed(xml: str) -> list[tuple[str, str]]:
+    """从 arxiv Atom feed 解析 [(arxiv_id, 提交日期), ...]，按 feed 内顺序。
+
+    只取 <entry> 内的 id，避免误抓 feed 顶层的 self-link id。无 <published>
+    时日期留空。结果顺序即 API 的排序（调用方用 submittedDate desc → 最新在前）。
+    """
+    out: list[tuple[str, str]] = []
+    for entry in re.findall(r"<entry>(.*?)</entry>", xml, re.DOTALL):
+        id_m = re.search(r"arxiv\.org/abs/(\d{4}\.\d{4,5})", entry)
+        if not id_m:
+            continue
+        pub_m = re.search(r"<published>(\d{4}-\d{2}-\d{2})", entry)
+        out.append((id_m.group(1), pub_m.group(1) if pub_m else ""))
+    return out
+
+
+def _arxiv_api_search(query: str, max_results: int = 20) -> list[tuple[str, str]]:
+    """Arxiv 官方 API 按提交日期倒序检索，返回 [(id, 日期), ...]，最新在前。
+
+    比 Tavily 网页搜索可靠地多：直接命中 arxiv、按日期倒序拿最新、无网页索引
+    滞后、无页面引用噪声（网页搜索会把正文里引用的老论文 id 也抓出来）。
+    网络失败返回空列表，由调用方容错。
+    """
+    params = urllib.parse.urlencode({
+        "search_query": f"all:{query}",
+        "sortBy": "submittedDate",
+        "sortOrder": "descending",
+        "max_results": max_results,
+    })
+    req = urllib.request.Request(
+        f"{_ARXIV_API}?{params}", headers={"User-Agent": "ResearchBot/1.0"}
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=20) as resp:
+            xml = resp.read().decode("utf-8", errors="replace")
+    except Exception:
+        return []
+    return _parse_arxiv_feed(xml)
+
+
 def _load_known_ids() -> set[str]:
     known: set[str] = set()
     kb_dir = _KNOWLEDGE_AD2026 / "topics"
@@ -207,21 +250,13 @@ def scan_papers(queries: str) -> str:
     known = _load_known_ids()
     found: dict[str, str] = {}
 
+    # 用 arxiv 官方 API（按提交日期倒序）发现最新论文，而非 Tavily 网页搜索——
+    # 网页搜索按相关度排序、有索引滞后、且会抓到正文引用的老论文 id。
     for area, raw_query in _iter_query_pairs(query_list):
-        for year in ("2025", "2026"):
-            q = f"{raw_query} {year} arxiv"
-            try:
-                from ..config import get_tavily_client
-                client = get_tavily_client()
-                result = client.search(q, max_results=5)
-                text = json.dumps(result.get("results", []))
-                ids = re.findall(r'arxiv\.org/(?:abs|html)/(\d{4}\.\d{4,5})', text)
-                for aid in ids:
-                    if _arxiv_year(aid) and aid not in found:
-                        found[aid] = area
-            except Exception:
-                pass
-            time.sleep(0.3)
+        for aid, _pub in _arxiv_api_search(raw_query):
+            if _arxiv_year(aid) and aid not in found:
+                found[aid] = area
+        time.sleep(3.0)  # arxiv API 礼貌限速（官方建议 ≥3s/次）
 
     new_papers = {k: v for k, v in found.items() if k not in known}
     overlap = {k: v for k, v in found.items() if k in known}

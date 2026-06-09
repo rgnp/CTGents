@@ -7,7 +7,7 @@ research.py 此前零测试，且大多是网络抓取（arxiv/tavily）难测�
 """
 from __future__ import annotations
 
-from src.tools.research import _arxiv_year, _iter_query_pairs
+from src.tools.research import _arxiv_year, _iter_query_pairs, _parse_arxiv_feed
 
 # ── _arxiv_year：年份只看前两位 ──────────────────────────────
 
@@ -51,3 +51,45 @@ def test_pairs_skips_malformed():
 
 def test_pairs_empty():
     assert _iter_query_pairs([]) == []
+
+
+# ── _parse_arxiv_feed：从 Atom feed 抽 (id, 日期)，只取 entry 内 ──────
+
+_SAMPLE_FEED = """<?xml version="1.0"?>
+<feed xmlns="http://www.w3.org/2005/Atom">
+  <id>http://arxiv.org/api/query?search_query=all:x</id>
+  <entry>
+    <id>http://arxiv.org/abs/2606.01234v1</id>
+    <published>2026-06-05T00:00:00Z</published>
+    <title>Latest paper</title>
+  </entry>
+  <entry>
+    <id>http://arxiv.org/abs/2510.09999</id>
+    <published>2025-10-01T12:00:00Z</published>
+    <title>Late-2025 paper</title>
+  </entry>
+</feed>"""
+
+
+def test_parse_feed_extracts_id_and_date():
+    out = _parse_arxiv_feed(_SAMPLE_FEED)
+    assert out == [("2606.01234", "2026-06-05"), ("2510.09999", "2025-10-01")]
+
+
+def test_parse_feed_ignores_feed_level_id():
+    """Feed 顶层的 api/query self-link 不应被当成论文 id。"""
+    ids = [aid for aid, _ in _parse_arxiv_feed(_SAMPLE_FEED)]
+    assert "query" not in " ".join(ids)
+    assert len(ids) == 2
+
+
+def test_parse_feed_missing_published():
+    feed = (
+        "<feed><entry><id>http://arxiv.org/abs/2601.00001</id>"
+        "<title>No date</title></entry></feed>"
+    )
+    assert _parse_arxiv_feed(feed) == [("2601.00001", "")]
+
+
+def test_parse_feed_empty():
+    assert _parse_arxiv_feed("<feed></feed>") == []
