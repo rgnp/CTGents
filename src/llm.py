@@ -698,6 +698,22 @@ def _update_safe_stats(n_parallel: int, n_serial: int) -> None:
         _safe_stats["serial_tools"] += n_serial
 
 
+
+# ── 带计时的工具执行包装（感知层：每调用必记录）──
+def _tracked_execute_tool(tc):
+    t0 = time.perf_counter()
+    try:
+        result = execute_tool(tc)
+        elapsed_ms = (time.perf_counter() - t0) * 1000
+        from ..tracker import record_tool_call
+        record_tool_call(tc.function.name, elapsed_ms, success=True)
+        return result
+    except Exception as e:
+        elapsed_ms = (time.perf_counter() - t0) * 1000
+        from ..tracker import record_tool_call
+        record_tool_call(tc.function.name, elapsed_ms, success=False, error=type(e).__name__)
+        raise
+
 def _execute_tool_batch(approved: list[tuple]) -> list[str]:
     """按序分块并行执行工具 — 保留 LLM 原始调用顺序。
 
@@ -729,7 +745,7 @@ def _execute_tool_batch(approved: list[tuple]) -> list[str]:
             # 非 SAFE：串行执行
             tc = approved[i][3]
             try:
-                results[i] = execute_tool(tc)
+                results[i] = _tracked_execute_tool(tc)
             except Exception as e:
                 results[i] = json.dumps({"error": f"执行失败: {e}"}, ensure_ascii=False)
             total_serial += 1
@@ -754,7 +770,7 @@ def _execute_tool_batch(approved: list[tuple]) -> list[str]:
                     fut_map: dict = {}
                     for j in batch:
                         tc = approved[j][3]
-                        fut = pool.submit(execute_tool, tc)
+                        fut = pool.submit(_tracked_execute_tool, tc)
                         fut_map[fut] = j
                     for fut in as_completed(fut_map):
                         idx = fut_map[fut]
@@ -903,6 +919,10 @@ def run_conversation(
     # 重设 Storm 去重窗口 + SAFE 并行统计（同轮工具循环内）
     from .tools.storm import reset_storm
     reset_storm()
+    # ── 感知层：设当前会话，工具调用统计自动归入 ──
+    from ..tracker import set_session as _tracker_set_session
+    _tracker_set_session(session_id)
+
     reset_safe_stats()
 
     # 自动选择模型（始终 Pro）
