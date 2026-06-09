@@ -1,6 +1,6 @@
 {
-  "total_files": 99,
-  "total_chunks": 518,
+  "total_files": 203,
+  "total_chunks": 924,
   "languages": [
     "json",
     "markdown",
@@ -9,5 +9,5 @@
     "yaml"
   ],
   "force_rebuild": false,
-  "updated_at": 1780300430.5769067
+  "updated_at": 1780972102.9452438
 }
