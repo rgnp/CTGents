@@ -17,6 +17,7 @@ import src.llm as llm
 import src.main as main
 import src.session_pins as sp
 from src.cache_context import CacheContext
+from src.tools import is_plan_mode, set_plan_mode
 
 
 def _prefix_ctx() -> CacheContext:
@@ -148,3 +149,21 @@ def test_send_wellformed_no_orphan_tool(monkeypatch):
             seen.add(tc["id"])
         if m["role"] == "tool":
             assert m.get("tool_call_id") in seen, "孤儿 tool 消息 → API 会 400"
+
+
+# ── Plan Mode 粘性：跑完一轮，只读标志不被管线私自清掉 ──────────
+
+def test_plan_mode_sticky_across_turn(monkeypatch):
+    """进了 Plan Mode，跑完整一轮后仍在 Plan Mode（只用户显式 /plan 才解锁）。
+
+    钉死 run_conversation + 注入器永不私自 set_plan_mode(False)——曾经的
+    长度自动进/收尾自动退就是死在这种隐式状态翻转上。
+    """
+    ctx = _prefix_ctx()
+    _mock_llm(monkeypatch, ("看完了", []))
+    set_plan_mode(True)
+    try:
+        _drive_turn(ctx, "分析一下这个模块")
+        assert is_plan_mode(), "跑完一轮后 Plan Mode 不该被自动清掉（粘性）"
+    finally:
+        set_plan_mode(False)

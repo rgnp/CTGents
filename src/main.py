@@ -11,7 +11,7 @@ from .cache_context import CacheContext
 from .commands import dispatch as dispatch_cmd
 from .llm import TokenCallback, clear_interrupt, request_interrupt, run_conversation
 from .session import list_sessions, load_session, save_session
-from .tools import is_plan_mode, set_plan_mode
+from .tools import is_plan_mode
 from .tools._tool_meta import TOOL_LABELS
 
 logging.basicConfig(
@@ -438,8 +438,8 @@ def main() -> None:
                 if has_output():
                     print()
                 if is_plan_mode():
-                    set_plan_mode(False)
-                    print("🔓 分析完成 — Plan Mode 已退出。")
+                    # 粘性：只读模式持续到用户显式 /plan 批准解锁，不在收尾自动退出
+                    print("📋 仍在 Plan Mode（只读）— 审阅方案后用 /plan 批准并解锁。")
             except BaseException as e:
                 # ── KeyboardInterrupt：用户主动中断 ──
                 if isinstance(e, KeyboardInterrupt):
