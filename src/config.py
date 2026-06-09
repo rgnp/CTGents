@@ -30,6 +30,9 @@ PRO_MAX_TOKENS: int = int(os.getenv("PRO_MAX_TOKENS", "65536"))
 # Tavily 搜索
 TAVILY_API_KEY: str = _require_env("TAVILY_API_KEY")
 
+# Semantic Scholar（可选）：scan_conf 查顶会论文用；缺省为空，工具会降级提示
+S2_API_KEY: str = os.getenv("S2_API_KEY", "")
+
 # ── 行为旋钮（真值在 params.py 按域分组；此处仅绑定本地名保持 import 兼容）──
 TOOL_LOOP_THRESHOLD: float = CONTEXT.tool_loop_threshold
 MAX_CONTEXT_TOKENS: int = CONTEXT.max_context_tokens

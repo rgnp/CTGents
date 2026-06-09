@@ -19,6 +19,9 @@ from collections import defaultdict
 from pathlib import Path
 
 _ARXIV_API = "http://export.arxiv.org/api/query"
+_S2_API = "https://api.semanticscholar.org/graph/v1/paper/search"
+# 默认顶会名单（CV/机器人主线）。S2 用简写过滤有效（内部映射到全称）。
+_TOP_VENUES = "CVPR,ICCV,ECCV,NeurIPS,ICLR,ICML,CoRL,ICRA,IROS,RSS,AAAI"
 
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 _KNOWLEDGE_TOOLS = _PROJECT_ROOT / "knowledge" / "trajectory-prediction" / "tools"
@@ -98,6 +101,26 @@ TOOLS_RESEARCH = [
                 "type": "object",
                 "properties": {
                     "queries": {"type": "string", "description": "JSON: [[\"领域\",\"搜索词\"],...]"},
+                },
+                "required": ["queries"],
+            },
+        },
+    },
+    {
+        "_meta": {"label": "扫描顶会", "parallel_safe": True},
+        "type": "function",
+        "function": {
+            "name": "scan_conf",
+            "description": (
+                "查计算机顶会论文（CVPR/NeurIPS/ICRA…），走 Semantic Scholar：带摘要+引用数、"
+                "覆盖不上 arxiv 的论文，是 scan_papers(仅 arxiv) 的补充。输入JSON数组[[领域,搜索词],...]，"
+                "默认过滤主流顶会+2025/2026、按引用排序。需 .env 配 S2_API_KEY。"
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "queries": {"type": "string", "description": "JSON: [[\"领域\",\"搜索词\"],...]"},
+                    "venues": {"type": "string", "description": "可选：逗号分隔顶会名覆盖默认（如 ACL,EMNLP,KDD）"},
                 },
                 "required": ["queries"],
             },
@@ -207,6 +230,47 @@ def _arxiv_api_search(query: str, max_results: int = 20) -> list[tuple[str, str]
     return _parse_arxiv_feed(xml)
 
 
+def _parse_s2_paper(raw: dict) -> dict:
+    """从 Semantic Scholar paper 记录提取规整字段（纯函数，便于测试）。
+
+    缺字段给安全默认；title/abstract 截断；arxiv 外链从 externalIds.ArXiv 取
+    （便于和 arxiv 流去重/打通）。
+    """
+    ext = raw.get("externalIds") or {}
+    return {
+        "title": (raw.get("title") or "?")[:200],
+        "venue": raw.get("venue") or "?",
+        "year": raw.get("year") or "?",
+        "citations": raw.get("citationCount") or 0,
+        "arxiv": ext.get("ArXiv") or "",
+        "abstract": (raw.get("abstract") or "")[:500],
+    }
+
+
+def _s2_search(query: str, venues: str, year_range: str, limit: int = 20) -> list[dict]:
+    """Semantic Scholar paper/search，返回原始 results 列表。
+
+    无 key 或网络失败返回 []（调用方容错）。带 x-api-key 抬限流。
+    """
+    from ..config import S2_API_KEY
+    if not S2_API_KEY:
+        return []
+    params = urllib.parse.urlencode({
+        "query": query, "venue": venues, "year": year_range,
+        "fields": "title,venue,year,abstract,citationCount,externalIds",
+        "limit": limit,
+    })
+    req = urllib.request.Request(
+        f"{_S2_API}?{params}",
+        headers={"x-api-key": S2_API_KEY, "User-Agent": "ResearchBot/1.0"},
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            return json.loads(resp.read().decode("utf-8", errors="replace")).get("data", [])
+    except Exception:
+        return []
+
+
 def _load_known_ids() -> set[str]:
     known: set[str] = set()
     kb_dir = _KNOWLEDGE_AD2026 / "topics"
@@ -286,6 +350,55 @@ def scan_papers(queries: str) -> str:
     cache_path.write_text(json.dumps(new_papers, ensure_ascii=False, indent=2), encoding="utf-8")
     lines.append("\n💾 已缓存 .scan_cache.json")
 
+    return "\n".join(lines)
+
+
+def scan_conf(queries: str, venues: str = "") -> str:
+    """查计算机顶会论文（Semantic Scholar）：覆盖不上 arxiv 的，带摘要+引用数。"""
+    from ..config import S2_API_KEY
+    if not S2_API_KEY:
+        return "未配置 S2_API_KEY（.env），无法查顶会。改用 scan_papers 走 arxiv，或先在 .env 配 key。"
+    try:
+        query_list: list = json.loads(queries)
+    except json.JSONDecodeError as exc:
+        return f"queries 解析失败: {exc}"
+
+    venue_filter = venues.strip() or _TOP_VENUES
+    known = _load_known_ids()
+    rows: list[dict] = []
+    seen: set[str] = set()
+    for area, raw_query in _iter_query_pairs(query_list):
+        for raw in _s2_search(raw_query, venue_filter, "2025-2026"):
+            p = _parse_s2_paper(raw)
+            dedup_key = p["arxiv"] or p["title"]
+            if dedup_key in seen:
+                continue
+            seen.add(dedup_key)
+            if p["arxiv"] and p["arxiv"] in known:
+                continue  # 知识库已有（仅 arxiv 外链可判）
+            p["area"] = area
+            rows.append(p)
+        time.sleep(1.0)  # S2 限速 ~1 req/s
+
+    if not rows:
+        return f"顶会过滤 [{venue_filter}] + 2025/2026 下未找到新论文（可能 venue/搜索词太窄）。"
+
+    rows.sort(key=lambda p: (p["area"], -p["citations"]))
+    lines = [f"顶会扫描 → {len(rows)} 篇新论文（venue={venue_filter}）"]
+    cur_area = None
+    for p in rows:
+        if p["area"] != cur_area:
+            cur_area = p["area"]
+            lines.append(f"\n## {cur_area}")
+        ax = f" arxiv:{p['arxiv']}" if p["arxiv"] else ""
+        lines.append(
+            f"  [{p['venue'][:24]}] {p['year']} cite={p['citations']}{ax}\n"
+            f"    {p['title']}"
+        )
+
+    cache_path = _PROJECT_ROOT / ".scan_conf_cache.json"
+    cache_path.write_text(json.dumps(rows, ensure_ascii=False, indent=2), encoding="utf-8")
+    lines.append("\n💾 已缓存 .scan_conf_cache.json（含摘要，paper_grid 可用）")
     return "\n".join(lines)
 
 
@@ -432,6 +545,8 @@ def execute(name: str, args: dict) -> str | None:
         return save_paper_card(filename=args["filename"], content=args["content"])
     if name == "scan_papers":
         return scan_papers(queries=args["queries"])
+    if name == "scan_conf":
+        return scan_conf(queries=args["queries"], venues=args.get("venues", ""))
     if name == "read_papers":
         return read_papers(ids=args["ids"])
     if name == "paper_grid":

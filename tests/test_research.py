@@ -7,7 +7,12 @@ research.py 此前零测试，且大多是网络抓取（arxiv/tavily）难测�
 """
 from __future__ import annotations
 
-from src.tools.research import _arxiv_year, _iter_query_pairs, _parse_arxiv_feed
+from src.tools.research import (
+    _arxiv_year,
+    _iter_query_pairs,
+    _parse_arxiv_feed,
+    _parse_s2_paper,
+)
 
 # ── _arxiv_year：年份只看前两位 ──────────────────────────────
 
@@ -93,3 +98,35 @@ def test_parse_feed_missing_published():
 
 def test_parse_feed_empty():
     assert _parse_arxiv_feed("<feed></feed>") == []
+
+
+# ── _parse_s2_paper：规整 Semantic Scholar 记录 ──────────────────
+
+def test_parse_s2_full():
+    raw = {
+        "title": "Co-MTP", "venue": "ICRA", "year": 2025,
+        "citationCount": 20, "abstract": "we propose...",
+        "externalIds": {"ArXiv": "2502.16589", "DOI": "10.x/y"},
+    }
+    p = _parse_s2_paper(raw)
+    assert p["venue"] == "ICRA" and p["year"] == 2025
+    assert p["citations"] == 20 and p["arxiv"] == "2502.16589"
+    assert p["abstract"] == "we propose..."
+
+
+def test_parse_s2_missing_fields():
+    """缺字段给安全默认，不抛。"""
+    p = _parse_s2_paper({})
+    assert p["title"] == "?" and p["venue"] == "?" and p["year"] == "?"
+    assert p["citations"] == 0 and p["arxiv"] == "" and p["abstract"] == ""
+
+
+def test_parse_s2_no_arxiv_external():
+    """非 arxiv 论文（externalIds 无 ArXiv）→ arxiv 字段为空，仍可用。"""
+    p = _parse_s2_paper({"title": "T", "externalIds": {"DOI": "10.x"}})
+    assert p["arxiv"] == ""
+
+
+def test_parse_s2_truncates():
+    p = _parse_s2_paper({"title": "T" * 300, "abstract": "A" * 999})
+    assert len(p["title"]) == 200 and len(p["abstract"]) == 500

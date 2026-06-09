@@ -96,3 +96,7 @@ stats/
 memory/
 knowledge/
 .agent_backups/
+# 论文工具缓存（scan_papers / scan_conf / read_papers 自动生成）
+.scan_cache.json
+.scan_conf_cache.json
+.read_cache.json
