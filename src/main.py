@@ -120,6 +120,21 @@ def _inject_completion_audit(ctx: CacheContext) -> None:
         )
 
 
+def _inject_citation_audit(ctx: CacheContext) -> None:
+    """引用即取证：剥上一轮的提示，若最终回复引用了没取证过的代码文件则挂尾提示。
+
+    治"编造"的可检查片：引用 path:line 却全程没碰过该文件 → 很可能凭印象编的。
+    事实（引用 vs 工具活动）机械供给，"是不是真编了"留给 agent；只扫最终回复 → 每轮刷新。
+    """
+    ctx.log[:] = [m for m in ctx.log if not m.get("_citation_audit")]
+    from .citation_audit import audit_citations
+    nudge = audit_citations(ctx.log)
+    if nudge:
+        ctx.log.append(
+            {"role": "system", "content": nudge, "_volatile": True, "_citation_audit": True}
+        )
+
+
 # ── UI 辅助 ──
 
 def _print_sessions(sessions: list[str]) -> None:
@@ -417,8 +432,9 @@ def main() -> None:
                 finally:
                     _stop_esc_listener()
                 session_id = sid[0]
-                # 收尾取证自检：本轮若留下未验证的代码改动，挂尾提示（下一轮 agent 见）
+                # 收尾取证自检：未验证的代码改动 + 没取证过的代码引用，挂尾提示（下一轮 agent 见）
                 _inject_completion_audit(ctx)
+                _inject_citation_audit(ctx)
                 if has_output():
                     print()
                 if is_plan_mode():
