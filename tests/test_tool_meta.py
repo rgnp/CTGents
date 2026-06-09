@@ -111,3 +111,40 @@ class TestHotReloadPreservesMeta:
         assert len(labels) == 49
         assert len(psafe) == 26
         assert len(pblock) == 10
+
+
+class TestDispatchContract:
+    """execute_tool 责任链契约：execute 对不归自己的名字必须返回 None。
+
+    回归 691f0ac 引入的 bug：rag.execute 对未知名返回 "未知 RAG 工具: {name}"
+    而非 None。因模块按字母序派发，rag 排在 research/self/think/web 之前，
+    把这四家的工具全部截胡——self/think/search_web 等几十个工具静默失效。
+    """
+
+    def test_no_executor_claims_foreign_name(self):
+        """喂一个保证不存在的工具名，每个模块的 execute 都必须返回 None。"""
+        import src.config  # noqa: F401  触发 .env / 代理加载
+        from src.tools import _EXECUTORS
+        sentinel = "__definitely_not_a_real_tool_name__"
+        for ex in _EXECUTORS:
+            result = ex(sentinel, {})
+            assert result is None, (
+                f"{ex.__module__} 的 execute 截胡了外来工具名，返回 {result!r}；"
+                f"不归自己的名字必须返回 None 以交还责任链"
+            )
+
+    def test_self_routes_to_self_module_not_rag(self):
+        """路由 self 工具到 self 模块，而非被 rag 吞成错误串。"""
+        import src.config  # noqa: F401
+        from src.tools import execute_tool
+
+        class _Fn:
+            name = "self"
+            arguments = '{"topic": "capabilities"}'
+
+        class _Call:
+            function = _Fn()
+
+        out = execute_tool(_Call())
+        assert "未知 RAG 工具" not in out, "self 仍被 rag 截胡"
+        assert "未注册的工具" not in out, "self 未被任何模块认领"

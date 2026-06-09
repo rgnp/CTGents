@@ -1308,8 +1308,14 @@ def query_research(query: str, top_k: int = 5) -> str:
 # ═══════════════════════════════════════════════════════════════
 
 
-def execute(name: str, args: dict) -> str:
-    """工具调度入口。"""
+def execute(name: str, args: dict) -> str | None:
+    """工具调度入口。
+
+    名字不归 rag 时必须返回 None，把控制权交还 execute_tool 的责任链——
+    其余 14 个工具模块都遵守此契约。曾错误返回 "未知 RAG 工具: {name}"，
+    因模块按字母序派发（rag 在 research/self/think/web 之前），把这四家的
+    工具全部截胡。最终未注册兜底由 execute_tool 的 "未注册的工具" 负责。
+    """
     if name == "rag_index":
         result = index_project(
             path=args.get("path"),
@@ -1330,4 +1336,4 @@ def execute(name: str, args: dict) -> str:
             query=args["query"],
             top_k=args.get("top_k", 5),
         )
-    return f"未知 RAG 工具: {name}"
+    return None
