@@ -2,7 +2,7 @@
 
 self.py 是 agent 的自我认知，静态描述漂移=agent 在错误自我认知上运转。
 两个回归：
-1. 记忆系统描述曾虚构"RAG 混合检索+时间衰减评分"，实际是子串匹配；且 files
+1. 记忆系统描述曾虚构"RAG 混合检索+时间衰减评分"，实际是 token 加权打分；且 files
    误写成 Claude Code 的 ~/.claude 路径。
 2. _render_tree 的 is_last 用未过滤的 entries 长度算 → 末尾项被跳时错配连接符。
 """
@@ -26,9 +26,9 @@ def test_portrait_memory_path_not_claude():
 
 
 def test_portrait_describes_actual_recall():
-    """应如实描述 recall 是子串匹配（非语义检索）。"""
+    """应如实描述 recall 是 token 加权打分（非语义检索）。"""
     out = build_self_portrait("capabilities")
-    assert "子串" in out and "非语义检索" in out
+    assert "token" in out and "非语义检索" not in out
 
 
 def test_portrait_no_fictional_tracker_reflect():

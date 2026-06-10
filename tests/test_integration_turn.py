@@ -46,7 +46,7 @@ def _drive_turn(ctx: CacheContext, user_input: str) -> None:
 # ── 皇冠：多 feature 同轮，缓存前缀不得被碰坏 ──────────────────
 
 def test_prefix_survives_multifeature_turn(monkeypatch):
-    """同轮跑完 preread + 记忆信号 + 工具调用 + 审计 → 缓存前缀纹丝不动。
+    """同轮跑完 preread + 工具调用 + 审计 → 缓存前缀纹丝不动。
 
     任何 feature 顺手往 prefix 写、或重排 prefix，send() 的哈希校验当场抛。
     """
@@ -57,7 +57,7 @@ def test_prefix_survives_multifeature_turn(monkeypatch):
               ("", [_tool_call("think", {"thought": "看一下"})]),
               ("看完了，参数在 src/params.py:1。", []))
     try:
-        _drive_turn(ctx, "记住:重点看 src/params.py")
+        _drive_turn(ctx, "重点看 src/params.py")
     finally:
         sp.clear_pins()
     ctx.send()  # 不抛 PrefixIntegrityError = 前缀完整
@@ -81,15 +81,13 @@ def test_preread_citation_not_false_flagged(monkeypatch):
 # ── volatile 信号不得在 ctx.log 上堆积 ────────────────────────
 
 def test_volatile_signals_dont_accumulate(monkeypatch):
-    """多轮后 mem 信号 ≤1；播一条 stale 编辑后 completion 审计跨轮恒 ==1。
-
-    strip-then-add 若失灵，volatile 会逐轮累积 → 撑爆 log、破坏尾部。
-    """
+    """Completion 审计跨轮不累积:播 stale 编辑后恒 ==1。记忆信号已废弃不验证。"""
     ctx = _prefix_ctx()
     _mock_llm(monkeypatch, ("好", []), ("好", []), ("好", []))
     for _ in range(3):
-        _drive_turn(ctx, "记住:这是个偏好")
-        assert sum(1 for m in ctx.log if m.get("_mem_signal")) <= 1
+        _drive_turn(ctx, "随便说点")
+        # 记忆信号已废弃，_mem_signal 始终为 0
+        assert sum(1 for m in ctx.log if m.get("_mem_signal")) == 0
 
     # 播一条"已改 .py 但没绿测" → completion 审计每轮重算、不堆积
     ctx.log.append({"role": "tool", "tool_call_id": "e1",
@@ -104,18 +102,17 @@ def test_volatile_signals_dont_accumulate(monkeypatch):
 # ── 多 feature 的 volatile 在尾部并存，互不覆盖 ───────────────
 
 def test_features_coexist_at_tail(monkeypatch):
-    """同轮:记忆信号 + pin → send() 尾部两者并存，prefix 仍是干净的 AGENTS。"""
+    """同轮: pin 后尾部钉板存在，prefix 仍是干净的 AGENTS。记忆信号已废弃。"""
     sp.clear_pins()
     ctx = _prefix_ctx()
     _mock_llm(monkeypatch,
               ("", [_tool_call("pin", {"content": "决定:走方案A"})]),
               ("钉好了", []))
     try:
-        _drive_turn(ctx, "记住:这个决定要钉住")
+        _drive_turn(ctx, "做个决定")
         api = ctx.send()
         tail = "\n".join(m.get("content") or "" for m in api if m["role"] == "system")
         assert sp.PINBOARD_MARKER in tail              # 钉板在尾
-        assert any(m.get("_mem_signal") for m in ctx.log)  # 记忆信号也在
         assert api[0]["role"] == "system"              # 前缀仍居首
     finally:
         sp.clear_pins()

@@ -132,15 +132,14 @@ SYSTEM_MAP = {
         "name": "记忆系统",
         "files": "src/tools/memory.py + memory/（项目级目录，frontmatter .md + MEMORY.md 索引）",
         "what": (
-            "remember/recall/forget + 写信号探测。存储为带 frontmatter 的 .md 文件，"
-            "MEMORY.md 是名称+摘要索引；recall 按子串匹配命中文件、返回片段（非语义检索）；"
-            "remember/forget 后重建索引。detect_signal 机械探测「该记」的时机，写入仍由 agent 自愿"
+            "remember/recall/forget。存储为带 frontmatter 的 .md 文件，"
+            "MEMORY.md 是名称+摘要索引；recall 按 token 加权打分命中文件、返回片段；"
+            "remember/forget 后重建索引。写入由 agent 自主判断（正则信号已废弃）"
         ),
         "why": "agent 需要跨会话记住用户偏好和重要事实；索引进前缀随时可见，详情按需 recall",
         "tools": ["remember", "recall", "forget"],
         "connections": {
-            "main": "启动时 get_context() 注入索引；新 user 消息经 detect_signal 挂写信号",
-            "llm": "压缩时若记忆变脏（is_dirty）则刷新注入的索引",
+            "main": "启动时 get_context() 注入索引；记忆写入由 agent 自主判断（正则信号已废弃）",
         },
     },
     "rag": {

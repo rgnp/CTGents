@@ -14,39 +14,15 @@ _TOKEN_ASCII = re.compile(r"[a-z0-9]+")
 _TOKEN_CJK = re.compile(r"[一-鿿]+")
 
 # ── 记忆写入信号（机械探测"该考虑记"的时刻；写入仍由 agent 判断） ──
-# 固定触发的错在于把"探测"和"写入"捆死。这里只机械探测语义事件，
-# 命中时挂一行易失提示，记不记、记什么仍是 agent 自愿调 remember。
-_SIGNAL_EXPLICIT = re.compile(r"记住|记一下|记下来|记下|帮我记|remember", re.I)
-_SIGNAL_CORRECTION = re.compile(
-    # 不对(?!劲)：摘掉"不对劲"——那是"感觉蹊跷"的成语，不是在纠正
-    r"不对(?!劲)|不是这样|错了|搞错|应该是|其实是|并不是|别这样|不要这样|理解错|你弄错"
-)
-_SIGNAL_PREFERENCE = re.compile(
-    r"我喜欢|我习惯|我倾向|我更喜欢|我偏好|我们项目|我们的约定|以后都|以后请|每次都要|默认要|默认用"
-)
-
-_NUDGE_EXPLICIT = "💡 用户要求记住某事。用 remember 存下来(name/content/type)，别只在本轮回应。"
-_NUDGE_CORRECTION = "💡 用户纠正了你。若这是跨会话通用的偏好或教训，考虑 remember(type=user/strategy)。"
-_NUDGE_PREFERENCE = "💡 用户表达了偏好/惯例。若跨会话通用且 AGENTS.md 未覆盖，考虑 remember(type=user)。"
-
-
 def detect_signal(user_text: str) -> str | None:
-    """探测最新 user 消息里"值得记忆"的语义信号，命中返回一行提示。
+    """已废弃。正则关键词匹配无法判断语义重要性，交由 agent 自主判断。
 
-    只探测、不写入：写入仍是 agent 自愿调 remember。按强度优先匹配：
-    显式要求 > 纠正 > 偏好陈述。无信号返回 None。
+    "不对，这里有个 bug"和"你推荐 embedding 是错的，因为不看实际情况"
+    在正则眼里都是"不对"——前者不值一记，后者是方法论教训值得记。
+    判断"该记什么"是语义问题，正则做不了。
+    见 AGENTS.md「记忆边界」→「主动判断」。
     """
-    if not user_text:
-        return None
-    if _SIGNAL_EXPLICIT.search(user_text):
-        return _NUDGE_EXPLICIT
-    if _SIGNAL_CORRECTION.search(user_text):
-        return _NUDGE_CORRECTION
-    if _SIGNAL_PREFERENCE.search(user_text):
-        return _NUDGE_PREFERENCE
     return None
-
-
 # ── 记忆索引缓存（避免每次请求重复读文件） ──
 _context_cache: str | None = None
 _context_dirty: bool = True
