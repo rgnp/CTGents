@@ -1,9 +1,25 @@
-from ..config import MAX_CONTEXT_TOKENS, TOKEN_PER_CHAR, TOOL_RESULT_BUDGET
+import re
+
+from ..config import (
+    MAX_CONTEXT_TOKENS,
+    TOKEN_PER_CHAR_CJK,
+    TOKEN_PER_CHAR_OTHER,
+    TOOL_RESULT_BUDGET,
+)
+
+# 中文连续块（与 memory._TOKEN_CJK 同范围），用 findall 跑段而非逐字符循环。
+_CJK_RE = re.compile(r"[一-鿿]+")
 
 
 def estimate_tokens(text: str) -> int:
-    """估算文本 token 数。采用保守系数，宁可多估不漏估。"""
-    return int(len(text) * TOKEN_PER_CHAR)
+    """估算文本 token 数：中文按 0.6/字、其余按 0.3/字符（分类粗估）。
+
+    旧的统一 0.5/字符对中文系统性低估、对英文/代码高估——压缩阈值与 token
+    上限全部建立在估算值上，触发点会随语言构成漂移。真值可白拿：每次 API
+    都返回 prompt_tokens，可对账校准 CTG_TOKEN_PER_CHAR_* 旋钮。
+    """
+    cjk = sum(len(m) for m in _CJK_RE.findall(text))
+    return int(cjk * TOKEN_PER_CHAR_CJK + (len(text) - cjk) * TOKEN_PER_CHAR_OTHER)
 
 
 def _count_tool_calls_tokens(tool_calls: list) -> int:
@@ -57,7 +73,8 @@ def truncate_to_budget(raw_text: str, messages: list[dict]) -> str:
     if estimate_tokens(raw_text) <= budget:
         return raw_text
 
-    max_chars = int(budget / TOKEN_PER_CHAR)
+    # 反向换算用最贵的字符率（中文），宁可少截留余量、绝不超预算
+    max_chars = int(budget / TOKEN_PER_CHAR_CJK)
     return raw_text[:max_chars] + (
         f"\n\n...（token 预算截断：已用 {used} / {MAX_CONTEXT_TOKENS}，"
         f"本次工具结果限 {budget} tokens）"

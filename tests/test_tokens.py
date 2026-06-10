@@ -18,6 +18,14 @@ class TestEstimateTokens:
     def test_chinese_text(self):
         assert estimate_tokens("你好世界") > 0
 
+    def test_cjk_rate_higher_than_ascii(self):
+        """同字符数下中文估得比英文多（0.6/字 vs 0.3/字符）。"""
+        assert estimate_tokens("你好世界你好世界") > estimate_tokens("abcdefgh")
+
+    def test_split_rates(self):
+        """分类粗估：10 个中文字 ×0.6 + 10 个 ASCII ×0.3 = 9。"""
+        assert estimate_tokens("汉" * 10 + "a" * 10) == 9
+
 
 class TestCountToolCallsTokens:
     def test_empty_list(self):

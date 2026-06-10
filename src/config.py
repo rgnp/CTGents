@@ -41,7 +41,8 @@ MAX_RETRIES: int = RUNTIME.max_retries
 RETRY_BASE_DELAY: float = RUNTIME.retry_base_delay
 MAX_EXEC_TIMEOUT: int = RUNTIME.max_exec_timeout
 TOOL_RESULT_BUDGET: float = RUNTIME.tool_result_budget
-TOKEN_PER_CHAR: float = RUNTIME.token_per_char
+TOKEN_PER_CHAR_CJK: float = RUNTIME.token_per_char_cjk
+TOKEN_PER_CHAR_OTHER: float = RUNTIME.token_per_char_other
 
 # ── 路径 ──
 SESSION_DIR: str = str(Path(__file__).parent.parent / "sessions")

@@ -58,14 +58,18 @@ def test_rag_and_evolution_wired_to_modules():
 def test_runtime_defaults_and_wiring():
     assert params.RUNTIME.max_retries == 3
     assert params.RUNTIME.max_exec_timeout == 5
-    assert params.RUNTIME.token_per_char == 0.5
+    assert params.RUNTIME.token_per_char_cjk == 0.6
+    assert params.RUNTIME.token_per_char_other == 0.3
     assert params.RUNTIME.tool_result_compress_threshold == 1200
+    assert params.RUNTIME.max_requests_per_turn == 60
     import src.config as config
     import src.llm as llm
     assert params.RUNTIME.max_retries == config.MAX_RETRIES
     assert params.RUNTIME.max_exec_timeout == config.MAX_EXEC_TIMEOUT
     assert params.RUNTIME.tool_result_budget == config.TOOL_RESULT_BUDGET
-    assert params.RUNTIME.token_per_char == config.TOKEN_PER_CHAR
+    assert params.RUNTIME.token_per_char_cjk == config.TOKEN_PER_CHAR_CJK
+    assert params.RUNTIME.token_per_char_other == config.TOKEN_PER_CHAR_OTHER
+    assert params.RUNTIME.max_requests_per_turn == llm._MAX_REQUESTS_PER_TURN
     # 原 llm.py 内联 magic number 现绑定到 params.RUNTIME
     assert params.RUNTIME.tool_result_compress_threshold == llm._TOOL_RESULT_COMPRESS_THRESHOLD
 
