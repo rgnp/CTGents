@@ -69,7 +69,10 @@ def make_task_context_message() -> dict | None:
 
     if not parts:
         return None
-    return {"role": "system", "content": "\n\n".join(parts), "_volatile": True}
+    # _task_ctx: run_conversation 每轮按此标记剥旧再追加新——没有它剥除空转，
+    # 任务上下文每轮堆一份副本(全在挂尾区,每个请求重算,白烧缓存 miss)。
+    return {"role": "system", "content": "\n\n".join(parts),
+            "_volatile": True, "_task_ctx": True}
 
 
 def _derive_slug(text: str) -> str:

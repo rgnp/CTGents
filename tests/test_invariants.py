@@ -16,6 +16,7 @@ test_tool_meta.py::TestDispatchContract，此处不重复。
 from __future__ import annotations
 
 import ast
+import re
 from pathlib import Path
 
 from src.tools.self import SYSTEM_MAP
@@ -86,4 +87,33 @@ def test_portrait_connections_reference_real_subsystems():
                 bad.append(f"{sysname}.connections → '{dep}'（无对应模块/子系统）")
     assert not bad, (
         "自画像引用了不存在的子系统（自述与实现脱节）:\n" + "\n".join(bad)
+    )
+
+
+# ── 标记契约：strip 过滤所依赖的 _xxx 标记必须有生产者 ────────────
+
+# log 清扫的惯用形：[m for m in ctx.log if not m.get("_xxx")]
+_STRIP_MARKER_RE = re.compile(r'not m\.get\("(_\w+)"\)')
+
+
+def test_strip_markers_have_producers():
+    """strip-then-append 用的每个 `_xxx` 标记，src 里必须存在 `"_xxx":` 生产点。
+
+    踩过的坑：llm.py 按 _task_ctx 剥旧任务消息，但 make_task_context_message
+    返回的消息从未带过这个键 → 剥除空转、活跃任务期间上下文每轮堆一份副本
+    （全在挂尾区每请求重算，实测单场平均每请求多 miss 上万 token）。
+    strip 与 producer 是跨文件契约，单元测试天然看不见 → 固化为结构不变量。
+    """
+    sources = {f: f.read_text(encoding="utf-8") for f in _src_py_files()}
+    all_text = "\n".join(sources.values())
+    offenders: list[str] = []
+    for f, text in sources.items():
+        for marker in set(_STRIP_MARKER_RE.findall(text)):
+            if f'"{marker}":' not in all_text:
+                offenders.append(
+                    f"{f.relative_to(_ROOT)}: strip 标记 {marker} 无任何生产点"
+                )
+    assert not offenders, (
+        "strip 过滤的标记没有生产者（剥除空转 → 消息每轮堆积）:\n"
+        + "\n".join(offenders)
     )
