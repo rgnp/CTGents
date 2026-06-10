@@ -4,8 +4,9 @@
 长对话里注意力稀释也漏不掉：
 
 - C10 读后写：edit_file_lines 前必须本进程读过（或写过）该文件，
-  否则按行号编辑就是猜，行号错位是头号失败原因。insert/delete 改了行数后
-  作废"已读"，逼下次 edit 重读拿新行号——挡掉"叠着按旧行号连改 → 改残文件"。
+  否则按行号编辑就是猜，行号错位是头号失败原因。任何改变总行数的编辑
+  （insert/delete/行数变了的多行 replace）后作废"已读"，逼下次 edit 重读拿新
+  行号——挡掉"叠着按旧行号连改 → 改残文件"。键于不变量（行数变没变）而非动作。
 - C14 文件放对目录：write_file 不得在项目根新建 .py/.json/.txt/.log。
 - P1/P2 危险命令：run_command 拦 `git add -A`/`git add .`、force-push 到 main/master
   （确定的命令模式，零判断——P1 还正好对抗模型 `git add -A` 的强默认）。
@@ -76,9 +77,11 @@ def check(name: str, args: dict) -> str | None:
         rejection = _check_read_before_edit(path)  # C10
         if rejection:
             return rejection
-        # insert/delete 改变行数 → 其后所有行号失效。作废"已读"，逼下次 edit 先重读拿
-        # 新行号，挡掉"叠着按旧行号连改 → 改残文件"（曾误删 AGENTS.md 里的 P1）。
-        if args.get("action") in ("insert", "delete"):
+        # 任何改变总行数的编辑 → 其后行号全部失效。作废"已读"，逼下次 edit 先重读拿新
+        # 行号。键于不变量（行数变没变）而非动作类型：insert/delete/行数变了的多行
+        # replace 一网打尽，不为每种动作各打补丁（曾 insert/delete 漂移误删 P1；又多行
+        # replace 漂移把验证节改出重复标题+删 bullet）。
+        if _edit_changes_line_count(args):
             _known_files.discard(str(_resolve(path)))
         return None
 
@@ -109,6 +112,23 @@ def _check_read_before_edit(path: str) -> str | None:
             "未读就按行号编辑是行号错位的头号原因。"
         )
     return None
+
+
+def _edit_changes_line_count(args: dict) -> bool:
+    """该次 edit_file_lines 会不会改变文件总行数（→ 其后行号失效）。
+
+    insert 加行、delete 删行 → 必变；replace 仅当新行数 ≠ 被替区间行数才变
+    （单行换单行不漂移，多行换 N 行漂移）。信息不全（真实 replace 必带 end_line+
+    new_lines，否则工具自身报错）→ 当作不变，不误作废、不破坏单行 replace 连改。
+    """
+    action = args.get("action")
+    if action in ("insert", "delete"):
+        return True
+    if action == "replace":
+        start, end, new_lines = args.get("start_line"), args.get("end_line"), args.get("new_lines")
+        if isinstance(start, int) and isinstance(end, int) and isinstance(new_lines, str):
+            return len(new_lines.split("\n")) != (end - start + 1)
+    return False
 
 
 def _check_command(command: str | None) -> str | None:

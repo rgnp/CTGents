@@ -93,6 +93,31 @@ def test_c10_replace_keeps_read_status(_isolate):
     assert tg.check("edit_file_lines", {"path": "f.py", "action": "replace", "start_line": 2}) is None
 
 
+def test_c10_balanced_replace_keeps_status(_isolate):
+    """行数相等的 replace（1 行换 1 行）不漂移 → 保留已读，连改放行。"""
+    (_isolate / "f.py").write_text("a\nb\nc\n", encoding="utf-8")
+    assert tg.check("read_file", {"path": "f.py"}) is None
+    one = {"path": "f.py", "action": "replace", "start_line": 1, "end_line": 1, "new_lines": "x"}
+    assert tg.check("edit_file_lines", one) is None
+    assert tg.check("edit_file_lines", one) is None  # 仍放行
+
+
+def test_c10_multiline_replace_forces_reread(_isolate):
+    """改变行数的多行 replace → 作废已读，逼重读（堵住 insert/delete 护栏漏的同类漂移）。
+
+    缝：agent 曾用多行 replace 把 AGENTS.md 验证节改出重复标题+删 bullet。按旧
+    insert/delete-only 护栏这种 replace 不触发；现键于"行数变没变"统一覆盖。
+    """
+    (_isolate / "f.py").write_text("a\nb\nc\nd\ne\n", encoding="utf-8")
+    assert tg.check("read_file", {"path": "f.py"}) is None
+    # 替换 2-4（3 行）为 1 行 → 行数减少 → 已读作废
+    drift = {"path": "f.py", "action": "replace", "start_line": 2, "end_line": 4, "new_lines": "X"}
+    assert tg.check("edit_file_lines", drift) is None
+    # 紧接着第二次 edit（行号已失效）→ 必须先重读
+    msg = tg.check("edit_file_lines", {"path": "f.py", "action": "delete", "start_line": 3, "end_line": 3})
+    assert msg is not None and "C10" in msg
+
+
 def test_reset_known_rerequires_read(_isolate):
     (_isolate / "f.py").write_text("a\n", encoding="utf-8")
     tg.check("read_file", {"path": "f.py"})
