@@ -3,7 +3,7 @@
 单测全绿、真实路径却散，是因为 bug 不在单元里、在**缝里**：preread × 长度触发、
 volatile 信号在 ctx.log 上互相挤、缓存前缀被某个 feature 顺手碰坏。这里只 mock
 唯一的网络接缝 `llm._invoke_llm`，prefix 用真实 AGENTS.md，按 main() 每轮管线
-顺序真跑 mem 信号 → preread → run_conversation → 两审计。
+顺序真跑 思考牙 → preread → run_conversation → 两审计。
 
 网即权威：`_drive_turn` 直接调 `main.process_turn()`——与 main 的 REPL 同一个
 管线定义，不是副本。改了管线两边同步，杜绝"测试对着旧副本继续绿、真实行为已变"
@@ -81,13 +81,11 @@ def test_preread_citation_not_false_flagged(monkeypatch):
 # ── volatile 信号不得在 ctx.log 上堆积 ────────────────────────
 
 def test_volatile_signals_dont_accumulate(monkeypatch):
-    """Completion 审计跨轮不累积:播 stale 编辑后恒 ==1。记忆信号已废弃不验证。"""
+    """Completion 审计跨轮不累积:播 stale 编辑后恒 ==1。"""
     ctx = _prefix_ctx()
     _mock_llm(monkeypatch, ("好", []), ("好", []), ("好", []))
     for _ in range(3):
         _drive_turn(ctx, "随便说点")
-        # 记忆信号已废弃，_mem_signal 始终为 0
-        assert sum(1 for m in ctx.log if m.get("_mem_signal")) == 0
 
     # 播一条"已改 .py 但没绿测" → completion 审计每轮重算、不堆积
     ctx.log.append({"role": "tool", "tool_call_id": "e1",
@@ -102,7 +100,7 @@ def test_volatile_signals_dont_accumulate(monkeypatch):
 # ── 多 feature 的 volatile 在尾部并存，互不覆盖 ───────────────
 
 def test_features_coexist_at_tail(monkeypatch):
-    """同轮: pin 后尾部钉板存在，prefix 仍是干净的 AGENTS。记忆信号已废弃。"""
+    """同轮: pin 后尾部钉板存在，prefix 仍是干净的 AGENTS。"""
     sp.clear_pins()
     ctx = _prefix_ctx()
     _mock_llm(monkeypatch,

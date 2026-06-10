@@ -110,22 +110,6 @@ def _append_volatile_context(ctx: CacheContext) -> None:
         ctx.log.append({"role": "system", "content": pinboard, "_volatile": True})
 
 
-def _inject_memory_signal(ctx: CacheContext, user_text: str) -> None:
-    """探测 user 消息的记忆信号，命中则在 log 尾挂一行易失提示（缓存安全）。
-
-    替换语义：先剔除上一轮的信号（log 里 volatile 会累积），至多保留一条，
-    无信号则清空。挂在 log 尾系统块，只重算尾部、不碰对话前缀缓存。
-    写入仍由 agent 自愿调 remember——非固定触发。
-    """
-    ctx.log[:] = [m for m in ctx.log if not m.get("_mem_signal")]
-    from .tools.memory import detect_signal
-    nudge = detect_signal(user_text)
-    if nudge:
-        ctx.log.append(
-            {"role": "system", "content": nudge, "_volatile": True, "_mem_signal": True}
-        )
-
-
 def _inject_completion_audit(ctx: CacheContext) -> None:
     """收尾取证自检：剥上一轮的审计提示，若日志里留下"改动晚于绿测"则挂尾提示。
 
@@ -168,7 +152,7 @@ def _inject_thinking_stance(ctx: CacheContext) -> None:
     """每轮在 log 尾挂一句"检索命中是线索、不是答案"的常驻提醒（缓存安全）。
 
     同义 bullet 放 AGENTS.md 前缀实测翻不动"复读"这一根深蒂固的默认（前缀离生成点
-    太远）；与 mem_signal / 两审计同理，行为引导必须挂 log 尾靠 recency 才生效。常驻
+    太远）；与两审计同理，行为引导必须挂 log 尾靠 recency 才生效。常驻
     不设门——"这轮算不算开放问题"是判断、不可机械化（auto-plan 的坑）；措辞里的"问
     事实就直接答"让它在事实/动作轮自我收敛。strip-then-append 防累积。
     """
@@ -187,14 +171,12 @@ def process_turn(
     on_progress: Callable[[], None] | None = None,
     session_id: str = "",
 ) -> str:
-    """一轮对话的数据管线：记忆信号 → 预读 → run_conversation → 收尾两审计。
+    """一轮对话的数据管线：思考牙 → 预读 → run_conversation → 收尾两审计。
 
     main 的 REPL 与 test_integration_turn 的交互网共用此唯一定义——网即权威，
     管线一改两边同步，杜绝"测试对着旧副本继续绿"的 drift。I/O（显示/Esc 监听/
     会话保存/打印）由调用方负责，不进此函数。
     """
-    # 记忆信号用原始输入探测（预读包装前），命中挂尾部提示
-    _inject_memory_signal(ctx, user_input)
     # 思考牙：检索命中是线索不是答案，常驻挂尾（前缀劝不动复读，靠 recency 生效）
     _inject_thinking_stance(ctx)
     # 预读优化：用户提到了文件路径，先读入上下文
@@ -480,6 +462,8 @@ def main() -> None:
                     ctx.clear_log()
                     loaded_msgs = load_session(r.load)
                     ctx.log.extend(loaded_msgs)
+                    # volatile 上下文（记忆索引/任务/钉板）保存时被过滤，重注
+                    _append_volatile_context(ctx)
                     session_id = r.load
                     print(f"已加载会话 [{r.load}]，共 {len(ctx)} 条消息")
                     _print_recent(ctx.all)

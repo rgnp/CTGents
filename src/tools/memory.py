@@ -13,16 +13,9 @@ _SNIPPET_CHARS = 200
 _TOKEN_ASCII = re.compile(r"[a-z0-9]+")
 _TOKEN_CJK = re.compile(r"[一-鿿]+")
 
-# ── 记忆写入信号（机械探测"该考虑记"的时刻；写入仍由 agent 判断） ──
-def detect_signal(user_text: str) -> str | None:
-    """已废弃。正则关键词匹配无法判断语义重要性，交由 agent 自主判断。
-
-    "不对，这里有个 bug"和"你推荐 embedding 是错的，因为不看实际情况"
-    在正则眼里都是"不对"——前者不值一记，后者是方法论教训值得记。
-    判断"该记什么"是语义问题，正则做不了。
-    见 AGENTS.md「记忆边界」→「主动判断」。
-    """
-    return None
+# 注：曾有正则探测"该考虑记"时刻的 detect_signal——已整链删除。
+# 判断"该记什么"是语义问题，正则做不了（"不对，有 bug"和"你推荐 embedding
+# 是错的"在正则眼里都是"不对"）。写入由 agent 自主判断，见 AGENTS.md「记忆边界」。
 # ── 记忆索引缓存（避免每次请求重复读文件） ──
 _context_cache: str | None = None
 _context_dirty: bool = True

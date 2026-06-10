@@ -2,8 +2,7 @@
 
 治 ④可信 的"谎报完成"：agent 说"测试通过/搞定了"，而最后一次代码改动晚于
 最后一次绿测时——这个结论已经过期。这里只供事实（machine-checkable），
-"算不算完成"是判断题，交给 agent。形态对齐 memory.detect_signal：探测 + 提示，
-不强制。
+"算不算完成"是判断题，交给 agent。形态：探测 + 提示，不强制。
 
 本模块跨模块读其它工具的输出串（file/git/exec 的成功 marker），天然脆——
 test_completion_audit.py 用契约不变量把这些 marker 钉死（C16：新接线即新不变量）。
