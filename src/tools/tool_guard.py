@@ -4,7 +4,8 @@
 长对话里注意力稀释也漏不掉：
 
 - C10 读后写：edit_file_lines 前必须本进程读过（或写过）该文件，
-  否则按行号编辑就是猜，行号错位是头号失败原因。
+  否则按行号编辑就是猜，行号错位是头号失败原因。insert/delete 改了行数后
+  作废"已读"，逼下次 edit 重读拿新行号——挡掉"叠着按旧行号连改 → 改残文件"。
 - C14 文件放对目录：write_file 不得在项目根新建 .py/.json/.txt/.log。
 - P1/P2 危险命令：run_command 拦 `git add -A`/`git add .`、force-push 到 main/master
   （确定的命令模式，零判断——P1 还正好对抗模型 `git add -A` 的强默认）。
@@ -72,7 +73,14 @@ def check(name: str, args: dict) -> str | None:
         return None
 
     if name == "edit_file_lines":
-        return _check_read_before_edit(path)  # C10
+        rejection = _check_read_before_edit(path)  # C10
+        if rejection:
+            return rejection
+        # insert/delete 改变行数 → 其后所有行号失效。作废"已读"，逼下次 edit 先重读拿
+        # 新行号，挡掉"叠着按旧行号连改 → 改残文件"（曾误删 AGENTS.md 里的 P1）。
+        if args.get("action") in ("insert", "delete"):
+            _known_files.discard(str(_resolve(path)))
+        return None
 
     return None
 

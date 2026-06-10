@@ -71,6 +71,28 @@ def test_c10_nonexistent_passes_through(_isolate):
     assert tg.check("edit_file_lines", {"path": "nope.py", "action": "replace", "start_line": 1}) is None
 
 
+def test_c10_insert_forces_reread_before_next_edit(_isolate):
+    """insert/delete 改行数 → 作废已读，逼下次 edit 重读（挡叠改改残文件）。"""
+    (_isolate / "f.py").write_text("a\nb\nc\n", encoding="utf-8")
+    assert tg.check("read_file", {"path": "f.py"}) is None
+    # 第一次 insert 放行
+    assert tg.check("edit_file_lines", {"path": "f.py", "action": "insert", "start_line": 2}) is None
+    # 紧接着第二次 edit（行号已失效）→ 必须先重读，被拦
+    msg = tg.check("edit_file_lines", {"path": "f.py", "action": "delete", "start_line": 3})
+    assert msg is not None and "C10" in msg
+    # 重读后放行
+    assert tg.check("read_file", {"path": "f.py"}) is None
+    assert tg.check("edit_file_lines", {"path": "f.py", "action": "delete", "start_line": 3}) is None
+
+
+def test_c10_replace_keeps_read_status(_isolate):
+    """单行 replace 不改行数 → 不作废已读，连续 replace 不被逼重读。"""
+    (_isolate / "f.py").write_text("a\nb\nc\n", encoding="utf-8")
+    assert tg.check("read_file", {"path": "f.py"}) is None
+    assert tg.check("edit_file_lines", {"path": "f.py", "action": "replace", "start_line": 1}) is None
+    assert tg.check("edit_file_lines", {"path": "f.py", "action": "replace", "start_line": 2}) is None
+
+
 def test_reset_known_rerequires_read(_isolate):
     (_isolate / "f.py").write_text("a\n", encoding="utf-8")
     tg.check("read_file", {"path": "f.py"})
