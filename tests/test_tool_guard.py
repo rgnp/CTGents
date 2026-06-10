@@ -82,3 +82,33 @@ def test_reset_known_rerequires_read(_isolate):
 def test_unrelated_tool_passes(_isolate):
     assert tg.check("run_command", {"command": "ls"}) is None
     assert tg.check("rag_query", {"query": "x"}) is None
+
+
+# ── P1/P2：run_command 边界拦危险 git 命令 ──
+
+def test_p1_rejects_git_add_all(_isolate):
+    assert "P1" in (tg.check("run_command", {"command": "git add -A"}) or "")
+    assert "P1" in (tg.check("run_command", {"command": "git add --all"}) or "")
+    assert "P1" in (tg.check("run_command", {"command": "git add ."}) or "")
+    # 组合命令里出现也拦
+    assert "P1" in (tg.check("run_command", {"command": "git add -A && git commit -m x"}) or "")
+
+
+def test_p1_allows_specific_path_add(_isolate):
+    assert tg.check("run_command", {"command": "git add src/main.py"}) is None
+    assert tg.check("run_command", {"command": "git add ./src/foo.py tests/bar.py"}) is None
+
+
+def test_p2_rejects_force_push_main(_isolate):
+    assert "P2" in (tg.check("run_command", {"command": "git push --force origin main"}) or "")
+    assert "P2" in (tg.check("run_command", {"command": "git push origin master --force"}) or "")
+    assert "P2" in (tg.check("run_command", {"command": "git push --force-with-lease origin main"}) or "")
+
+
+def test_p2_allows_force_push_feature_and_normal_push(_isolate):
+    assert tg.check("run_command", {"command": "git push -f origin feature-x"}) is None
+    assert tg.check("run_command", {"command": "git push origin main"}) is None
+
+
+def test_run_command_without_command_passes(_isolate):
+    assert tg.check("run_command", {}) is None

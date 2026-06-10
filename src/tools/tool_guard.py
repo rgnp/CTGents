@@ -6,6 +6,8 @@
 - C10 读后写：edit_file_lines 前必须本进程读过（或写过）该文件，
   否则按行号编辑就是猜，行号错位是头号失败原因。
 - C14 文件放对目录：write_file 不得在项目根新建 .py/.json/.txt/.log。
+- P1/P2 危险命令：run_command 拦 `git add -A`/`git add .`、force-push 到 main/master
+  （确定的命令模式，零判断——P1 还正好对抗模型 `git add -A` 的强默认）。
 
 接口：check(name, args) → None 放行 / str 拒绝（execute_tool 直接回该串，不执行）。
 读/写工具顺带登记到 _known_files，作为 C10 的依据。判断类规则（DRY/魔法数字）
@@ -14,12 +16,20 @@
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 _READ_TOOLS = {"read_file", "read_file_lines"}
 _BANNED_ROOT_EXTS = {".py", ".json", ".txt", ".log"}
 # 本进程已『见过』（读过或写过）的文件绝对路径，C10 依据
 _known_files: set[str] = set()
+
+# P1：git add -A / --all / 裸点（git add . 末尾，不含 ./path 这种具体路径）
+_GIT_ADD_ALL = re.compile(r"\bgit\s+add\s+(?:-A\b|--all\b|\.(?:\s|$))")
+# P2：git push 同时带 force 旗标与 main/master（两个 lookahead 不依赖参数顺序）
+_GIT_FORCE_PUSH_MAIN = re.compile(
+    r"\bgit\s+push\b(?=.*(?:--force|--force-with-lease|\s-f\b))(?=.*\b(?:main|master)\b)"
+)
 
 
 def _project_root() -> Path:
@@ -43,6 +53,9 @@ def mark_known(path: str) -> None:
 
 def check(name: str, args: dict) -> str | None:
     """工具执行前校验。返回 None 放行，返回 str = 拒绝消息。"""
+    if name == "run_command":
+        return _check_command(args.get("command"))  # P1/P2
+
     path = args.get("path")
     if not isinstance(path, str) or not path:
         return None
@@ -87,4 +100,18 @@ def _check_read_before_edit(path: str) -> str | None:
             f"⛔ C10 拒绝：edit_file_lines 前必须先 read_file({path})。"
             "未读就按行号编辑是行号错位的头号原因。"
         )
+    return None
+
+
+def _check_command(command: str | None) -> str | None:
+    """P1/P2：在 run_command 边界拦危险 git 命令（确定模式，零判断）。"""
+    if not isinstance(command, str):
+        return None
+    if _GIT_ADD_ALL.search(command):
+        return (
+            "⛔ P1 拒绝：禁止 git add -A / git add . —— 只暂存具体文件"
+            "（git add <path> ...），避免卷入无关改动。"
+        )
+    if _GIT_FORCE_PUSH_MAIN.search(command):
+        return "⛔ P2 拒绝：禁止 force-push 到 main/master（会重写主干历史）。"
     return None

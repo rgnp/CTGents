@@ -37,11 +37,11 @@ tasks/            任务追踪（current.md + archive/）
 
 | # | 规则 | 违反即 |
 |---|------|--------|
-| C1 | **禁止裸 except** — 指定具体异常类型 | 代码审查 |
-| C2 | **禁止硬编码密钥** — 无 sk-/api_key/token/password 在源码 | grep 命中 |
+| C1 | **禁止裸 except** — 指定具体异常类型 | ruff E722 |
+| C2 | **禁止硬编码密钥** — 无 sk-/api_key/token/password 在源码 | pre-commit 密钥格式扫描（捕获 sk-/AKIA/ghp_ 等高熵格式；裸词 token/password 靠审查） |
 | C3 | **文件修改限 cwd** — `write_file`/`edit_file_lines`/`delete_file` 有代码级拦截 | `ValueError` |
-| C4 | **禁止输入拼接到 Shell** — `run_command` 不接受用户输入拼接 | grep `f"` |
-| C5 | **禁止存根** — 无 `pass`/`...`/`# TODO`/`NotImplementedError` 作实现 | grep 命中 |
+| C4 | **禁止输入拼接到 Shell** — `run_command` 不接受用户输入拼接 | 审查（无自动 grep：`f"` 满地，机械匹配高误报） |
+| C5 | **禁止存根** — 无 `pass`/`...`/`# TODO`/`NotImplementedError` 作实现 | 审查（无自动 grep：`...` 在 Protocol 合法，机械匹配会误伤自身） |
 | C6 | **公开函数有类型注解** — 非 `_` 前缀函数完整参数+返回类型 | ruff ANN |
 | C7 | **函数 ≤ 50 行** | ruff PLR0915 |
 | C8 | **禁止魔法数字** — 数字常量是模块级命名常量（0,1,-1,100 除外）。**可调旋钮**（阈值/比例/超时/权重/开关）放 `params.py` 对应域的 frozen dataclass、`CTG_*` env 可覆盖，模块绑定本地名；**结构性常量**（文件名/正则/扩展名表）留本模块。别往 config.py 堆——它只放密钥/模型/路径 | 审查 |
@@ -164,6 +164,9 @@ tasks/            任务追踪（current.md + archive/）
 | P9 | 生成或猜测 URL |
 | P10 | "Great!/Certainly!/Sure!/OK!" 开头 |
 | P11 | 代码注释里引用任务/PR/issue 编号 |
+
+> P1/P2 已由 `tools/tool_guard.py` 在 `run_command` 边界机械拦截（确定模式，不靠注意力）；
+> P3/P4 带"除非用户明确要求"条件，仍靠审查；其余见各条。
 
 ---
 

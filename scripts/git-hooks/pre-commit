@@ -51,6 +51,13 @@ trap restore_worktree EXIT
 
 echo "[pre-commit] 检测到 .py 改动，对【暂存快照】运行质量门禁……"
 
+# C2 密钥格式扫描：暂存的 .py 出现已知密钥格式即拒（只匹配高熵格式 sk-/AKIA/ghp_，
+# 不匹配 token/password 等裸词，避免误报）。stash 后工作树=暂存快照，直接 grep 这些文件。
+if echo "$staged_py" | xargs grep -nE 'sk-[A-Za-z0-9]{20,}|AKIA[0-9A-Z]{16}|gh[pousr]_[A-Za-z0-9]{30,}' 2>/dev/null; then
+    echo "[pre-commit] ⛔ C2：暂存的 .py 中检测到疑似硬编码密钥（见上行），提交被拒绝。"
+    exit 1
+fi
+
 if ! $PY -m ruff check src/ tests/; then
     echo "[pre-commit] ⛔ ruff check src/ tests/ 未通过，提交被拒绝。"
     exit 1
