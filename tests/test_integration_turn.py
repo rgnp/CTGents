@@ -140,3 +140,21 @@ def test_send_wellformed_no_orphan_tool(monkeypatch):
             seen.add(tc["id"])
         if m["role"] == "tool":
             assert m.get("tool_call_id") in seen, "孤儿 tool 消息 → API 会 400"
+
+
+# ── 思考牙：每轮常驻尾部、不累积 ──────────────────────────────
+
+def test_thinking_stance_rides_tail_once(monkeypatch):
+    """每轮恒挂一句"检索是线索不是答案"的提醒在 log 尾，多轮不累积。
+
+    同义 bullet 放 AGENTS.md 前缀实测翻不动复读（前缀离生成点太远），故这颗行为牙
+    必须挂尾靠 recency。strip-then-append 失灵则逐轮累积、撑爆尾部。
+    """
+    ctx = _prefix_ctx()
+    _mock_llm(monkeypatch, ("好", []), ("好", []))
+    _drive_turn(ctx, "随便说点")
+    _drive_turn(ctx, "再说点")
+    assert sum(1 for m in ctx.log if m.get("_thinking_stance")) == 1
+    api = ctx.send()
+    tail = "\n".join(m.get("content") or "" for m in api if m["role"] == "system")
+    assert "线索" in tail, "思考提醒必须出现在尾部系统块"

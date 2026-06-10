@@ -134,6 +134,28 @@ def _inject_citation_audit(ctx: CacheContext) -> None:
         )
 
 
+_THINKING_NUDGE = (
+    "[提醒] 检索 / recall / 读到的内容是线索，不是答案。"
+    "问方向 / 取舍 / \"怎么看\"时，先想清楚，给出你的判断 + 理由 + 你会怎么做，"
+    "别把搜到的摆出来让用户挑；问事实就直接答、不必长。"
+)
+
+
+def _inject_thinking_stance(ctx: CacheContext) -> None:
+    """每轮在 log 尾挂一句"检索命中是线索、不是答案"的常驻提醒（缓存安全）。
+
+    同义 bullet 放 AGENTS.md 前缀实测翻不动"复读"这一根深蒂固的默认（前缀离生成点
+    太远）；与 mem_signal / 两审计同理，行为引导必须挂 log 尾靠 recency 才生效。常驻
+    不设门——"这轮算不算开放问题"是判断、不可机械化（auto-plan 的坑）；措辞里的"问
+    事实就直接答"让它在事实/动作轮自我收敛。strip-then-append 防累积。
+    """
+    ctx.log[:] = [m for m in ctx.log if not m.get("_thinking_stance")]
+    ctx.log.append(
+        {"role": "system", "content": _THINKING_NUDGE,
+         "_volatile": True, "_thinking_stance": True}
+    )
+
+
 def process_turn(
     ctx: CacheContext,
     user_input: str,
@@ -150,6 +172,8 @@ def process_turn(
     """
     # 记忆信号用原始输入探测（预读包装前），命中挂尾部提示
     _inject_memory_signal(ctx, user_input)
+    # 思考牙：检索命中是线索不是答案，常驻挂尾（前缀劝不动复读，靠 recency 生效）
+    _inject_thinking_stance(ctx)
     # 预读优化：用户提到了文件路径，先读入上下文
     pre_msgs = _preread_files(user_input, ctx)
     if pre_msgs:
