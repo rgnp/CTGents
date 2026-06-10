@@ -167,3 +167,27 @@ def test_smoke_malformed_tool_args_handled(monkeypatch):
         m.get("role") == "tool" and m.get("tool_call_id") == "call_x"
         for m in ctx.log
     )
+
+
+def test_request_breaker_stops_runaway_loop(monkeypatch):
+    """LLM 永远回 tool_calls → 单轮请求数熔断生效，不再无限烧钱。
+
+    缝：docstring 曾声称"连续 3 轮无进展兜底熔断"但循环里没有任何对应逻辑，
+    唯一刹车是 95% token 上限（实测一场跑了 524 个请求 / 7980 万 prompt token）。
+    """
+    calls = {"n": 0}
+
+    def _always_tools(*_a, **_k):
+        calls["n"] += 1
+        return (None, [_tool_call("nonexistent_tool", {})])
+
+    monkeypatch.setattr(llm, "_invoke_llm", _always_tools)
+    monkeypatch.setattr(llm, "_MAX_REQUESTS_PER_TURN", 3)
+    out = llm.run_conversation(
+        _ctx(), "干活",
+        on_token=lambda _t: None,
+        on_tool=lambda *_a: None,
+        session_id="",
+    )
+    assert "熔断" in out
+    assert calls["n"] == 3, f"应恰好发 3 次请求后熔断，实际 {calls['n']}"

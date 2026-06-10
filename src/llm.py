@@ -501,6 +501,8 @@ def _invoke_llm(
 
 # 压缩阈值（字符数，约等于 token 数）——真值在 params.RUNTIME
 _TOOL_RESULT_COMPRESS_THRESHOLD = RUNTIME.tool_result_compress_threshold
+# 单轮请求数熔断——真值在 params.RUNTIME
+_MAX_REQUESTS_PER_TURN = RUNTIME.max_requests_per_turn
 
 
 def _compress_tool_result(tool_name: str, result: str) -> str:
@@ -892,7 +894,8 @@ def run_conversation(
     循环终止条件：
       1. LLM 返回无 tool_calls（自然完成）
       2. 上下文 token 超限
-      3. 连续 3 轮无用户可见进展（兜底熔断）
+      3. 单轮请求数达 _MAX_REQUESTS_PER_TURN（成本熔断）
+      4. 用户 Esc 中断
     """
     # ── 运行时守卫：防止误传 list[dict] 等错误类型 ──
     if not hasattr(ctx, "log") or not hasattr(ctx, "all"):
@@ -923,7 +926,14 @@ def run_conversation(
     backend = auto_select_model(user_input)
     logger.info("路由: '%s...' → %s", user_input[:30], backend.info.name)
 
+    requests_made = 0
     while True:
+        if requests_made >= _MAX_REQUESTS_PER_TURN:
+            return (
+                f"本轮已发出 {requests_made} 次 API 请求，达到熔断上限"
+                f"（CTG_MAX_REQUESTS_PER_TURN={_MAX_REQUESTS_PER_TURN}）。"
+                "已停止，请检查任务是否陷入循环，或拆小后继续。"
+            )
         used = count_messages_tokens(ctx.all)
         limit = int(MAX_CONTEXT_TOKENS * TOOL_LOOP_THRESHOLD)
         if used >= limit:
@@ -940,6 +950,7 @@ def run_conversation(
 
         try:
             content, tool_calls = _invoke_llm(backend, ctx.send(), on_token, session_id)
+            requests_made += 1
         except UserInterruptError:
             clear_interrupt()
             return "\n\n[⏹️ 已中断]"
