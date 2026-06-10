@@ -117,3 +117,38 @@ def test_strip_markers_have_producers():
         "strip 过滤的标记没有生产者（剥除空转 → 消息每轮堆积）:\n"
         + "\n".join(offenders)
     )
+
+
+# ── 死代码：return/raise 之后不得再有语句 ─────────────────────────
+
+def _iter_stmt_lists(tree: ast.AST):
+    """遍历所有语句块（函数体/if/for/while/try 的 body、orelse、finalbody）。"""
+    for node in ast.walk(tree):
+        for attr in ("body", "orelse", "finalbody"):
+            stmts = getattr(node, attr, None)
+            if isinstance(stmts, list) and stmts and isinstance(stmts[0], ast.stmt):
+                yield stmts
+
+
+def test_no_unreachable_code_after_return():
+    """同一语句块内 return/raise 之后不得再有语句（必然不可达）。
+
+    踩过的坑（同一次提交 c5d5dbc 的粘贴事故，两处）：archive_current 的
+    return 之后粘进了别的函数尾巴 → 归档静默坏死；load_session 的 return
+    之后挂着 reflect_on_session 调用 → 被动进化反思整层从未运行
+    （stats/ 零 reflection 文件）。粘贴病是一类，AST 一条断言顶一类。
+    """
+    offenders: list[str] = []
+    for f in _src_py_files():
+        tree = ast.parse(f.read_text(encoding="utf-8"))
+        for stmts in _iter_stmt_lists(tree):
+            for i, stmt in enumerate(stmts[:-1]):
+                if isinstance(stmt, (ast.Return, ast.Raise)):
+                    offenders.append(
+                        f"{f.relative_to(_ROOT)}:{stmts[i + 1].lineno} "
+                        f"return/raise 之后存在不可达语句"
+                    )
+    assert not offenders, (
+        "发现 return/raise 后的不可达代码（粘贴事故惯犯，机制会静默死亡）:\n"
+        + "\n".join(offenders)
+    )

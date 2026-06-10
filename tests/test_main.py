@@ -49,3 +49,53 @@ def test_mechanisms_message_covers_every_injector():
     # 两个被 agent 否认过/重造过的审计机制必须在册
     assert "_inject_completion_audit" in content
     assert "_inject_citation_audit" in content
+
+
+# ── C16 缝：会话收尾必须触发反思（被动进化分析层的唯一写入口） ──
+
+def test_finalize_session_triggers_reflection(monkeypatch):
+    """有 assistant 回复 → 保存 + reflect_on_session(以保存后的 id 调用)。
+
+    缝：reflect 调用曾挂在 load_session 的 return 之后(不可达)，整层分析
+    管线静默死亡数日(stats/ 零 reflection 文件)。锁住"收尾必反思"接线。
+    """
+    import src.tracker as tracker
+    from src.cache_context import CacheContext
+
+    calls: list[str] = []
+    monkeypatch.setattr(main, "save_session", lambda msgs, sid: "sid-123")
+    monkeypatch.setattr(tracker, "reflect_on_session",
+                        lambda sid: calls.append(sid) or None)
+    ctx = CacheContext(log_msgs=[{"role": "user", "content": "嗨"},
+                                 {"role": "assistant", "content": "好"}])
+    lines = main._finalize_session(ctx, None)
+    assert calls == ["sid-123"], "收尾必须以保存后的 session_id 触发反思"
+    assert any("会话已保存" in ln for ln in lines)
+
+
+def test_finalize_session_skips_empty(monkeypatch):
+    """无 assistant 回复 → 不保存也不反思（空会话不落盘）。"""
+    import src.tracker as tracker
+    from src.cache_context import CacheContext
+
+    monkeypatch.setattr(main, "save_session",
+                        lambda *a: (_ for _ in ()).throw(AssertionError("不应保存")))
+    monkeypatch.setattr(tracker, "reflect_on_session",
+                        lambda sid: (_ for _ in ()).throw(AssertionError("不应反思")))
+    ctx = CacheContext(log_msgs=[{"role": "user", "content": "嗨"}])
+    lines = main._finalize_session(ctx, None)
+    assert not any("会话已保存" in ln for ln in lines)
+
+
+def test_finalize_session_reflect_failure_not_blocking(monkeypatch):
+    """反思抛异常 → 不阻塞退出，保存行仍在。"""
+    import src.tracker as tracker
+    from src.cache_context import CacheContext
+
+    monkeypatch.setattr(main, "save_session", lambda msgs, sid: "sid-9")
+    monkeypatch.setattr(tracker, "reflect_on_session",
+                        lambda sid: (_ for _ in ()).throw(OSError("disk")))
+    ctx = CacheContext(log_msgs=[{"role": "assistant", "content": "好"}])
+    lines = main._finalize_session(ctx, None)
+    assert any("会话已保存" in ln for ln in lines)
+    assert any("退出" in ln for ln in lines)

@@ -365,6 +365,33 @@ def _reload_dispatch():
 
 # ── 主入口 ──
 
+def _finalize_session(ctx: CacheContext, session_id: str | None) -> list[str]:
+    """会话收尾：有回复才落盘 → 会话后反思 → durable 钉板转存。返回待打印行。
+
+    反思(tracker.reflect_on_session,被动进化分析层的唯一写入口)在此接线——
+    曾挂在 load_session 的 return 之后(不可达)，整层分析管线静默死亡，
+    stats/ 下 0 个 reflection 文件实证。反思失败不阻塞退出。
+    """
+    lines: list[str] = []
+    # 只有存在至少一条 assistant 回复时才保存（避免网络错误等空会话落盘）
+    if any(m["role"] == "assistant" for m in ctx.all):
+        session_id = save_session(ctx.all, session_id)
+        lines.append(f"会话已保存: [{session_id}]")
+        try:
+            from .tracker import reflect_on_session
+            if reflect_on_session(session_id):
+                lines.append("已写入会话反思（异常发现将在下次启动注入）。")
+        except Exception as e:
+            logger.warning("会话反思失败（不阻塞退出）: %s", e)
+    # 把 durable 钉板转存进记忆（会话内不漂 → 新会话可 recall）
+    from .session_pins import promote_durable
+    promoted = promote_durable()
+    if promoted:
+        lines.append(f"已把 {promoted} 条耐久 pin 转存进记忆。")
+    lines.append("退出")
+    return lines
+
+
 def _ensure_git_hooks() -> None:
     """幂等确保 core.hooksPath 指向版本管理的钩子，堵掉"克隆后没钩子"。绝不阻塞启动。"""
     try:
@@ -538,17 +565,8 @@ def main() -> None:
                 if should_break:
                     break
     finally:
-        # 只有存在至少一条 assistant 回复时才保存（避免网络错误等空会话落盘）
-        has_response = any(m["role"] == "assistant" for m in ctx.all)
-        if has_response:
-            session_id = save_session(ctx.all, session_id)
-            print(f"会话已保存: [{session_id}]")
-        # 会话结束：把 durable 钉板转存进记忆（会话内不漂 → 新会话可 recall）
-        from .session_pins import promote_durable
-        promoted = promote_durable()
-        if promoted:
-            print(f"已把 {promoted} 条耐久 pin 转存进记忆。")
-        print("退出")
+        for line in _finalize_session(ctx, session_id):
+            print(line)
 
 
 if __name__ == "__main__":
