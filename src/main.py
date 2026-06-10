@@ -72,6 +72,29 @@ def _make_agents_message() -> dict:
     return {"role": "system", "content": content, "_volatile": True}
 
 
+def _make_mechanisms_message() -> dict:
+    """自动派生「每轮注入的运行时机制」索引，放进缓存前缀——给 agent 环境级自我认知，
+    不再对自身架构失忆/编造（曾否认 completion_audit 存在、重造已有机制）。
+
+    内省本模块向 log 注入的非工具机制（_inject_* / _append_volatile_context），取名
+    + docstring 首行 → 随代码自动增删，不像手维护的 SYSTEM_MAP 会悄悄烂。只在代码变时
+    才变 → 进前缀对缓存命中无损（不像挂尾的记忆索引每轮重算）。
+    """
+    import inspect
+    g = globals()
+    names = sorted(n for n in g if n.startswith("_inject_") or n == "_append_volatile_context")
+    lines = ["## 你每轮自动注入的运行时机制（自动派生自 main.py，这些确实在跑，不是设想）", ""]
+    for n in names:
+        doc = (inspect.getdoc(g[n]) or "").splitlines()
+        lines.append(f"- `{n}`：{doc[0] if doc else '(无说明)'}")
+    return {"role": "system", "content": "\n".join(lines), "_volatile": True}
+
+
+def _make_prefix_msgs() -> list[dict]:
+    """缓存前缀的不可变系统消息：AGENTS.md（手册）+ 自动派生的运行时机制索引。"""
+    return [_make_agents_message(), _make_mechanisms_message()]
+
+
 def _append_volatile_context(ctx: CacheContext) -> None:
     """注入 volatile 上下文：记忆 + 未完成长任务 + 会话钉板（均缓存安全，挂在 log 尾）。"""
     mem_ctx = _make_memory_context()
@@ -380,9 +403,7 @@ def main() -> None:
     # 构建 CacheContext：不可变 prefix + 追加 log
     if ctx is None:
         ctx = CacheContext()
-    prefix_msgs = []
-    prefix_msgs.append(_make_agents_message())
-    ctx.rebuild_prefix(prefix_msgs)
+    ctx.rebuild_prefix(_make_prefix_msgs())
     # ── volatile 系统消息（log 末尾，仅追加不修改） ──
     _append_volatile_context(ctx)
 
@@ -438,9 +459,7 @@ def main() -> None:
                 if r.clear:
                     ctx.clear_log()
                     # 重建 prefix 并追加 volatile 上下文（与 session start 一致）
-                    prefix_msgs = []
-                    prefix_msgs.append(_make_agents_message())
-                    ctx.rebuild_prefix(prefix_msgs)
+                    ctx.rebuild_prefix(_make_prefix_msgs())
                     if r.save:   # /new: 同时重置 session + 清空会话钉板
                         session_id = None
                         from .session_pins import clear_pins
