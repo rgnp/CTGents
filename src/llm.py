@@ -538,18 +538,6 @@ def _compress_tool_result(tool_name: str, result: str) -> str:
 # 上下文/压缩旋钮统一定义在 params.CONTEXT；此处绑定本地名，保持模块内引用与可 monkeypatch。
 _COMPACT_THRESHOLD = CONTEXT.compact_threshold          # 滑窗压缩触发比例
 _COMPACT_KEEP_RATIO = CONTEXT.compact_keep_ratio        # 压缩后保留最近 N% 消息
-# 话题切换关键词（检测到后追加边界标记）
-_TOPIC_SWITCH_KEYWORDS = [
-    "换个", "换一", "不谈", "不说", "跳过", "算了",
-    "下一个", "新的", "另外", "不管", "再看",
-    "topic", "switch", "next", "another", "skip",
-]
-
-
-def _is_topic_switch(user_input: str) -> bool:
-    """检测用户输入是否包含换话题信号。"""
-    text = user_input.lower().strip()
-    return any(kw.lower() in text for kw in _TOPIC_SWITCH_KEYWORDS)
 
 
 def _compact_context(ctx, user_input: str, force: bool = False):
@@ -574,7 +562,8 @@ def _compact_cache_context(ctx, user_input: str, force: bool = False) -> None:
     """滑窗压缩：超阈值时驱旧消息，替换为摘要。
 
     固定前缀保持不变（保障 DeepSeek 缓存命中）。
-    log 区旧消息被摘要替代，释放空间供新对话继续。
+    驱逐边界前推到 user 消息开头——绝不切断 assistant(tool_calls) 与其
+    tool 结果的配对（孤儿 tool 消息会被 API 以 400 拒收）。
     force=True 时无视 65% 门槛，直接压缩（手动 /compact）。
     """
     from .tools.tokens import count_messages_tokens
@@ -588,24 +577,16 @@ def _compact_cache_context(ctx, user_input: str, force: bool = False) -> None:
     used = count_messages_tokens(all_msgs)
     limit = MAX_CONTEXT_TOKENS * _COMPACT_THRESHOLD
 
-    if not force and used < limit and not _is_topic_switch(user_input):
+    if not force and used < limit:
         return  # 不需要压缩
 
-    # ── 话题切换：加标记，不驱旧 ──
-    if _is_topic_switch(user_input):
-        brief = _make_brief_summary(log, max_len=200)
-        if brief:
-            log.append({
-                "role": "system",
-                "content": f"⏪ 前一话题已结束。{brief}",
-            })
-            logger.info("话题切换：标记边界（log 共 %d 条）", len(log))
-        return
-
-    # ── 滑窗压缩：驱旧消息 ──
-    keep_start = int(len(log) * _COMPACT_KEEP_RATIO)
-    if keep_start < 2:
-        return  # log 太短，不压缩
+    # ── 滑窗压缩：驱逐最旧 (1-keep_ratio) 的消息（对齐 keep_ratio=保留比例的语义）──
+    keep_start = int(len(log) * (1 - _COMPACT_KEEP_RATIO))
+    # 边界前推到 user 消息开头：保留区必须从一轮的起点开始，tool 配对才完整
+    while keep_start < len(log) and log[keep_start].get("role") != "user":
+        keep_start += 1
+    if keep_start < 2 or keep_start >= len(log):
+        return  # log 太短或找不到安全边界，不压缩
 
     evicted = log[:keep_start]
     kept = log[keep_start:]
@@ -630,8 +611,8 @@ def _compact_cache_context(ctx, user_input: str, force: bool = False) -> None:
     ctx.log.clear()
     ctx.log.extend(new_log)
     logger.info(
-        "滑窗压缩：驱 %d 条旧消息，保留 %d 条（释放约 %d%% 空间）",
-        len(evicted), len(kept), int((1 - _COMPACT_KEEP_RATIO) * 100),
+        "滑窗压缩：驱 %d 条旧消息，保留 %d 条",
+        len(evicted), len(kept),
     )
 
 

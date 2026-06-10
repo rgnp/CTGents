@@ -23,25 +23,50 @@ class TestCompactContext:
         ]
         assert len(_compact_context(msgs, "继续")) == 3
 
-    def test_topic_switch_adds_boundary(self):
-        msgs = [
-            {"role": "system", "content": "规则"},
-            {"role": "user", "content": "旧话题"},
-            {"role": "assistant", "content": "旧回答"},
-        ]
-        result = _compact_context(msgs, "换个话题")
-        assert len(result) >= 4  # 话题切换追加边界标记
-        assert any("前一话题已结束" in m.get("content", "") for m in result)
+    def test_topic_keywords_do_not_block_compaction(self):
+        """含"算了/换个"等口语词的输入照常压缩——关键词换话题机制已删除。
 
-    def test_regular_topic_no_boundary(self):
-        """非话题切换 + 短上下文 → 消息数不变。"""
-        msgs = [
-            {"role": "system", "content": "规则"},
-            {"role": "user", "content": "继续讨论同一个话题"},
-            {"role": "assistant", "content": "好的"},
-        ]
-        result = _compact_context(msgs, "继续讨论同一个话题")
-        assert len(result) == 3  # 短上下文无操作
+        旧实现：超阈值时若输入命中子串关键词，只加标记不驱逐 → 该压不压、
+        上下文继续膨胀；且子串匹配是机械化判断题（auto-plan 同病）。
+        """
+        big = "X" * 300000
+        msgs = [{"role": "system", "content": "规则"}]
+        for i in range(5):
+            msgs.append({"role": "user", "content": f"问题{i} " + big})
+            msgs.append({"role": "assistant", "content": f"回答{i} " + big})
+        result = _compact_context(msgs, "算了，换个话题")
+        assert len(result) < len(msgs), "命中口语关键词也必须正常驱逐"
+        assert not any("前一话题已结束" in m.get("content", "") for m in result)
+
+    def test_eviction_never_orphans_tool_messages(self):
+        """驱逐边界对齐 user 消息开头：保留区不得以 tool/assistant 起头。
+
+        孤儿 tool 消息（前面没有对应 assistant tool_calls）会被 API 400 拒收。
+        旧实现按比例硬切，边界可落在 assistant(tool_calls) 与 tool 结果之间。
+        """
+        big = "Y" * 60000
+        msgs = [{"role": "system", "content": "规则"}]
+        for i in range(8):
+            msgs.append({"role": "user", "content": f"任务{i} " + big})
+            msgs.append({"role": "assistant", "content": None,
+                         "tool_calls": [{"id": f"c{i}", "type": "function",
+                                         "function": {"name": "t", "arguments": "{}"}}]})
+            msgs.append({"role": "tool", "tool_call_id": f"c{i}", "content": big[:50]})
+            msgs.append({"role": "assistant", "content": f"结果{i}"})
+        result = _compact_context(msgs, "继续", force=True)
+        assert len(result) < len(msgs)
+        # 保留区第一条非 system 消息必须是 user（一轮的起点）
+        non_system = [m for m in result if m.get("role") != "system"]
+        assert non_system[0]["role"] == "user", (
+            f"保留区以 {non_system[0]['role']} 起头，tool 配对可能被切断"
+        )
+        # 每条 tool 消息都必须有前置的 assistant tool_calls 配对
+        ids_seen: set[str] = set()
+        for m in result:
+            for tc in m.get("tool_calls") or []:
+                ids_seen.add(tc["id"])
+            if m.get("role") == "tool":
+                assert m["tool_call_id"] in ids_seen, "孤儿 tool 消息（API 会 400）"
 
     def test_large_context_evicts_old_messages(self):
         """大型上下文触发滑窗压缩：旧消息被驱替为摘要，总数减少。"""
