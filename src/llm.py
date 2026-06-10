@@ -901,6 +901,12 @@ def run_conversation(
             f"但收到了 {type(ctx).__name__}。"
             f"请确认传入了 CacheContext 而非 list[dict]。"
         )
+    # ── 每轮刷新 volatile 上下文（strip-then-append，缓存安全挂尾） ──
+    ctx.log[:] = [m for m in ctx.log if not m.get("_task_ctx")]
+    from .tasks import make_task_context_message
+    task_ctx = make_task_context_message()
+    if task_ctx:
+        ctx.log.append(task_ctx)
     # 追加用户输入到 log（prefix 不变）
     ctx.log.append({"role": "user", "content": user_input})
 

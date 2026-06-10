@@ -34,6 +34,7 @@ def has_unfinished() -> bool:
     text = read_current()
     return bool(text) and any(marker in text for marker in _UNFINISHED_MARKERS)
 
+
 def make_task_context_message() -> dict | None:
     """生成 volatile 上下文消息：未完成长任务 + 被动进化反思（如有）。"""
     parts: list[str] = []
@@ -70,6 +71,7 @@ def make_task_context_message() -> dict | None:
         return None
     return {"role": "system", "content": "\n\n".join(parts), "_volatile": True}
 
+
 def _derive_slug(text: str) -> str:
     """从首个 Markdown 标题派生归档用 slug；取不到用 fallback。"""
     for line in text.splitlines():
@@ -81,7 +83,6 @@ def _derive_slug(text: str) -> str:
 
 
 def archive_current(slug: str = "") -> str:
-    """把 current.md 移入 archive/<日期>-<slug>.md 并清空 current.md。"""
     text = read_current()
     if not text:
         return "current.md 为空，无可归档。"
