@@ -133,8 +133,9 @@ class MemoryParams:
 
     # 排序后最多返回几条
     recall_top_k: int = _env_int("CTG_MEMORY_RECALL_TOP_K", 5)
-    # 低于此分的记忆不返回(默认 0 = 只要命中任一 token 就算)
-    recall_min_score: float = _env_float("CTG_MEMORY_RECALL_MIN_SCORE", 0.0)
+    # 低于此分的记忆不返回(>1 = 滤掉只撞单个 body token 的灰尘命中;
+    # 跨库索引 archive 后噪音变多,抬离 0。注:地板治不了高分词汇撞库,那是 token 重叠固有限制)
+    recall_min_score: float = _env_float("CTG_MEMORY_RECALL_MIN_SCORE", 1.0)
     # 命中字段权重:name > description > body
     weight_name: float = _env_float("CTG_MEMORY_WEIGHT_NAME", 3.0)
     weight_desc: float = _env_float("CTG_MEMORY_WEIGHT_DESC", 2.0)

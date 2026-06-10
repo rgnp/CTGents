@@ -46,6 +46,8 @@ TOKEN_PER_CHAR: float = RUNTIME.token_per_char
 # ── 路径 ──
 SESSION_DIR: str = str(Path(__file__).parent.parent / "sessions")
 MEMORY_DIR: str = str(Path(__file__).parent.parent / "memory")
+# 任务归档:架构教训多写在这里。recall 也索引它，否则它对检索是"只写不读的坟场"。
+ARCHIVE_DIR: str = str(Path(__file__).parent.parent / "tasks" / "archive")
 
 # 客户端（模块级单例，惰性初始化）
 _tavily_client: TavilyClient | None = None

@@ -13,8 +13,13 @@ from src.tools import memory
 
 @pytest.fixture
 def mem(tmp_path, monkeypatch):
-    """把记忆目录重定向到 tmp，并重置模块级索引缓存，避免污染真实记忆。"""
+    """把记忆目录重定向到 tmp，并重置模块级索引缓存，避免污染真实记忆。
+
+    ARCHIVE_DIR 默认指向不存在的 tmp 子目录 → recall 跳过归档库，隔离真实 tasks/archive；
+    需要测跨库召回的用例自行重指（见 test_recall_surfaces_archive_lessons）。
+    """
     monkeypatch.setattr(memory, "MEMORY_DIR", str(tmp_path))
+    monkeypatch.setattr(memory, "ARCHIVE_DIR", str(tmp_path / "_noarchive"))
     monkeypatch.setattr(memory, "_context_cache", None)
     monkeypatch.setattr(memory, "_context_dirty", True)
     return memory
@@ -132,3 +137,26 @@ def test_recall_ignores_frontmatter_structure_words(mem):
     mem.execute("remember", {"name": "zzz", "content": "纯净中文内容", "type": "knowledge"})
     assert "未找到" in mem.execute("recall", {"query": "metadata"})
     assert "未找到" in mem.execute("recall", {"query": "ad"})  # 'ad' ∈ 'metadata' 不算
+
+
+# ── C16 缝:recall 跨库索引 tasks/archive ──────────────────────
+
+def test_recall_surfaces_archive_lessons(mem, tmp_path, monkeypatch):
+    """跨库召回:archive 里无 frontmatter 的归档教训也能被 recall 命中,标 [task]。
+
+    缝:架构教训写在 tasks/archive(无 frontmatter),只索引 memory/ 会让它们对检索
+    成"只写不读的坟场"(agent 曾因 recall 捞不到而重造已存在的机制)。
+    """
+    archive = tmp_path / "archive"
+    archive.mkdir()
+    (archive / "2026-01-01-zxqv-audit.md").write_text(
+        "# zxqv 审计 — 已完成\n落地: src/zxqv_audit.py。教训: zxqv 机制已存在,别重造。\n",
+        encoding="utf-8")
+    monkeypatch.setattr(memory, "ARCHIVE_DIR", str(archive))
+    out = memory.execute("recall", {"query": "zxqv 审计 机制"})
+    assert "zxqv-audit" in out and "[task]" in out
+
+
+def test_recall_skips_archive_when_absent(mem):
+    """归档目录不存在(新克隆/隔离)时 recall 不报错,只搜 memory/。"""
+    assert "未找到" in memory.execute("recall", {"query": "zxqv-no-such"})

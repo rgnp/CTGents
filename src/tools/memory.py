@@ -4,7 +4,7 @@ import re
 from datetime import UTC, datetime
 from pathlib import Path
 
-from ..config import MEMORY_DIR
+from ..config import ARCHIVE_DIR, MEMORY_DIR
 from ..params import MEMORY as _PARAMS
 
 # recall 片段长度(结构性常量,留本模块)。
@@ -284,15 +284,14 @@ def _score_memory(q_tokens: set[str], q_lower: str,
     return score
 
 
-def _recall(query: str) -> str:
-    """搜索记忆:分词加权打分 → 相关度排序 → top-K(换说法也能命中)。"""
-    d = _dir()
-    q_lower = query.lower().strip()
-    q_tokens = _tokenize(query)
-    scored: list[tuple[float, str, str, str, str]] = []  # (score, updated, name, type, snippet)
-
-    for f in sorted(d.glob("*.md")):
-        if f.name == "MEMORY.md":
+def _scan_into(directory: Path, q_tokens: set[str], q_lower: str,
+               default_type: str, skip_index: bool,
+               scored: list[tuple[float, str, str, str, str]]) -> None:
+    """给一个目录下的 *.md 打分,命中的累加进 scored。archive 文件无 frontmatter
+    → name=文件名、type 取 default_type,照样可召回(治"只写不读的坟场")。
+    """
+    for f in sorted(directory.glob("*.md")):
+        if skip_index and f.name == "MEMORY.md":
             continue
         try:
             full = f.read_text(encoding="utf-8")
@@ -304,7 +303,23 @@ def _recall(query: str) -> str:
         if s <= _PARAMS.recall_min_score:
             continue
         snippet = body[:_SNIPPET_CHARS].replace("\n", " ")
-        scored.append((s, meta.get("updated", ""), f.stem, meta.get("type", ""), snippet))
+        scored.append((s, meta.get("updated", ""), f.stem,
+                       meta.get("type", "") or default_type, snippet))
+
+
+def _recall(query: str) -> str:
+    """搜索记忆 + 任务归档:分词加权打分 → 相关度排序 → top-K(换说法也能命中)。
+
+    跨 memory/(个人增量)与 tasks/archive/(过往任务的架构教训)两库——教训多写在
+    归档里,只索引 memory 会让它们对检索成"只写不读的坟场"(agent 曾因此重造已有机制)。
+    """
+    q_lower = query.lower().strip()
+    q_tokens = _tokenize(query)
+    scored: list[tuple[float, str, str, str, str]] = []  # (score, updated, name, type, snippet)
+    _scan_into(_dir(), q_tokens, q_lower, "", True, scored)
+    archive = Path(ARCHIVE_DIR)
+    if archive.is_dir():
+        _scan_into(archive, q_tokens, q_lower, "task", False, scored)
 
     if not scored:
         return f"未找到与「{query}」相关的记忆。"
