@@ -122,3 +122,65 @@ def test_only_final_reply_scanned():
         _reply("处理完毕。"),  # 最终回复无引用
     ]
     assert audit_citations(log) is None
+
+
+# ── 标识符级取证（agent 谈论自身架构的可检查片） ──────────────
+
+def test_fabricated_identifier_nudges():
+    """代码体引用上下文里从没出现过的标识符 → 报（曾凭印象整段描述机制）。"""
+    out = audit_citations([_reply("这个由 `_phantom_audit_loop` 兜底处理。")])
+    assert out is not None
+    assert "_phantom_audit_loop" in out
+    assert "新提议" in out, "措辞必须给'新提议的命名'留判断出口"
+
+
+def test_identifier_grounded_via_tool_result():
+    log = [
+        _tool_result("c1", "grep_code", "src/main.py:8: def _finalize_session(...)"),
+        _reply("收尾走 `_finalize_session`。"),
+    ]
+    assert audit_citations(log) is None
+
+
+def test_identifier_grounded_via_system_message():
+    """前缀/挂尾的 system 消息（派生机制索引等）是合法取证源 → 不报。"""
+    log = [
+        {"role": "system", "content": "## 运行时机制\n- `_inject_completion_audit`：收尾取证"},
+        _reply("我们有 `_inject_completion_audit` 这层，而且 `completion_audit` 挂尾生效。"),
+    ]
+    assert audit_citations(log) is None
+
+
+def test_tool_name_mention_not_flagged():
+    """注册工具名（schema 每轮可见）→ 天然 grounded，不报。"""
+    assert audit_citations([_reply("我会用 `read_file` 和 `edit_file_lines` 来改。")]) is None
+
+
+def test_plain_word_and_dunder_not_audited():
+    """无下划线的泛词（`recall`）和 dunder（`__init__`）不抓——precision 边界。"""
+    assert audit_citations([_reply("可以用 `recall` 搜，`__init__` 里初始化。")]) is None
+
+
+def test_bare_py_filename_in_backticks_audited():
+    """反引号里的 *.py 是刻意代码引用 → 没见过就报（裸文本文件名仍放过）。"""
+    out = audit_citations([_reply("逻辑都在 `ghost_module.py` 里。")])
+    assert out is not None
+    assert "ghost_module.py" in out
+
+
+def test_identifier_via_tool_call_name_grounded():
+    """本轮调过的工具名出现在 tool_calls 里 → grounded。"""
+    log = [
+        {"role": "assistant", "content": "", "tool_calls": [
+            {"id": "c9", "function": {"name": "storm_check_x", "arguments": "{}"}}]},
+        _tool_result("c9", "storm_check_x", "ok"),
+        _reply("刚才 `storm_check_x` 返回 ok。"),
+    ]
+    assert audit_citations(log) is None
+
+
+def test_paths_and_identifiers_both_reported():
+    """两类各自成段，可同时触发。"""
+    out = audit_citations([_reply("在 ghost.py:7，由 `_phantom_hook` 调用。")])
+    assert out is not None
+    assert "ghost.py" in out and "_phantom_hook" in out

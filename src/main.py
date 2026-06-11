@@ -127,14 +127,16 @@ def _inject_completion_audit(ctx: CacheContext) -> None:
 
 
 def _inject_citation_audit(ctx: CacheContext) -> None:
-    """引用即取证：剥上一轮的提示，若最终回复引用了没取证过的代码文件则挂尾提示。
+    """引用即取证：剥上一轮的提示，若最终回复引用了没取证过的代码文件/标识符则挂尾提示。
 
-    治"编造"的可检查片：引用 path:line 却全程没碰过该文件 → 很可能凭印象编的。
-    事实（引用 vs 工具活动）机械供给，"是不是真编了"留给 agent；只扫最终回复 → 每轮刷新。
+    治"编造"的可检查片：引用 path:line 或代码体提及 `标识符` 却全程没在上下文见过
+    → 很可能凭印象编的。事实（引用 vs 可见上下文）机械供给，"是不是真编了"留给
+    agent；只扫最终回复 → 每轮刷新。传 prefix+log：前缀的派生机制索引/AGENTS.md
+    是合法取证源，按索引谈论自身机制不误报。
     """
     ctx.log[:] = [m for m in ctx.log if not m.get("_citation_audit")]
     from .citation_audit import audit_citations
-    nudge = audit_citations(ctx.log)
+    nudge = audit_citations(ctx.prefix + ctx.log)
     if nudge:
         ctx.log.append(
             {"role": "system", "content": nudge, "_volatile": True, "_citation_audit": True}
