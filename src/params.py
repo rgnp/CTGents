@@ -149,3 +149,18 @@ class MemoryParams:
 
 
 MEMORY = MemoryParams()
+
+
+@dataclass(frozen=True)
+class OutcomeParams:
+    """任务闭环(目标-标准-评分-修订)旋钮;评分 prompt 等结构性细节留 outcome.py。"""
+
+    # 最多迭代几轮(worker 交付 + 评分 算一轮)
+    max_iterations: int = _env_int("CTG_OUTCOME_MAX_ITERATIONS", 3)
+    # 评分调用网络失败重试次数
+    grader_retries: int = _env_int("CTG_OUTCOME_GRADER_RETRIES", 2)
+    # 评分重试退避基数(秒)
+    grader_retry_delay: float = _env_float("CTG_OUTCOME_GRADER_RETRY_DELAY", 1.0)
+
+
+OUTCOME = OutcomeParams()
