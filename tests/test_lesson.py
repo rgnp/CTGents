@@ -195,14 +195,22 @@ def test_extract_lessons_multi_fingerprint():
 # 注入引擎
 # ═══════════════════════════════════════════════════════════════
 
-def test_inject_lesson_context_no_match_noop():
+def test_inject_lesson_context_no_match_noop(tmp_path, monkeypatch):
     """没有匹配的教训时，不向 log 追加任何消息。"""
+    import src.config as cfg
+    import src.lesson as lesson_mod
+    monkeypatch.setattr(cfg, "MEMORY_DIR", str(tmp_path))
+    monkeypatch.setattr(lesson_mod, "MEMORY_DIR", str(tmp_path), raising=False)
     log: list[dict] = []
     inject_lesson_context(log, "write_file", {"path": "tests/unknown.py"})
-    assert len(log) == 0  # no strategy memories exist yet → no match
+    assert len(log) == 0
 
 
-def test_match_lessons_no_memories():
+def test_match_lessons_no_memories(tmp_path, monkeypatch):
+    import src.config as cfg
+    import src.lesson as lesson_mod
+    monkeypatch.setattr(cfg, "MEMORY_DIR", str(tmp_path))
+    monkeypatch.setattr(lesson_mod, "MEMORY_DIR", str(tmp_path), raising=False)
     assert match_lessons_for_action("write_file src/llm.py") == []
     assert match_lessons_for_action("") == []
 
