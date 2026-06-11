@@ -100,3 +100,23 @@ class TestDispatch:
         assert r.save is True
         assert "runner" in r.message
         assert runner.load_active_evolution_run() is not None
+
+
+class TestGoalCommand:
+    """/goal 指令:只收文本递给 main,缺标准给用法提示。"""
+
+    def setup_method(self):
+        from src.cache_context import CacheContext
+        self.ctx = CacheContext()
+
+    def test_goal_sets_field(self):
+        import src.commands as cmds
+        r = cmds.dispatch("/goal 写文档 || 含示例 | 100字以上", self.ctx, None)
+        assert r.goal == "写文档 || 含示例 | 100字以上"
+        assert not r.message
+
+    def test_goal_without_criteria_shows_usage(self):
+        import src.commands as cmds
+        r = cmds.dispatch("/goal 只有目标", self.ctx, None)
+        assert not r.goal
+        assert "用法" in r.message and "标准" in r.message

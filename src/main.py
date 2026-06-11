@@ -199,6 +199,38 @@ def process_turn(
     return reply
 
 
+def _handle_goal(ctx: CacheContext, goal_text: str, session_id: str | None) -> str | None:
+    """驱动一次任务闭环(/goal):worker 走真实 process_turn 管线,评分隔离在 outcome。
+
+    返回更新后的 session_id。与 r.retry 同模式:指令层只递文本,循环在这里驱动。
+    """
+    from .outcome import parse_goal, run_outcome
+    spec = parse_goal(goal_text)
+    if spec is None:
+        print("用法: /goal 目标 || 标准1 | 标准2 [>> 交付文件路径](标准不可省略)")
+        return session_id
+    sid = [session_id]
+
+    def drive(c, text: str) -> str:
+        on_token, has_output = _make_display()
+        reply = process_turn(
+            c, text, on_token, _on_tool,
+            on_progress=lambda: sid.__setitem__(0, save_session(c.all, sid[0])),
+            session_id=sid[0] or "",
+        )
+        if has_output():
+            print()
+        return reply
+
+    _start_esc_listener()
+    try:
+        result = run_outcome(ctx, spec, drive, on_status=lambda s: print(f"\n{s}"))
+        print(f"\n[任务闭环结束] 达标={result.satisfied} 轮数={result.iterations}")
+    finally:
+        _stop_esc_listener()
+    return sid[0]
+
+
 # ── UI 辅助 ──
 
 def _print_sessions(sessions: list[str]) -> None:
@@ -478,6 +510,9 @@ def main() -> None:
                         from .session_pins import clear_pins
                         clear_pins()
                     _append_volatile_context(ctx)
+                if r.goal:
+                    session_id = _handle_goal(ctx, r.goal, session_id)
+                    continue
                 if r.retry:
                     last_user = ctx.last_user_content() or ""
                     if last_user:

@@ -153,3 +153,54 @@ def test_thinking_stance_rides_tail_once(monkeypatch):
     api = ctx.send()
     tail = "\n".join(m.get("content") or "" for m in api if m["role"] == "system")
     assert "线索" in tail, "思考提醒必须出现在尾部系统块"
+
+
+# ── 任务闭环:worker 走真实管线,评分隔离,差距回灌 ─────────────
+
+def test_goal_loop_full_pipeline(monkeypatch):
+    """两轮闭环端到端:首轮评分未过 → 差距回灌 → 二轮过;前缀全程不碰坏。
+
+    worker 走真实 process_turn(只 mock _invoke_llm);评分走真实 grade()
+    (只 mock backend.chat_non_stream)——解析/隔离/回灌全是真代码。
+    """
+    import json as _json
+
+    from src.outcome import OutcomeSpec, run_outcome
+
+    ctx = _prefix_ctx()
+    before_hash = ctx.prefix_hash
+    _mock_llm(monkeypatch, ("初稿:概述一下。", []), ("修订稿:概述+示例代码。", []))
+
+    grade_payloads: list[str] = []
+    grades = iter([
+        _json.dumps({"criteria": [{"criterion": "含示例", "pass": False, "gap": "没有示例"}],
+                     "satisfied": False, "summary": "缺示例"}, ensure_ascii=False),
+        _json.dumps({"criteria": [{"criterion": "含示例", "pass": True, "gap": ""}],
+                     "satisfied": True, "summary": "达标"}, ensure_ascii=False),
+    ])
+
+    def fake_non_stream(messages, _on_token, tools=None):
+        assert tools is None, "评分调用必须无工具"
+        grade_payloads.append(messages[-1]["content"])
+        return next(grades), None
+
+    monkeypatch.setattr(llm.AVAILABLE_MODELS["pro"], "chat_non_stream", fake_non_stream)
+
+    spec = OutcomeSpec(goal="写一段说明", criteria=["含示例"], max_iterations=3)
+    result = run_outcome(ctx, spec, _drive_turn_reply)
+
+    assert result.satisfied and result.iterations == 2
+    # 差距回灌进第二轮 worker 输入
+    user_inputs = [m["content"] for m in ctx.log if m.get("role") == "user"]
+    assert any("没有示例" in u for u in user_inputs)
+    # 评分者隔离:payload 含交付物、不含 worker 首轮输入的任务全文标记
+    assert "初稿:概述一下。" in grade_payloads[0]
+    # 前缀完整(任务闭环多轮驱动不碰前缀缓存)
+    assert ctx.prefix_hash == before_hash
+    ctx.send()
+
+
+def _drive_turn_reply(ctx: CacheContext, user_input: str) -> str:
+    """run_outcome 的 drive_turn 形态(返回最终回复)。"""
+    return main.process_turn(ctx, user_input, on_token=lambda _t: None,
+                             on_tool=lambda *_a: None, on_progress=None, session_id="")

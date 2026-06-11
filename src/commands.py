@@ -25,6 +25,7 @@ class CmdResult:
     clear: bool = False
     load: str = ""
     retry: bool = False
+    goal: str = ""   # /goal 的原始参数文本,由 main 驱动任务闭环(与 retry 同模式)
 
 
 @dataclass
@@ -69,6 +70,18 @@ def builtin_multi(names: list[str], description: str = "", usage: str = ""):
 # ═══════════════════════════════════════════════════════════════
 # 内置指令
 # ═══════════════════════════════════════════════════════════════
+
+@builtin("/goal", description="任务闭环:交付 - 独立评分 - 修订,直到达标",
+         usage="/goal 目标 || 标准1 | 标准2 [>> 交付文件路径]")
+def _cmd_goal(r: CmdResult, _ctx, args, _sid) -> None:
+    """指令层只收文本;解析与循环在 outcome.py / main.py(指令系统不养业务逻辑)。"""
+    text = " ".join(args).strip()
+    if not text or "||" not in text:
+        r.message = ("用法: /goal 目标 || 标准1 | 标准2 [>> 交付文件路径]\n"
+                     "完成标准不可省略——评分步逐条对照它打分,这是闭环的牙。")
+        return
+    r.goal = text
+
 
 @builtin_multi(["/exit", "/quit", "/q"], description="退出程序")
 def _cmd_exit(r: CmdResult, _ctx, _args, _sid) -> None:
