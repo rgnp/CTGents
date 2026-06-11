@@ -908,6 +908,9 @@ def run_conversation(
     logger.info("路由: '%s...' → %s", user_input[:30], backend.info.name)
 
     requests_made = 0
+    # ── stormBreaker：同轮连续同一错误 → 打破死亡螺旋 ──
+    _storm_sig: str | None = None   # 上一轮失败签名
+    _storm_count = 0                # 同一签名连续次数
     while True:
         if requests_made >= _MAX_REQUESTS_PER_TURN:
             return (
@@ -986,6 +989,50 @@ def run_conversation(
                     for idx, result in zip(exec_indices, exec_results, strict=True):
                         tc_data, tool_name, args, tc, _ = approved[idx]
                         approved[idx] = (tc_data, tool_name, args, tc, result)
+
+                # ── stormBreaker：检测同轮连续同一错误 ──
+                _all_failed = True
+                _sig_parts = []
+                for _item in approved:
+                    _tool_name = _item[1]
+                    _result = _item[4]
+                    _has_err = False
+                    _err_line = ""
+                    try:
+                        _parsed = json.loads(_result)
+                        if isinstance(_parsed, dict) and "error" in _parsed:
+                            _has_err = True
+                            _err_line = str(_parsed["error"]).split("\n")[0][:80]
+                    except (json.JSONDecodeError, Exception):
+                        pass
+                    if not _has_err:
+                        _all_failed = False
+                        break
+                    _sig_parts.append(f"{_tool_name}:{_err_line}")
+                if _all_failed and _sig_parts:
+                    _cur_sig = "|".join(_sig_parts)
+                    if _cur_sig == _storm_sig:
+                        _storm_count += 1
+                    else:
+                        _storm_sig = _cur_sig
+                        _storm_count = 1
+                    if _storm_count >= 3 and approved:
+                        _last = approved[-1]
+                        _warn = (
+                            f"\n\n[loop guard] '{_last[1]}' 已连续失败 {_storm_count} 次"
+                            f"且错误相同。重复发送——即使换了措辞——也不会有帮助。换方法："
+                            f"如果参数被截断，拆成多个小调用；"
+                            f"否则修正参数、换工具、或在最终回复中说明障碍。"
+                        )
+                        _last_result = _last[4] + _warn
+                        approved[-1] = (_last[0], _last[1], _last[2], _last[3], _last_result)
+                        logger.warning(
+                            "stormBreaker: %s 连续失败 %d 次，已注入 loop guard",
+                            _last[1], _storm_count,
+                        )
+                else:
+                    _storm_sig = None
+                    _storm_count = 0
 
                 for tc_data, tool_name, _args, _tc, result in approved:
                     result = truncate_to_budget(result, ctx.all)
