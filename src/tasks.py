@@ -15,6 +15,7 @@ from pathlib import Path
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 TASKS_DIR = PROJECT_ROOT / "tasks"
 CURRENT_TASK_FILE = TASKS_DIR / "current.md"
+AMBITIONS_FILE = TASKS_DIR / "ambitions.md"
 ARCHIVE_DIR = TASKS_DIR / "archive"
 # 步骤标记：[ ] 未做 / [o] 进行中 / [x] 完成。含前两者即"未完成"。
 _UNFINISHED_MARKERS = ("[ ]", "[o]", "[O]")
@@ -27,6 +28,29 @@ def reset_gaps_cache() -> None:
     """新会话开始时重置，允许再次上报方向发现。"""
     global _gaps_reported
     _gaps_reported = False
+
+
+def read_ambitions() -> str:
+    """返回 ambitions.md 中自己填写的野心内容（跳过模板说明）。"""
+    if not AMBITIONS_FILE.exists():
+        return ""
+    text = AMBITIONS_FILE.read_text(encoding="utf-8").strip()
+    if not text:
+        return ""
+    # 只取"## 当前野心"后的内容（跳过模板说明）
+    marker = "## 当前野心"
+    idx = text.find(marker)
+    if idx == -1:
+        return ""
+    body = text[idx + len(marker):].strip()
+    if not body:
+        return ""
+    return body
+
+
+def has_ambitions() -> bool:
+    """ambitions.md 存在且 agent 自己写了东西。"""
+    return bool(read_ambitions())
 
 
 def read_current() -> str:
@@ -60,6 +84,13 @@ def make_task_context_message() -> dict | None:
         gap_text = _fmt_gaps(gap_report)
         if gap_text:
             parts.append(gap_text)
+
+    # ── 野心清单（自己发现的事，不是任务）──
+    if has_ambitions():
+        parts.append(
+            "📋 你之前记下了一些想做的事（tasks/ambitions.md），"
+            "什么时候推进你自己判断：\n\n" + read_ambitions()
+        )
 
     # ── 未完成长任务 ──
     if has_unfinished():

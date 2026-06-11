@@ -525,6 +525,50 @@ def _cmd_evolve(r: CmdResult, ctx, args, session_id) -> None:
     r.message = start.summary + "\n\nAgent 将从 runner 状态继续推进。按 Esc 可中断。"
 
 
+@builtin("/ambition", description="查看/管理野心清单（自己发现想做的事）",
+         usage="/ambition [done <标题关键词>]")
+def _cmd_ambition(r: CmdResult, _ctx, args, _sid) -> None:
+    from .tasks import AMBITIONS_FILE, read_ambitions
+
+    if not args:
+        text = read_ambitions()
+        r.message = text or "野心清单为空——你还没记下想做的事。直接告诉我就行，我来写。"
+        return
+
+    sub = args[0].lower()
+    if sub == "done" and len(args) > 1:
+        keyword = " ".join(args[1:])
+        if not AMBITIONS_FILE.exists():
+            r.message = "野心清单为空。"
+            return
+        text = AMBITIONS_FILE.read_text(encoding="utf-8")
+        # 找到含关键词的标题段，标记为完成
+        lines = text.split("\n")
+        in_block = False
+        block_start = -1
+        new_lines = []
+        for i, line in enumerate(lines):
+            if line.startswith("## ") and keyword.lower() in line.lower():
+                in_block = True
+                block_start = i
+            elif line.startswith("## ") and in_block:
+                # 块结束，标记完成并还原
+                new_lines.append(line.replace("## ", "## ~~") + "~~ ✅ 已完成")
+            elif in_block:
+                continue  # 跳过状态行
+            else:
+                new_lines.append(line)
+        # 处理最后一个块
+        if in_block:
+            new_lines.append(lines[block_start].replace("## ", "## ~~") + "~~ ✅ 已完成")
+
+        AMBITIONS_FILE.write_text("\n".join(new_lines), encoding="utf-8")
+        r.message = f"已标记 '{keyword}' 为完成。"
+    else:
+        r.message = "用法: /ambition 查看清单，/ambition done <关键词> 标记完成"
+
+
+
 @builtin("/fix", description="处理方向发现中的第 N 个改进方向",
          usage="/fix <编号>  （如 /fix 3）")
 def _cmd_fix(r: CmdResult, ctx, args, _sid) -> None:
