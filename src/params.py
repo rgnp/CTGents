@@ -108,7 +108,7 @@ class RuntimeParams:
     # 单条工具结果允许占用的上下文比例上限
     tool_result_budget: float = _env_float("CTG_TOOL_RESULT_BUDGET", 0.15)
     # 工具结果超过此字符数即压缩（read_file 等除外，见 SKIP_COMPRESS_TOOLS）
-    tool_result_compress_threshold: int = _env_int("CTG_TOOL_RESULT_COMPRESS_THRESHOLD", 1200)
+    tool_result_compress_threshold: int = _env_int("CTG_TOOL_RESULT_COMPRESS_THRESHOLD", 2400)
     # token 估算（无 tokenizer 的粗估，分字符类）：中文每字 / 其他每字符。
     # 可用 API 返回的 prompt_tokens 真值对账校准这两个旋钮。
     token_per_char_cjk: float = _env_float("CTG_TOKEN_PER_CHAR_CJK", 0.6)

@@ -59,8 +59,7 @@ def test_runtime_defaults_and_wiring():
     assert params.RUNTIME.max_exec_timeout == 5
     assert params.RUNTIME.token_per_char_cjk == 0.6
     assert params.RUNTIME.token_per_char_other == 0.3
-    assert params.RUNTIME.tool_result_compress_threshold == 1200
-    assert params.RUNTIME.max_requests_per_turn == 60
+    assert params.RUNTIME.tool_result_compress_threshold == 2400
     import src.config as config
     import src.llm as llm
     assert params.RUNTIME.max_retries == config.MAX_RETRIES

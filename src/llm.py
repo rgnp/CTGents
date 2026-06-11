@@ -1,5 +1,6 @@
 """LLM 后端抽象：多模型支持、自动路由、流式调用。"""
 
+import contextlib
 import json
 import logging
 import threading
@@ -396,7 +397,6 @@ def _set_api_usage(model_key: str, usage: object | None) -> None:
     global _last_api_usage
     if usage is None:
         return
-    import contextlib
     with contextlib.suppress(Exception):
         _last_api_usage[model_key] = {
             "prompt_tokens": getattr(usage, "prompt_tokens", 0) or 0,
@@ -506,30 +506,31 @@ _MAX_REQUESTS_PER_TURN = RUNTIME.max_requests_per_turn
 
 
 def _compress_tool_result(tool_name: str, result: str) -> str:
-    """压缩过大的工具结果，减少后续轮次的 token 消耗。
+    """压缩过大的工具结果，保留首尾各一半 + 中间省略标记。
 
     策略：
     - read_file / read_file_lines → 不压缩（仅受 token 预算动态截断）
     - 小于阈值 → 不压缩
-    - 大于阈值 → 保留前 N 字符 + 截断提示
+    - 大于阈值 → head(head_chars) + "…[省略 N 字符]…" + tail(tail_chars)
     """
     if tool_name in _SKIP_COMPRESS_TOOLS or len(result) <= _TOOL_RESULT_COMPRESS_THRESHOLD:
         return result
 
-    head = result[:_TOOL_RESULT_COMPRESS_THRESHOLD]
-    total = len(result)
+    half = _TOOL_RESULT_COMPRESS_THRESHOLD // 2
+    head = result[:half]
+    tail = result[-half:]
+    omitted = len(result) - half * 2
 
     if tool_name in ("search_web", "read_page"):
         hint = (
-            f"\n\n[已压缩：搜索结果 {total} 字符，仅显示前 {_TOOL_RESULT_COMPRESS_THRESHOLD} 字符。"
-            f"如需完整内容，可重新搜索或阅读页面]"
+            f"\n\n[…[省略 {omitted} / {len(result)} 字符]…]"
         )
     else:
         hint = (
-            f"\n\n[已压缩：原始结果 {total} 字符，仅显示前 {_TOOL_RESULT_COMPRESS_THRESHOLD} 字符]"
+            f"\n\n[…[省略 {omitted} / {len(result)} 字符 — 如需完整内容请用 read_file 指定行范围]…]"
         )
 
-    return head + hint
+    return head + hint + tail
 
 # ═══════════════════════════════════════════════════════════════
 # 对话上下文优化（Append-Only — 对齐 Reasonix 缓存优先策略）
@@ -598,7 +599,9 @@ def _compact_cache_context(ctx, user_input: str, force: bool = False) -> None:
     # 替换：摘要 + 保留的消息
     new_log = [{
         "role": "system",
-        "content": f"⏪ 对话归档：{summary}（已驱 {len(evicted)} 条旧消息）",
+        "content": (
+            f"⏪ 对话归档（已驱 {len(evicted)} 条旧消息）：\n\n{summary}"
+        ),
     }]
     new_log.extend(kept)
 
@@ -616,41 +619,78 @@ def _compact_cache_context(ctx, user_input: str, force: bool = False) -> None:
     )
 
 
-def _make_brief_summary(messages: list[dict], max_len: int = 300) -> str:
-    """从对话列表中提取关键信息做摘要，不调用 LLM。
+_SUMMARY_PROMPT = (
+    "将以下对话片段摘录为「最小可行摘要」，保留 coding agent 续做任务必需的信息。"
+    "用 Markdown 列表，只写你看到的，不编造。\n\n"
+    "## 文件\n"
+    "- 读取: <路径>:<行号范围> — <关键发现>\n"
+    "- 修改: <路径> — <改了什么>\n\n"
+    "## 命令\n"
+    "- `<命令>` → <结果> (pass/fail/部分输出)\n\n"
+    "## 决策与待办\n"
+    "- <一项决策或未完成事项>\n\n"
+    "规则：省略不相关的闲聊；路径和行号精确保留；"
+    "没有任何该类信息就跳过该 section；总摘要不超过 500 字。"
+)
 
-    提取策略：取最初几轮的用户问题 + 关键助手回复片段。
-    """
-    parts: list[str] = []
-    user_count = 0
 
+def _summarize_via_llm(messages: list[dict]) -> str:
+    """调用 LLM 生成结构化摘要——保留文件/命令/决策，丢弃闲聊。"""
+    transcript_parts = []
     for m in messages:
+        role = m.get("role", "?")
         content = (m.get("content") or "").strip()
         if not content:
             continue
-        if m.get("role") == "user":
-            user_count += 1
-            # 取用户问题的前 60 个字符作为线索
-            snippet = content[:60].replace("\n", " ")
-            if user_count <= 5 and len("".join(parts)) < max_len:
-                parts.append(snippet)
-        elif m.get("role") == "tool" and m.get("_tool_name") in ("search_web", "read_page"):
-            # 提取搜索结果的关键词
-            first_line = content.split("\n")[0][:40] if content else ""
-            if first_line and len("".join(parts)) < max_len:
-                parts.append(f"[搜索] {first_line}")
+        if role == "user":
+            transcript_parts.append(f"[user] {content[:120]}")
+        elif role == "assistant":
+            text = content[:200].replace("\n", " ")
+            if m.get("tool_calls"):
+                names = [tc["function"]["name"] for tc in m["tool_calls"]]
+                text += f" [调用: {', '.join(names)}]"
+            transcript_parts.append(f"[assistant] {text}")
+        elif role == "tool":
+            label = m.get("_tool_name", "tool")
+            transcript_parts.append(f"[{label}] {content[:150]}")
 
-    if not parts:
+    transcript = "\n".join(transcript_parts)
+    if not transcript.strip():
         return ""
 
-    result = "、".join(parts)
-    if len(result) > max_len:
-        result = result[:max_len] + "…"
+    payload = [
+        {"role": "system", "content": _SUMMARY_PROMPT},
+        {"role": "user", "content": f"对话片段：\n{transcript}"},
+    ]
 
-    if user_count > 5:
-        result += f"（共 {user_count} 轮交互）"
+    try:
+        client = _current_backend.client
+        resp = client.chat.completions.create(
+            model=_current_backend.info.id,
+            messages=payload,
+            max_tokens=400,
+            temperature=0.0,
+        )
+        summary = (resp.choices[0].message.content or "").strip()
+        if summary:
+            return summary
+    except Exception as e:
+        logger.warning("LLM 摘要失败，回退文本拼接: %s", e)
 
-    return result
+    # Fallback: brief text extract
+    parts = []
+    for m in messages:
+        c = (m.get("content") or "").strip()
+        if m.get("role") == "user" and c:
+            parts.append(c[:60].replace("\n", " "))
+            if len(parts) >= 5:
+                break
+    return "、".join(parts) if parts else ""
+
+
+def _make_brief_summary(messages: list[dict], max_len: int = 500) -> str:
+    """压缩摘要入口：优先 LLM 摘要，失败回退文本拼接。"""
+    return _summarize_via_llm(messages)
 
 
 # ═══════════════════════════════════════════════════════════════
