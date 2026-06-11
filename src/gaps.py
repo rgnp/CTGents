@@ -35,6 +35,39 @@ class GapReport:
     failures: list[str] = field(default_factory=list)
 
 
+# 报告缓存：detect_all_gaps 自动存储，供 /fix 指令和 get_last_report 取用
+_LAST_REPORT: GapReport | None = None
+
+
+def get_last_report() -> GapReport | None:
+    """返回最近一次 detect_all_gaps 的报告。"""
+    return _LAST_REPORT
+
+
+def get_gap_by_index(n: int) -> Gap | None:
+    """按 1-based 编号取 gap。不存在返回 None。"""
+    report = _LAST_REPORT
+    if report is None or n < 1 or n > len(report.gaps):
+        return None
+    return report.gaps[n - 1]
+
+
+def _make_fix_prompt(gap: Gap, index: int) -> str:
+    """把 gap 翻译成 agent 可行动的任务 prompt。
+
+    不预设步骤——只给方向/文件/建议，让 agent 自己判断怎么做。
+    """
+    files = ", ".join(gap.affected_files) if gap.affected_files else "（需自行定位）"
+    return (
+        f"【主动进化 · 方向 #{index}】{gap.detail}\n\n"
+        f"来源: {gap.source} | 严重度: {gap.severity} | 置信度: {gap.confidence:.0%}\n"
+        f"涉及文件: {files}\n"
+        f"建议: {gap.suggestion}\n\n"
+        f"请推进这个改进方向。先搜方案、读代码、定做法，然后改、测、提交。"
+        f"判断权在你——不是所有建议都该照做，读代码后会知道什么合理。"
+    )
+
+
 _PER_SOURCE_MAX = 3
 
 
@@ -176,6 +209,7 @@ def _prioritize(gaps: list[Gap], top_n: int = 5) -> list[Gap]:
 
 
 def detect_all_gaps(top_n: int = 5) -> GapReport:
+    global _LAST_REPORT
     report = GapReport()
     detectors: list[tuple[str, Callable[[], list[Gap]]]] = [
         ("performance", _detect_performance_gaps),
@@ -190,6 +224,7 @@ def detect_all_gaps(top_n: int = 5) -> GapReport:
             report.sources_failed += 1
             report.failures.append(f"{name}: {e}")
     report.gaps = _prioritize(report.gaps, top_n=top_n)
+    _LAST_REPORT = report
     return report
 
 

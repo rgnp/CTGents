@@ -609,6 +609,35 @@ def _cmd_evolve(r: CmdResult, ctx, args, session_id) -> None:
     r.message = start.summary + "\n\nAgent 将从 runner 状态继续推进。按 Esc 可中断。"
 
 
+@builtin("/fix", description="处理方向发现中的第 N 个改进方向",
+         usage="/fix <编号>  （如 /fix 3）")
+def _cmd_fix(r: CmdResult, ctx, args, _sid) -> None:
+    if not args:
+        r.message = "用法: /fix <编号>  （如 /fix 3）。用启动时方向报告查看编号。"
+        return
+    try:
+        n = int(args[0])
+    except ValueError:
+        r.message = f"无效编号: {args[0]}"
+        return
+
+    from .gaps import _make_fix_prompt, get_gap_by_index, get_last_report
+    report = get_last_report()
+    if report is None or not report.gaps:
+        r.message = "暂无方向发现报告，先正常对话一轮让系统启动检测。"
+        return
+    gap = get_gap_by_index(n)
+    if gap is None:
+        r.message = f"编号 {n} 超出范围（当前共 {len(report.gaps)} 个方向）。"
+        return
+
+    prompt = _make_fix_prompt(gap, n)
+    ctx.log.append({"role": "user", "content": prompt})
+    r.retry = True
+    r.save = True
+    r.message = f"已启动方向 #{n}：{gap.detail[:80]}..."
+
+
 def dispatch(user_input: str, ctx: CacheContext, session_id: str | None) -> CmdResult:
     r = CmdResult()
     parts = user_input.split()
