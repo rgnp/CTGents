@@ -462,10 +462,15 @@ def _invoke_llm(
     on_token: TokenCallback,
     session_id: str = "",
     track_stats: bool = True,
+    tools: list[dict] | None = None,
 ) -> tuple[str | None, list[dict] | None]:
-    """调用 LLM，带重试机制。首次流式，失败后降级为非流式重试。"""
+    """调用 LLM，带重试机制。首次流式，失败后降级为非流式重试。
+
+    tools=None 时自动取 get_tools()；传入空列表 [] 则无工具调用。
+    """
     model_key = backend.info.name.lower()
-    tools = get_tools() if backend.info.supports_tools else None
+    if tools is None:
+        tools = get_tools() if backend.info.supports_tools else None
 
     for attempt in range(1, MAX_RETRIES + 1):
         try:
@@ -664,14 +669,15 @@ def _summarize_via_llm(messages: list[dict]) -> str:
     ]
 
     try:
-        client = _current_backend.client
-        resp = client.chat.completions.create(
-            model=_current_backend.info.id,
-            messages=payload,
-            max_tokens=400,
-            temperature=0.0,
+        content, _tool_calls = _invoke_llm(
+            _current_backend,
+            payload,
+            on_token=lambda _t: None,  # no-op — 摘要不需要流式输出
+            session_id="",              # 归入当前会话统计
+            track_stats=True,
+            tools=[],                   # 无工具，纯文本摘要
         )
-        summary = (resp.choices[0].message.content or "").strip()
+        summary = (content or "").strip()
         if summary:
             return summary
     except Exception as e:
