@@ -598,13 +598,64 @@ def _cmd_fix(r: CmdResult, ctx, args, _sid) -> None:
     r.message = f"已启动方向 #{n}：{gap.detail[:80]}..."
 
 
+# ═══════════════════════════════════════════════════════════════
+# 意图路由：自然语言 → 命令（无模式统一交互）
+# ═══════════════════════════════════════════════════════════════
+
+_INTENT_ROUTES: list[tuple[str, str, str]] = [
+    # (关键词, 命令, 说明)
+    # 方向发现
+    ("处理这些", "/fix", ""), ("看看第一个", "/fix 1", ""),
+    ("处理 #", "/fix", ""), ("修 #", "/fix", ""),
+    ("修这个", "/fix", ""), ("修第", "/fix", ""),
+    # 教训
+    ("记教训", "/lesson save", ""), ("记下教训", "/lesson save", ""),
+    ("存教训", "/lesson save", ""), ("提取教训", "/lesson", ""),
+    ("学了什么", "/lesson", ""),
+    # 进化
+    ("开进化", "/evolve", ""), ("启动进化", "/evolve", ""),
+    ("进化这个", "/evolve", ""),
+    # 任务
+    ("清空任务", "/task clear", ""), ("归档任务", "/task archive", ""),
+    ("看任务", "/task", ""),
+    # 野心
+    ("看野心", "/ambition", ""), ("完成野心", "/ambition done", ""),
+]
+
+_ACTIVE_INTENT_MAP: dict[str, str] = {}
+
+
+def _detect_intent(text: str) -> str | None:
+    """从自然语言文本中检测意图，返回命令字符串或 None。"""
+    low = text.lower().strip()
+    for keyword, cmd, _desc in _INTENT_ROUTES:
+        if keyword.lower() in low:
+            # 提取参数（如 "处理 #3" → "/fix 3"）
+            import re
+            if "#" in keyword or "第" in keyword:
+                m = re.search(r"[#第]\s*(\d+)", text)
+                if m:
+                    return f"{cmd} {m.group(1)}"
+            return cmd
+    return None
+
 def dispatch(user_input: str, ctx: CacheContext, session_id: str | None) -> CmdResult:
     r = CmdResult()
     parts = user_input.split()
     if not parts:
         return r
     cmd = parts[0].lower()
-    args = parts[1:]
+
+    # ── 意图路由：非命令输入先检测自然语言意图 ──
+    if not cmd.startswith("/"):
+        intent = _detect_intent(user_input)
+        if intent:
+            cmd = intent.split()[0].lower()
+            args = intent.split()[1:] + parts  # 意图参数 + 原始输入
+        else:
+            args = parts[1:]
+    else:
+        args = parts[1:]
 
     handler = _handlers.get(cmd)
     if handler:

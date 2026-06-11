@@ -53,6 +53,38 @@ def has_ambitions() -> bool:
     return bool(read_ambitions())
 
 
+def get_task_progress_line() -> str:
+    """解析 current.md 步骤，返回一行进度，如 "📋 (2/5) ✅ S1 ✅ S2 🔄 S3 ⬜ S4"。
+
+    无任务或无法解析返回空串。
+    """
+    text = read_current()
+    if not text:
+        return ""
+    steps: list[tuple[str, str]] = []
+    for line in text.splitlines():
+        stripped = line.strip()
+        if stripped.startswith("- [x]") or stripped.startswith("- [X]"):
+            steps.append(("✅", stripped[5:].strip()))
+        elif stripped.startswith("- [o]") or stripped.startswith("- [O]"):
+            steps.append(("🔄", stripped[5:].strip()))
+        elif stripped.startswith("- [ ]"):
+            steps.append(("⬜", stripped[5:].strip()))
+        elif stripped.startswith("- [r]"):
+            steps.append(("🔁", stripped[5:].strip()))
+    if not steps:
+        return ""
+    done = sum(1 for s, _ in steps if s == "✅")
+    total = len(steps)
+    labels = [f"{s} {lbl[:30]}" for s, lbl in steps]
+    progress = f"📋 ({done}/{total}) " + " ".join(labels)
+    if len(progress) > 200:
+        progress = f"📋 ({done}/{total}) " + " ".join(labels[:4])
+        if len(labels) > 4:
+            progress += f" …(+{len(labels) - 4})"
+    return progress
+
+
 def read_current() -> str:
     """返回 current.md 内容（已 strip）；不存在返回空串。"""
     if not CURRENT_TASK_FILE.exists():

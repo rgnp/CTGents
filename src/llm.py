@@ -1281,4 +1281,8 @@ def run_conversation(
             ctx.log.append({"role": "assistant", "content": content or ""})
             if on_progress:
                 on_progress()
+            from .tasks import get_task_progress_line
+            progress = get_task_progress_line()
+            if progress:
+                on_token("\n" + progress + "\n")
             return content or ""
