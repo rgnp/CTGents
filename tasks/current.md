@@ -1,12 +1,10 @@
-# 记忆腐败治疗
+# 记忆腐败治疗后续：防止忘记归档
 
-- [x] Step 1: 删除 debug-lesson.md（垃圾），更新 MEMORY.md 索引
-- [x] Step 2: 合并 7 条 tool_arg_error → 1 条 `lesson-tool-arg-errors.md`（写入后删除旧 7 条）
-- [x] Step 3: 合并 4 条 repeated_edit → 1 条 `lesson-repeated-edits.md`（写入后删除旧 4 条）
-- [x] Step 4: 更新 MEMORY.md 索引
-- [x] Step 5: 从治疗中抽象"自我合并规则"，写入 memory
-
-## 完成总结
-- 计划 5 步 → 实际 5 步（0 次回退）
-- 15 条记忆 → 5 条，腐败率 80% → 0%
-- 教训: 腐败的根本原因是"只记不合"——`remember` 工具没有查重逻辑，同指纹就开新文件。现在有了 `memory-self-merge` 策略，下次存前先查同指纹。
+- [x] Step 1: tasks.py 加 `is_all_done()` + `create_task()` + 修复 `[r]`/`[!]` 不进 `has_unfinished` 的 bug
+  - [x] 加 `_ALL_NOT_DONE_MARKERS` 覆盖 `[ ] [o] [r] [!]`
+  - [x] 加 `is_all_done()`：文件存在、非空、全是 `[x]`
+  - [x] `make_task_context_message` 启动时检测 `is_all_done()` → 自动归档
+  - [x] 加 `create_task()`：写 current.md 自动追加归档步骤
+  - [x] 验证：import 通过 + ruff 零错 + pytest 25/25
+- [x] Step 2: 跑全量测试 + 提交
+- [ ] 归档 current.md → tasks/archive/

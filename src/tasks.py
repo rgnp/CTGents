@@ -17,8 +17,10 @@ TASKS_DIR = PROJECT_ROOT / "tasks"
 CURRENT_TASK_FILE = TASKS_DIR / "current.md"
 AMBITIONS_FILE = TASKS_DIR / "ambitions.md"
 ARCHIVE_DIR = TASKS_DIR / "archive"
-# 步骤标记：[ ] 未做 / [o] 进行中 / [x] 完成。含前两者即"未完成"。
-_UNFINISHED_MARKERS = ("[ ]", "[o]", "[O]")
+# 步骤标记
+_UNFINISHED_MARKERS = ("[ ]", "[o]", "[O]")  # 活跃未完成（has_unfinished 判活用）
+_BLOCKED_MARKERS = ("[r]", "[R]", "[!]")     # 阻塞/需重试（不触发续做注入，但不算全完成）
+_ALL_NOT_DONE = _UNFINISHED_MARKERS + _BLOCKED_MARKERS  # 全完成判定用
 _SLUG_FALLBACK = "task"
 # 方向发现缓存：同会话只跑一次（~5s），不进每轮循环
 _gaps_reported = False
@@ -93,9 +95,24 @@ def read_current() -> str:
 
 
 def has_unfinished() -> bool:
-    """current.md 存在且含未完成步骤（[ ] 或 [o]）。"""
+    """current.md 存在且含活跃未完成步骤（[ ] / [o]）。
+
+    [r]（需重试）和 [!]（阻塞）不算"活跃未完成"——
+    有这些标记时 agent 不需要自动续做，但也不算全完成。
+    """
     text = read_current()
     return bool(text) and any(marker in text for marker in _UNFINISHED_MARKERS)
+
+
+def is_all_done() -> bool:
+    """current.md 存在、非空、所有步骤都已完成（全是 [x]）。
+
+    有 [ ]/[o]/[r]/[!] 任一即返回 False。
+    """
+    text = read_current()
+    if not text:
+        return False
+    return not any(m in text for m in _ALL_NOT_DONE)
 
 
 def make_task_context_message() -> dict | None:
@@ -124,8 +141,15 @@ def make_task_context_message() -> dict | None:
             "什么时候推进你自己判断：\n\n" + read_ambitions()
         )
 
+    # ── 全完成自动归档（B 方案：下游兜底）──
+    if is_all_done():
+        result = archive_current()
+        parts.append(
+            "✅ 上次长任务所有步骤已完成，本次会话已自动归档。"
+            f"（{result}）"
+        )
     # ── 未完成长任务 ──
-    if has_unfinished():
+    elif has_unfinished():
         parts.append(
             "⚠️ 你有一个未完成的长任务（tasks/current.md），上次没做完。"
             "请从未完成步骤（[ ] / [o]）的断点继续，不要从头重来；"
@@ -169,6 +193,18 @@ def make_task_context_message() -> dict | None:
     # 任务上下文每轮堆一份副本(全在挂尾区,每个请求重算,白烧缓存 miss)。
     return {"role": "system", "content": "\n\n".join(parts),
             "_volatile": True, "_task_ctx": True}
+
+
+def create_task(content: str) -> str:
+    """写入 current.md 并自动追加归档步骤（方案 A：模板兜底）。
+
+    如果内容已含归档步骤（匹配 "- [ ] 归档"），不再重复追加。
+    """
+    final = content.strip()
+    if "- [ ] 归档" not in final:
+        final += "\n- [ ] 归档 current.md → tasks/archive/"
+    CURRENT_TASK_FILE.write_text(final + "\n", encoding="utf-8")
+    return "已写入 current.md（含自动归档步骤）。"
 
 
 def _derive_slug(text: str) -> str:
