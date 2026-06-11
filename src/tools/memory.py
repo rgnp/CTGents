@@ -107,12 +107,22 @@ TOOLS_MEMORY = [
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "name": {"type": "string", "description": "记忆名（kebab-case），如 user-prefers-short"},
+                    "name": {
+                        "type": "string",
+                        "description": "记忆名（kebab-case），如 user-prefers-short",
+                    },
                     "content": {"type": "string", "description": "记忆内容"},
                     "type": {
                         "type": "string",
                         "enum": ["user", "knowledge", "strategy", "reference"],
                         "description": "user/知识/策略/参考",
+                    },
+                    "fingerprint": {
+                        "type": "string",
+                        "description": (
+                            "同类错误指纹标识（可选）。同指纹记忆自动合并到已有文件——"
+                            "更新内容、递增 times_encountered。如 tool_arg_error。"
+                        ),
                     },
                 },
                 "required": ["name", "content", "type"],
@@ -194,22 +204,83 @@ def _rebuild_index() -> None:
     _write_index(entries)
 
 
-def _remember(name: str, content: str, mem_type: str) -> str:
-    """创建或更新一条记忆。"""
-    now = datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
-    # description 只取第一句或前 30 字，避免索引过于冗长
+def _find_by_fingerprint(fp: str) -> Path | None:
+    """扫描 memory/ 找 metadata.fingerprint 匹配的文件，返回 Path 或 None。
+
+    仅匹配 metadata 下的 fingerprint 字段，避免 description/body 中的偶然命中。
+    多个匹配（理论上不应发生）返回第一个。
+    """
+    for f in sorted(_dir().glob("*.md")):
+        if f.name == "MEMORY.md":
+            continue
+        try:
+            meta, _ = _split_frontmatter(f.read_text(encoding="utf-8"))
+            if meta.get("fingerprint") == fp:
+                return f
+        except Exception:
+            continue
+    return None
+
+
+def _merge_memory(existing_path: Path, name: str, content: str,
+                  mem_type: str, fingerprint: str, now: str) -> str:
+    """合并到已有记忆：更新内容、递增计数器、刷新时间。保留原文件名。"""
+    meta, _old_body = _split_frontmatter(existing_path.read_text(encoding="utf-8"))
+    old_name = meta.get("name", existing_path.stem)
+    times = int(meta.get("times_encountered", 1)) + 1
+
     first_sentence = content.split("。")[0].split("\n")[0].strip()
     desc = first_sentence[:30] if first_sentence else content[:30]
+
     text = (
         f"---\n"
-        f"name: {name}\n"
+        f"name: {old_name}\n"
         f"description: {desc}\n"
         f"metadata:\n"
         f"  type: {mem_type}\n"
         f"  updated: {now}\n"
+        f"  fingerprint: {fingerprint}\n"
+        f"  times_encountered: {times}\n"
+        f"  last_encountered: {now}\n"
         f"---\n\n"
         f"{content}\n"
     )
+    existing_path.write_text(text, encoding="utf-8")
+    _rebuild_index()
+    mark_dirty()
+    return f"已合并到已有记忆: {old_name}（第 {times} 次遇到）"
+
+
+def _remember(name: str, content: str, mem_type: str,
+              fingerprint: str | None = None) -> str:
+    """创建或更新一条记忆。有 fingerprint 时先扫描合并，避免同质散成 N 条。"""
+    now = datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+    # ── fingerprint 合并：同指纹先查已有，找到即合并 ──
+    if fingerprint:
+        existing = _find_by_fingerprint(fingerprint)
+        if existing:
+            return _merge_memory(existing, name, content, mem_type, fingerprint, now)
+
+    # ── 正常新建（或 name 覆盖）──
+    first_sentence = content.split("。")[0].split("\n")[0].strip()
+    desc = first_sentence[:30] if first_sentence else content[:30]
+
+    meta_lines = [
+        f"name: {name}",
+        f"description: {desc}",
+        "metadata:",
+        f"  type: {mem_type}",
+        f"  updated: {now}",
+    ]
+    if fingerprint:
+        meta_lines.extend([
+            f"  fingerprint: {fingerprint}",
+            "  times_encountered: 1",
+            f"  last_encountered: {now}",
+        ])
+
+    text = "---\n" + "\n".join(meta_lines) + f"\n---\n\n{content}\n"
     _mem_path(name).write_text(text, encoding="utf-8")
     _rebuild_index()
     mark_dirty()
@@ -317,7 +388,8 @@ def _forget(name: str) -> str:
 
 def execute(name: str, args: dict) -> str | None:
     if name == "remember":
-        return _remember(args["name"], args["content"], args["type"])
+        return _remember(args["name"], args["content"], args["type"],
+                         args.get("fingerprint"))
     if name == "recall":
         return _recall(args["query"])
     if name == "forget":

@@ -1,10 +1,18 @@
-# 记忆腐败治疗后续：防止忘记归档
+# 记忆指纹合并：代码级兜底，防止同质散成 N 条
 
-- [x] Step 1: tasks.py 加 `is_all_done()` + `create_task()` + 修复 `[r]`/`[!]` 不进 `has_unfinished` 的 bug
-  - [x] 加 `_ALL_NOT_DONE_MARKERS` 覆盖 `[ ] [o] [r] [!]`
-  - [x] 加 `is_all_done()`：文件存在、非空、全是 `[x]`
-  - [x] `make_task_context_message` 启动时检测 `is_all_done()` → 自动归档
-  - [x] 加 `create_task()`：写 current.md 自动追加归档步骤
-  - [x] 验证：import 通过 + ruff 零错 + pytest 25/25
-- [x] Step 2: 跑全量测试 + 提交
+- [x] Step 1: `_remember` 加 fingerprint 合并逻辑
+  - [x] `_find_by_fingerprint(fp)` — 扫描已有文件找同指纹
+  - [x] `_merge_memory(existing, ...)` — 合并：更新内容、递增 times_encountered、刷新时间
+  - [x] `_remember` 加 fingerprint 参数，存前先扫描合并
+  - [x] TOOLS_MEMORY 加 fingerprint 可选参数
+  - [x] `execute` 透传 fingerprint
+  - [x] 验证: import + ruff + pytest 25/25 → 663/663 全量
+- [x] Step 2: 给已有记忆补指纹
+  - [x] `memory-self-merge` → `memory_self_merge`
+  - [x] `innovation-is-problem-discovery` → `innovation_discovery`
+- [x] Step 3: 提交
 - [ ] 归档 current.md → tasks/archive/
+
+## 完成总结
+- 计划 3 步 → 实际 3 步（0 次回退）
+- 教训: 代码改动在磁盘，但 agent 进程用的是内存中的旧代码——测试绿不代表运行时生效。下次改完核心代码后，重启 agent 才能验证端到端行为。

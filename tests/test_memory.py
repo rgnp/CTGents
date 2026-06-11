@@ -160,3 +160,100 @@ def test_recall_surfaces_archive_lessons(mem, tmp_path, monkeypatch):
 def test_recall_skips_archive_when_absent(mem):
     """归档目录不存在(新克隆/隔离)时 recall 不报错,只搜 memory/。"""
     assert "未找到" in memory.execute("recall", {"query": "zxqv-no-such"})
+
+
+# ── fingerprint 合并（代码级兜底，治同质散成 N 条）──────────────
+
+def test_fingerprint_merge_same_fp(mem):
+    """同 fingerprint → 合并到已有文件，不新建。"""
+    mem.execute("remember", {
+        "name": "lesson-a", "content": "工具 A 参数总出错", "type": "strategy",
+        "fingerprint": "tool_a_error",
+    })
+    mem.execute("remember", {
+        "name": "lesson-a-v2", "content": "工具 A 参数又出错了（第二版）", "type": "strategy",
+        "fingerprint": "tool_a_error",
+    })
+    import os
+    files = os.listdir(mem._dir())
+    assert "lesson-a.md" in files
+    assert "lesson-a-v2.md" not in files
+
+
+def test_fingerprint_merge_increments_times(mem):
+    """合并时 times_encountered 递增。"""
+    mem.execute("remember", {
+        "name": "count-me", "content": "第一次遇到", "type": "strategy",
+        "fingerprint": "count_test",
+    })
+    mem.execute("remember", {
+        "name": "count-me-v2", "content": "第二次遇到啦", "type": "strategy",
+        "fingerprint": "count_test",
+    })
+    path = mem._dir() / "count-me.md"
+    meta, _ = memory._split_frontmatter(path.read_text(encoding="utf-8"))
+    assert meta.get("times_encountered") == "2"
+
+
+def test_fingerprint_merge_updates_content(mem):
+    """合并后内容是新的。"""
+    mem.execute("remember", {
+        "name": "update-me", "content": "旧内容 old_token", "type": "strategy",
+        "fingerprint": "update_test",
+    })
+    mem.execute("remember", {
+        "name": "update-me-v2", "content": "新内容 new_token_xyz", "type": "strategy",
+        "fingerprint": "update_test",
+    })
+    out = mem.execute("recall", {"query": "new_token_xyz"})
+    assert "update-me" in out
+    assert "旧内容" not in out
+
+
+def test_fingerprint_merge_keeps_original_name(mem):
+    """合并保留原文件名，提示使用旧名。"""
+    mem.execute("remember", {
+        "name": "original-name", "content": "原始内容 token_a", "type": "strategy",
+        "fingerprint": "keep_name_test",
+    })
+    result = mem.execute("remember", {
+        "name": "new-name", "content": "新内容 token_b", "type": "strategy",
+        "fingerprint": "keep_name_test",
+    })
+    assert "original-name" in result
+    assert "已合并" in result
+
+
+def test_no_fingerprint_still_works(mem):
+    """无 fingerprint 时完全按 name 覆盖（向后兼容）。"""
+    mem.execute("remember", {"name": "nofp", "content": "第一版 abc123", "type": "user"})
+    mem.execute("remember", {"name": "nofp", "content": "第二版 xyz789", "type": "user"})
+    out = mem.execute("recall", {"query": "xyz789"})
+    assert "nofp" in out
+    assert "abc123" not in out
+
+
+def test_find_by_fingerprint_hit(mem):
+    """_find_by_fingerprint 命中返回 Path。"""
+    mem.execute("remember", {
+        "name": "hit-me", "content": "命中目标", "type": "strategy",
+        "fingerprint": "hit_test",
+    })
+    found = memory._find_by_fingerprint("hit_test")
+    assert found is not None
+    assert found.name == "hit-me.md"
+
+
+def test_find_by_fingerprint_miss(mem):
+    """_find_by_fingerprint 未命中返回 None。"""
+    assert memory._find_by_fingerprint("never_existed_fp") is None
+
+
+def test_fingerprint_not_confused_by_body_word(mem):
+    """Body 里出现 fingerprint 这个词不算命中——只看 metadata 字段。"""
+    mem.execute("remember", {
+        "name": "meta-fp", "content": "正文里写 fingerprint 但 metadata 没写", "type": "user",
+        "fingerprint": "meta_real",
+    })
+    found = memory._find_by_fingerprint("fingerprint")
+    assert found is None
