@@ -1,6 +1,10 @@
 """失败模式学习 — 从对话日志中提取反复出现的失败模式，存为策略记忆。
 
 三层递进：
+
+⚠️ 命名空间边界：本模块写入的 memory/ 文件带 `severity` 字段。
+memory.py 的 `_find_by_fingerprint` 跳过有 severity 的文件——
+防止两个 fingerprint 系统撞车（详情见 memory.py 顶部注释）。
   检测器（本模块）→ 策略记忆（memory.py type=strategy）→ 注入引擎（llm.py volatile）
 
 四指纹检测器：

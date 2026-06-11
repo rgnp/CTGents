@@ -257,3 +257,72 @@ def test_fingerprint_not_confused_by_body_word(mem):
     })
     found = memory._find_by_fingerprint("fingerprint")
     assert found is None
+
+
+
+# ── lesson.py 边界 — severity 文件不被 _find_by_fingerprint 匹配 ──
+
+def test_find_by_fingerprint_skips_lesson_py_files(mem):
+    """有 severity 的文件（lesson.py 写的）不被 _find_by_fingerprint 匹配。
+
+    这是双系统安全边界：lesson.py 用 fingerprint 做程序化去重，
+    memory.py 用 fingerprint 做手动合并，两者共用 memory/ 目录——
+    severity 字段是分界线，防止 _remember 覆盖 lesson.py 的积累教训。
+    """
+    # 模拟 lesson.py 写入的文件（含 severity）
+    lesson_file = mem._dir() / "lesson-tool-arg-errors.md"
+    lesson_file.write_text(
+        "---\n"
+        "name: lesson-tool-arg-errors\n"
+        "description: tool_arg_error 模式\n"
+        "metadata:\n"
+        "  type: strategy\n"
+        "  fingerprint: tool_arg_error\n"
+        "  severity: medium\n"
+        "  times_encountered: 19\n"
+        "  last_encountered: 2026-06-11T09:43:26Z\n"
+        "---\n\n"
+        "19 次积累的结构化教训，绝对不能丢。\n",
+        encoding="utf-8",
+    )
+    # _find_by_fingerprint 应该跳过它
+    found = memory._find_by_fingerprint("tool_arg_error")
+    assert found is None, (
+        "severity 文件应被跳过——否则 _remember 会把 lesson.py 19 次积累的教训覆盖掉"
+    )
+
+
+def test_fingerprint_remember_never_touches_lesson_py_file(mem):
+    """通过 execute 调 remember，同 fingerprint 但 target 是 lesson.py 文件 →
+    创建新文件而非合并覆盖。
+    """
+    # 模拟 lesson.py 写的文件
+    lesson_file = mem._dir() / "lesson-something.md"
+    lesson_file.write_text(
+        "---\n"
+        "name: lesson-something\n"
+        "description: 程序化教训\n"
+        "metadata:\n"
+        "  type: strategy\n"
+        "  fingerprint: dangerous_fp\n"
+        "  severity: high\n"
+        "  times_encountered: 10\n"
+        "---\n\n"
+        "lesson.py 写入的重要内容。\n",
+        encoding="utf-8",
+    )
+    # 手动 remember 同指纹
+    result = mem.execute("remember", {
+        "name": "new-memory", "content": "手动记住的内容 token_zz99", "type": "strategy",
+        "fingerprint": "dangerous_fp",
+    })
+    # 应创建新文件，不是合并到 lesson-something
+    assert "已记住" in result
+    # 原文件未被覆盖
+    original = lesson_file.read_text(encoding="utf-8")
+    assert "lesson.py 写入的重要内容" in original
+    assert "times_encountered: 10" in original
+    # 新文件存在
+    new_file = mem._dir() / "new-memory.md"
+    assert new_file.exists()
+    assert "token_zz99" in new_file.read_text(encoding="utf-8")

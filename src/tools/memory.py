@@ -13,12 +13,15 @@ _SNIPPET_CHARS = 200
 _TOKEN_ASCII = re.compile(r"[a-z0-9]+")
 _TOKEN_CJK = re.compile(r"[一-鿿]+")
 
-# 注：曾有正则探测"该考虑记"时刻的 detect_signal——已整链删除。
-# 判断"该记什么"是语义问题，正则做不了（"不对，有 bug"和"你推荐 embedding
-# 是错的"在正则眼里都是"不对"）。写入由 agent 自主判断，见 AGENTS.md「记忆边界」。
 # ── 记忆索引缓存（避免每次请求重复读文件） ──
 _context_cache: str | None = None
 _context_dirty: bool = True
+
+# ── 指纹命名空间边界 ──
+# memory.py 和 lesson.py 各自有 fingerprint 系统，写同一目录 memory/。
+# lesson.py 文件带有 `severity` 字段（如 tool_arg_error/repeated_edit 等）——
+# _find_by_fingerprint 跳过此类文件，防止 _remember 合并覆盖 lesson.py
+# 积累的结构化教训。各自的指纹值不应交叉使用。
 
 
 def _split_frontmatter(text: str) -> tuple[dict[str, str], str]:
@@ -120,8 +123,10 @@ TOOLS_MEMORY = [
                     "fingerprint": {
                         "type": "string",
                         "description": (
-                            "同类错误指纹标识（可选）。同指纹记忆自动合并到已有文件——"
-                            "更新内容、递增 times_encountered。如 tool_arg_error。"
+                            "同类场景指纹标识（可选）。同指纹记忆自动合并到已有文件——"
+                            "更新内容、递增 times_encountered。"
+                            "如 improvement_loop、memory_corruption。"
+                            "勿用 lesson.py 的指纹值（tool_arg_error 等），那是另一套系统。"
                         ),
                     },
                 },
@@ -205,16 +210,22 @@ def _rebuild_index() -> None:
 
 
 def _find_by_fingerprint(fp: str) -> Path | None:
-    """扫描 memory/ 找 metadata.fingerprint 匹配的文件，返回 Path 或 None。
+    """扫描 memory/ 找 metadata.fingerprint 匹配的**非 lesson.py** 文件。
 
     仅匹配 metadata 下的 fingerprint 字段，避免 description/body 中的偶然命中。
-    多个匹配（理论上不应发生）返回第一个。
+    跳过有 `severity` 字段的文件——那是 lesson.py 的程序化指纹系统写入的，
+    fingerprint 值共享同一命名空间（如 tool_arg_error/repeated_edit），
+    若被 `_remember` 合并覆盖，会把 19 次积累的结构化教训瞬间压成一句短内容。
+    两个系统共用文件目录、各管各的 fingerprint 命名空间——`severity` 是分界线。
     """
     for f in sorted(_dir().glob("*.md")):
         if f.name == "MEMORY.md":
             continue
         try:
             meta, _ = _split_frontmatter(f.read_text(encoding="utf-8"))
+            # lesson.py 文件：有 severity，跳过
+            if meta.get("severity"):
+                continue
             if meta.get("fingerprint") == fp:
                 return f
         except Exception:
