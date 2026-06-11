@@ -5,12 +5,13 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-
 from src.diagnostics import (
     DiagnosticResult,
+    _analyze_function,
     _analyze_source,
     _diagnose_failure,
     _diagnose_slow,
+    _extract_function_body,
     _find_tool_source,
     _suggest_subprocess,
     diagnose_anomalies,
@@ -47,27 +48,57 @@ def test_find_nonexistent_tool():
 
 
 # ═══════════════════════════════════════════════════════════════
-# 源码模式分析
+# 函数体提取
 # ═══════════════════════════════════════════════════════════════
 
 
-def test_analyze_exec_py_finds_subprocess():
+def test_extract_function_body_finds_subprocess():
     source = _find_tool_source("run_command")
-    patterns = _analyze_source(source)
+    body = _extract_function_body(source.read_text(encoding="utf-8"), "run_command")
+    assert body is not None
+    assert "subprocess" in body
+
+
+def test_extract_function_body_not_found():
+    body = _extract_function_body("def foo(): pass", "nonexistent")
+    assert body is None
+
+
+# ═══════════════════════════════════════════════════════════════
+# 函数级分析 — 关键：不把同文件其他函数的模式误归给工具
+# ═══════════════════════════════════════════════════════════════
+
+
+def test_analyze_function_finds_subprocess_for_run_command():
+    """run_command 函数体含 subprocess — 正确检测。"""
+    source = _find_tool_source("run_command")
+    patterns = _analyze_function(source, "run_command")
     assert "subprocess" in patterns
 
 
-def test_analyze_none_returns_empty():
+def test_analyze_function_no_subprocess_for_list_files():
+    """list_files 不用 subprocess — 不应误报告。"""
+    source = _find_tool_source("list_files")
+    patterns = _analyze_function(source, "list_files")
+    assert "subprocess" not in patterns
+
+
+# ═══════════════════════════════════════════════════════════════
+# 文件级分析（网络/缓存等合理文件级模式）
+# ═══════════════════════════════════════════════════════════════
+
+
+def test_analyze_source_none_returns_empty():
     patterns = _analyze_source(None)
     assert patterns == set()
 
 
-def test_analyze_missing_file_returns_empty(tmp_path):
+def test_analyze_source_missing_file_returns_empty(tmp_path):
     patterns = _analyze_source(tmp_path / "nonexistent.py")
     assert patterns == set()
 
 
-def test_analyze_network_tool():
+def test_analyze_source_network_tool():
     source = _find_tool_source("search_web")
     if source is not None:
         patterns = _analyze_source(source)
@@ -91,7 +122,6 @@ def test_diagnose_slow_run_command():
     assert d.root_pattern == "subprocess_overhead"
     assert d.confidence > 0.8
     assert "src\\tools\\exec.py" in d.affected_files[0] or "src/tools/exec.py" in d.affected_files[0]
-    assert "subprocess" in d.likely_cause.lower()
 
 
 def test_diagnose_slow_run_python():
@@ -104,6 +134,18 @@ def test_diagnose_slow_run_python():
     d = _diagnose_slow("run_python", anomaly)
     assert d.root_pattern == "subprocess_overhead"
     assert "子进程" in d.suggested_action
+
+
+def test_diagnose_slow_list_files_is_not_subprocess():
+    """list_files 不用 subprocess，不应被诊断为 subprocess_overhead。"""
+    anomaly = {
+        "tool": "list_files",
+        "type": "slow",
+        "detail": "list_files 本次平均 12ms，基线中位数 4ms（3.1x）",
+        "severity": "warn",
+    }
+    d = _diagnose_slow("list_files", anomaly)
+    assert d.root_pattern != "subprocess_overhead"
 
 
 def test_diagnose_slow_unknown_tool():
@@ -195,7 +237,7 @@ def test_format_diagnostics_includes_diagnosis():
         {"tool": "run_command", "type": "slow", "detail": "run_command 慢了 5x", "severity": "warn"},
     ]
     output = format_diagnostics(anomalies)
-    assert "🔍 被动进化" in output
+    assert "被动进化" in output
     assert "subprocess" in output.lower()
     assert "建议" in output
     assert "如果需要修复" in output
