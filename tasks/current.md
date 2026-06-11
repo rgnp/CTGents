@@ -1,12 +1,9 @@
-# 防止双指纹机制撞车
+# Tavily 多 Key 轮换
 
-# 目标锚点
-memory.py 的 `_find_by_fingerprint` 扫到 lesson.py 写的文件，LLM 一旦传 lesson.py 的指纹值就会覆盖 19 次积累的结构化教训。需要隔离两个系统的 fingerprint 命名空间。
-
-- [o] Step 1: `_find_by_fingerprint` 跳过 lesson.py 文件（metadata 有 `severity`）
-  - [ ] 改 `_find_by_fingerprint`：扫描时检查 `meta.get("severity")`
-  - [ ] 验证：import + ruff + pytest
-- [ ] Step 2: 改 `remember` 工具 schema 示例，从 `tool_arg_error` 改为无害值
-- [ ] Step 3: 在两个文件加注释标记命名空间边界
-- [ ] Step 4: 提交
-- [ ] 归档 current.md → tasks/archive/
+- [x] Step 1: `.env` — `TAVILY_API_KEY` → `TAVILY_API_KEYS`（逗号分隔两个 key）
+- [x] Step 2: `config.py` — 新增 `MultiKeyTavilyClient` wrapper + 更新 `get_tavily_client()`
+  - 解析 `TAVILY_API_KEYS`、降级兼容 `TAVILY_API_KEY`
+  - wrapper 代理 `search` 等方法，`UsageLimitExceededError` / `InvalidAPIKeyError` 切下一个 key 重试
+  - 验证：`MultiKeyTavilyClient` + 两 key 加载成功
+- [x] Step 3: 加单测 — key 耗尽 / 切换后重试成功（5 条，全绿）
+- [o] Step 4: ruff + 全量测试 → commit
