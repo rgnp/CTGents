@@ -16,10 +16,17 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 TASKS_DIR = PROJECT_ROOT / "tasks"
 CURRENT_TASK_FILE = TASKS_DIR / "current.md"
 ARCHIVE_DIR = TASKS_DIR / "archive"
-
 # 步骤标记：[ ] 未做 / [o] 进行中 / [x] 完成。含前两者即"未完成"。
 _UNFINISHED_MARKERS = ("[ ]", "[o]", "[O]")
 _SLUG_FALLBACK = "task"
+# 方向发现缓存：同会话只跑一次（~5s），不进每轮循环
+_gaps_reported = False
+
+
+def reset_gaps_cache() -> None:
+    """新会话开始时重置，允许再次上报方向发现。"""
+    global _gaps_reported
+    _gaps_reported = False
 
 
 def read_current() -> str:
@@ -36,8 +43,19 @@ def has_unfinished() -> bool:
 
 
 def make_task_context_message() -> dict | None:
-    """生成 volatile 上下文消息：未完成长任务 + 被动进化反思（如有）。"""
+    """生成 volatile 上下文消息：方向发现 + 未完成长任务 + 被动进化反思。"""
+    global _gaps_reported
     parts: list[str] = []
+
+    # ── 主动进化方向发现（L2：每会话只跑一次 ~5s）──
+    if not _gaps_reported:
+        _gaps_reported = True
+        from .gaps import detect_all_gaps as _detect_gaps
+        from .gaps import format_gap_report as _fmt_gaps
+        gap_report = _detect_gaps(top_n=5)
+        gap_text = _fmt_gaps(gap_report)
+        if gap_text:
+            parts.append(gap_text)
 
     # ── 未完成长任务 ──
     if has_unfinished():
@@ -53,7 +71,6 @@ def make_task_context_message() -> dict | None:
     from .tracker import get_latest_reflections as _get_reflections
     reflections = _get_reflections(limit=3)
     if reflections:
-        # 收集所有异常（去重：同工具+同类型只保留最新的）
         seen: set[tuple[str, str]] = set()
         anomalies: list[dict] = []
         for ref in reflections:
