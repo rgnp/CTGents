@@ -22,6 +22,7 @@ _UNFINISHED_MARKERS = ("[ ]", "[o]", "[O]")  # 活跃未完成（has_unfinished 
 _BLOCKED_MARKERS = ("[r]", "[R]", "[!]")     # 阻塞/需重试（不触发续做注入，但不算全完成）
 _ALL_NOT_DONE = _UNFINISHED_MARKERS + _BLOCKED_MARKERS  # 全完成判定用
 _SLUG_FALLBACK = "task"
+_ANCHOR_HEADING = "# 目标锚点"
 # 方向发现缓存：同会话只跑一次（~5s），不进每轮循环
 _gaps_reported = False
 
@@ -53,6 +54,22 @@ def read_ambitions() -> str:
 def has_ambitions() -> bool:
     """ambitions.md 存在且 agent 自己写了东西。"""
     return bool(read_ambitions())
+
+
+def _extract_anchor(text: str) -> str:
+    """从 current.md 内容提取目标锚点：`# 目标锚点` 后到下一个空行或标题为止。"""
+    lines = text.splitlines()
+    in_anchor = False
+    anchor_lines: list[str] = []
+    for line in lines:
+        stripped = line.strip()
+        if in_anchor:
+            if not stripped or stripped.startswith("#"):
+                break
+            anchor_lines.append(stripped)
+        elif stripped == _ANCHOR_HEADING:
+            in_anchor = True
+    return " ".join(anchor_lines).strip()
 
 
 def get_task_progress_line() -> str:
@@ -150,12 +167,21 @@ def make_task_context_message() -> dict | None:
         )
     # ── 未完成长任务 ──
     elif has_unfinished():
+        text = read_current()
         parts.append(
             "⚠️ 你有一个未完成的长任务（tasks/current.md），上次没做完。"
             "请从未完成步骤（[ ] / [o]）的断点继续，不要从头重来；"
             "在步骤旁记录细进度（如 47/250），完成后按 AGENTS.md 清空并归档。\n\n"
-            + read_current()
+            + text
         )
+        # ── 锚点对照：每轮提醒检查方向 ──
+        anchor = _extract_anchor(text)
+        if anchor:
+            parts.insert(
+                -1,  # 插在任务内容之前
+                f"🎯 目标锚点：{anchor}\n"
+                "↳ 每完成一个步骤，对照上方锚点检查当前方向：做的事还在解决这个问题吗？"
+            )
 
     # ── 被动进化反思（含代码感知诊断）──
     from .diagnostics import diagnose_anomalies
@@ -196,15 +222,23 @@ def make_task_context_message() -> dict | None:
 
 
 def create_task(content: str) -> str:
-    """写入 current.md 并自动追加归档步骤（方案 A：模板兜底）。
+    """写入 current.md。必须有 # 目标锚点，拒绝写入否则漂移无绳。
 
-    如果内容已含归档步骤（匹配 "- [ ] 归档"），不再重复追加。
+    自动追加归档步骤（方案 A）。
     """
     final = content.strip()
+    if _ANCHOR_HEADING not in final:
+        return (
+            "拒绝：缺少 # 目标锚点。\n"
+            "请在任务内容中加入一行 '# 目标锚点' 和一句描述——"
+            "说清这个任务到底要解决什么问题。\n"
+            "例如：\n"
+            "  # 目标锚点\n  让 current.md 从'旗'变成'绳'，每步自动对照方向。"
+        )
     if "- [ ] 归档" not in final:
         final += "\n- [ ] 归档 current.md → tasks/archive/"
     CURRENT_TASK_FILE.write_text(final + "\n", encoding="utf-8")
-    return "已写入 current.md（含自动归档步骤）。"
+    return "已写入 current.md（含目标锚点 + 自动归档步骤）。"
 
 
 def _derive_slug(text: str) -> str:

@@ -1,4 +1,4 @@
-"""长任务状态测试：current.md 判活/注入/归档/清空 + /task 命令 + 自动归档。
+"""长任务状态测试：current.md 判活/注入/归档/清空 + /task 命令 + 自动归档 + 目标锚点。
 
 全程把 tasks 路径指向 tmp_path，绝不触碰真实 tasks/current.md。
 """
@@ -27,10 +27,15 @@ def _isolate_tasks(tmp_path, monkeypatch):
     return current, archive
 
 
-_UNFINISHED = "# 长任务：抓论文\n\n## 步骤\n- [o] Step 1: 搜索 47/250\n- [ ] Step 2: 去重\n"
-_DONE = "# 长任务：抓论文\n\n## 步骤\n- [x] Step 1\n- [x] Step 2\n"
-_HAS_RETRY = "# 出问题了\n\n- [r] Step 1: 验证失败\n"
-_HAS_BLOCKED = "# 等确认\n\n- [!] Step 1: 等用户确认\n"
+_UNFINISHED = (
+    "# 长任务：抓论文\n\n"
+    "# 目标锚点\n找到最新的轨迹预测论文并分析其方法论。\n\n"
+    "- [o] Step 1: 搜索 47/250\n- [ ] Step 2: 去重\n"
+)
+_DONE = "# 长任务：抓论文\n\n# 目标锚点\n找论文。\n\n- [x] Step 1\n- [x] Step 2\n"
+_HAS_RETRY = "# 出问题了\n\n# 目标锚点\n修复。\n\n- [r] Step 1: 验证失败\n"
+_HAS_BLOCKED = "# 等确认\n\n# 目标锚点\n等。\n\n- [!] Step 1: 等用户确认\n"
+_ANCHORED_UNFINISHED = _UNFINISHED
 
 
 def test_has_unfinished_true(_isolate_tasks):
@@ -83,22 +88,71 @@ class TestIsAllDone:
         assert tasks.is_all_done() is False
 
     def test_false_when_mixed_x_and_todo(self, _isolate_tasks):
-        _isolate_tasks[0].write_text("- [x] Done\n- [ ] Not done\n", encoding="utf-8")
+        _isolate_tasks[0].write_text(
+            "# 测试\n\n# 目标锚点\n测。\n\n- [x] Done\n- [ ] Not done\n",
+            encoding="utf-8",
+        )
         assert tasks.is_all_done() is False
 
 
 class TestCreateTask:
     def test_appends_archive_step(self, _isolate_tasks):
         current, _ = _isolate_tasks
-        tasks.create_task("# 测试\n\n- [ ] Step 1\n")
+        result = tasks.create_task("# 测试\n\n# 目标锚点\n做某事。\n\n- [ ] Step 1\n")
+        assert "已写入" in result
         content = current.read_text(encoding="utf-8")
         assert "归档 current.md" in content
 
     def test_does_not_double_append(self, _isolate_tasks):
         current, _ = _isolate_tasks
-        tasks.create_task("# 测试\n\n- [ ] Step 1\n- [ ] 归档 current.md → tasks/archive/\n")
+        result = tasks.create_task(
+            "# 测试\n\n# 目标锚点\n做某事。\n\n"
+            "- [ ] Step 1\n- [ ] 归档 current.md → tasks/archive/\n"
+        )
+        assert "已写入" in result
         content = current.read_text(encoding="utf-8")
         assert content.count("归档 current.md") == 1
+
+    def test_rejects_without_anchor(self, _isolate_tasks):
+        """没有 # 目标锚点 → 拒绝写入，文件不被创建。"""
+        result = tasks.create_task("# 测试\n\n- [ ] Step 1\n")
+        assert "拒绝" in result
+        assert "# 目标锚点" in result
+        assert not _isolate_tasks[0].exists()
+
+
+class TestExtractAnchor:
+    def test_simple_anchor(self):
+        anchor = tasks._extract_anchor("# 目标锚点\n一句话目标。\n\n正文")
+        assert anchor == "一句话目标。"
+
+    def test_multiline_anchor(self):
+        anchor = tasks._extract_anchor("# 目标锚点\n第一行。\n第二行。\n\n正文")
+        assert anchor == "第一行。 第二行。"
+
+    def test_no_anchor(self):
+        assert tasks._extract_anchor("无锚点内容") == ""
+
+    def test_anchor_stops_at_next_heading(self):
+        anchor = tasks._extract_anchor("# 目标锚点\n某目标。\n## 步骤\n- [ ] 1")
+        assert anchor == "某目标。"
+
+
+class TestAnchorInjection:
+    def test_anchor_injected_in_context(self, _isolate_tasks):
+        _isolate_tasks[0].write_text(_UNFINISHED, encoding="utf-8")
+        msg = tasks.make_task_context_message()
+        assert msg is not None
+        assert "🎯 目标锚点" in msg["content"]
+        assert "轨迹预测论文" in msg["content"]
+        assert "↳" in msg["content"]
+
+    def test_no_anchor_no_injection(self, _isolate_tasks):
+        """没有锚点时不注入对照提示。"""
+        _isolate_tasks[0].write_text("# 无锚点任务\n\n- [o] Step 1\n")
+        msg = tasks.make_task_context_message()
+        assert msg is not None
+        assert "🎯 目标锚点" not in msg["content"]
 
 
 class TestAutoArchive:
