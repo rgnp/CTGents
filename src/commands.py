@@ -210,217 +210,103 @@ def _cmd_model(r: CmdResult, _ctx, args, _sid) -> None:
 # 上下文诊断指令
 # ═══════════════════════════════════════════════════════════════
 
-@builtin("/context", description="查看上下文：token 分布、前缀缓存诊断、API 命中率、压缩状态")
+@builtin("/context", description="上下文诊断：前缀/对话/尾部注入 + 缓存命中率")
 def _cmd_context(r: CmdResult, ctx, _args, _sid) -> None:
-    """Context command. Accepts CacheContext (preferred) or legacy list[dict]."""
+    """精简版：前缀缓存结构 + 尾部注入清单 + API 命中率。"""
     from .config import MAX_CONTEXT_TOKENS
     from .tools.tokens import count_messages_tokens
 
-    # Support both CacheContext and legacy flat list
-    if hasattr(ctx, 'all'):
-        all_msgs = ctx.all
-        prefix_hash_val = ctx.prefix_hash
-        stats = ctx.stats()
-        prefix_msgs = ctx.prefix
-        log_msgs = ctx.log
-    else:
-        all_msgs = ctx
-        from .cache_context import compute_prefix_hash
-        h, _, _ = compute_prefix_hash(all_msgs)
-        prefix_hash_val = h
-        stats = None
-        prefix_msgs = [m for m in all_msgs if m.get("role") == "system"]
-        log_msgs = [m for m in all_msgs if m.get("role") != "system"]
-    msg_count = len(all_msgs)
+    if not hasattr(ctx, 'all'):
+        r.message = "需要 CacheContext。"
+        return
+
+    all_msgs = ctx.all
+    log_msgs = ctx.log
     used_tokens = count_messages_tokens(all_msgs)
     usage_pct = used_tokens / MAX_CONTEXT_TOKENS * 100
 
-    # 按角色统计
-    roles: dict[str, int] = {}
-    volatile_count = 0
-    for m in all_msgs:
-        role = m["role"]
-        roles[role] = roles.get(role, 0) + 1
-        if m.get("_volatile"):
-            volatile_count += 1
-
-    # 系统消息中是否有压缩标记（prefix + log system 消息）
-    compacted = any("⏪" in (m.get("content") or "") for m in all_msgs if m["role"] == "system")
-
-    # token 预警状态
-    warn_70 = int(MAX_CONTEXT_TOKENS * 0.70)
-    warn_85 = int(MAX_CONTEXT_TOKENS * 0.85)
-    if used_tokens >= warn_85:
-        status_tag = "🔴 紧急"
-    elif used_tokens >= warn_70:
-        status_tag = "⚠️ 过载"
+    if used_tokens >= int(MAX_CONTEXT_TOKENS * 0.85):
+        status = "🔴 紧急"
+    elif used_tokens >= int(MAX_CONTEXT_TOKENS * 0.70):
+        status = "⚠️ 过载"
     else:
-        status_tag = "✅ 正常"
+        status = "✅ 正常"
 
     lines = [
-        "╔══════════════════════════════╗",
-        "║      对话上下文诊断          ║",
-        "╚══════════════════════════════╝",
+        "══ 上下文诊断 ══",
         "",
-        f"  状态:      {status_tag}",
-        f"  Token:     {used_tokens:,} / {MAX_CONTEXT_TOKENS:,} ({usage_pct:.1f}%)",
-        f"  消息数:    {msg_count} 条",
+        f"  Token:  {used_tokens:,} / {MAX_CONTEXT_TOKENS:,} ({usage_pct:.1f}%)  {status}",
+        f"  消息:    {len(all_msgs)} 条",
         "",
-        "── 消息分布 ──",
-        f"  system:   {roles.get('system', 0)} 条",
-        f"  user:     {roles.get('user', 0)} 条",
-        f"  assistant: {roles.get('assistant', 0)} 条",
-        f"  tool:     {roles.get('tool', 0)} 条",
-        f"  其中 _volatile: {volatile_count} 条（运行时注入，纳入了前缀缓存）",
-        "",
-        "── 压缩状态 ──",
+        "── 前缀（始终命中）──",
     ]
 
-    if compacted:
-        for m in all_msgs:
-            if m["role"] == "system" and "⏪" in (m.get("content") or ""):
-                content = m["content"]
-                if len(content) > 120:
-                    content = content[:120] + "…"
-                lines.append("  ✅ 已压缩")
-                lines.append(f"  {content}")
-                break
-    else:
-        lines.append("  ❌ 未压缩（70% 触发自动压缩）")
-
-    # ── 三段式结构诊断 ──
-    if stats is not None:
-        s = stats
-        lines.append("")
-        lines.append("── 三段式结构 ──")
-        lines.append(f"  Prefix: {s['prefix']['messages']} 条 ({s['prefix']['tokens']} token)")
-        lines.append(
-            f"  Log:    {s['log']['messages']} 条 "
-            f"({s['log']['tokens']} token, volatile {s['log']['volatile']})"
-        )
-        lines.append(f"  Scratch:{s['scratch']['messages']} 条 ({s['scratch']['tokens']} token)")
-
-    # ── 前缀哈希 ──
-    lines.append("")
-    lines.append("── 前缀缓存 ──")
-    lines.append(f"  前缀哈希: {prefix_hash_val}")
-    if stats is not None:
-        lines.append(f"  前缀内容: {s['prefix']['tokens']} token ({s['prefix']['messages']} 条系统消息)")
-    else:
-        lines.append(f"  前缀内容: {len(prefix_msgs)} 条系统消息")
-
-    # ── 前缀结构分析 ──
-    tag_map = {
-        "当前环境": "🌐 环境",
-        "当前项目": "📁 项目",
-        "你拥有以下记忆": "🧠 记忆",
-        "安全模式": "🛡️ 安全",
-        "之前对话的摘要": "📝 摘要",
-        "对话摘要": "📝 压缩",
-        "前一话题": "📝 归档",
-    }
-    # 分析 prefix + log 中的 system 消息
-    # 分析 prefix + log 中的 system 消息
-    all_system = list(prefix_msgs) + [m for m in log_msgs if m.get("role") == "system"]
-    for m in all_system:
+    # 前缀内容
+    for i, m in enumerate(ctx.prefix, 1):
         content = m.get("content", "")
-        label = "⚙️ 其他"
-        for key, tag in tag_map.items():
-            if key in content:
-                label = tag
+        label = "AGENTS.md" if i == 1 else "运行时机制索引"
+        lines.append(f"  [{i}] {label:<16} {len(content):,} 字符")
+    lines.append(f"  哈希: {ctx.prefix_hash}")
+    roles: dict[str, int] = {}
+    for m in log_msgs:
+        if m.get("role") != "system":
+            roles[m["role"]] = roles.get(m["role"], 0) + 1
+    lines.append("")
+    lines.append("── 对话体（旧轮命中 / 新轮 miss）──")
+    for role in ("user", "assistant", "tool"):
+        n = roles.get(role, 0)
+        bar = "█" * min(n, 40) if n else "—"
+        lines.append(f"  {role:<10} {n:>3} 条  {bar}")
+
+    # 尾部注入
+    lines.append("")
+    lines.append("── 尾部注入（每轮在末尾 → 必然 miss）──")
+
+    _tail_tags: list[tuple[str, str]] = [
+        ("主动进化 · 方向发现", "方向发现"),
+        ("未完成的长任务", "长任务续做"),
+        ("被动进化发现", "被动反思"),
+        ("你拥有以下记忆", "记忆索引"),
+        ("pin-", "钉板"),
+        ("[提醒] 检索", "提醒检索"),
+        ("⏪ 对话归档", "压缩归档"),
+    ]
+
+    for tag, label in _tail_tags:
+        found = None
+        for m in log_msgs:
+            if m.get("role") == "system" and tag in (m.get("content") or ""):
+                found = m
                 break
-        size = len(content)
-        first_line = content.split("\n")[0][:55]
-        lines.append(f"    {label}  ({size} 字符)  {first_line}")
+        if found:
+            chars = len(found.get("content", ""))
+            lines.append(f"  [✓] {label:<10} {chars:>7,} 字符")
+        else:
+            lines.append(f"  [ ] {label:<10}      —")
 
-    # ── Storm 去重统计 ──
-    from .tools.storm import get_storm_stats
-    storm = get_storm_stats()
-    if storm["hits"] > 0:
-        lines.append("")
-        lines.append("── Storm 去重 ──")
-        lines.append(f"  🔁 拦截重复调用: {storm['hits']} 次")
-        lines.append(f"  📐 去重窗口: {storm['window_size']}/8")
-
-    # ── SAFE 并行统计 ──
-    from .llm import get_safe_stats
-    safe = get_safe_stats()
-    if safe["batches"] > 0:
-        lines.append("")
-        lines.append("── SAFE 并行 ──")
-        lines.append(f"  ⚡ 并行批次数: {safe['batches']}")
-        lines.append(f"  🔧 并行执行工具数: {safe['parallel_tools']}")
-        lines.append(f"  🐌 串行执行工具数: {safe['serial_tools']}")
-
-    # API 缓存统计（按模型区分）
-    # cached_tokens 来自 API 真实返回，hit_ratio = cached / prompt_tokens
+    # API 缓存
     from .llm import get_cache_stats
     cache = get_cache_stats(_sid)
-    if not isinstance(cache, dict):
-        cache = {"models": {}, "total": {"requests": 0, "prompt_tokens": 0,
-                 "completion_tokens": 0, "cache_hit_tokens": 0}}
-    if "total" not in cache:
-        cache = {"models": cache, "total": {"requests": 0, "prompt_tokens": 0,
-                 "completion_tokens": 0, "cache_hit_tokens": 0}}
-    total = cache.get("total", {})
-    if total.get("requests", 0) > 0:
+    t = cache.get("total", {}) if isinstance(cache, dict) else {}
+    reqs = t.get("requests", 0)
+    if reqs > 0:
+        prompt = t.get("prompt_tokens", 0)
+        hit = t.get("cache_hit_tokens", 0)
+        miss = prompt - hit
+        hit_pct = hit / prompt * 100 if prompt > 0 else 0
+        avg_miss = miss / reqs if reqs > 0 else 0
+
         lines.append("")
-        lines.append("── API 统计（按模型） ──")
-
-        for model_key in ["pro"]:
-            s = cache["models"].get(model_key)
-            if not s or s["requests"] == 0:
-                continue
-            reqs = s["requests"]
-            prompt = s["prompt_tokens"]
-            completion = s["completion_tokens"]
-            cached = s.get("cache_hit_tokens", 0)
-            hit_ratio = cached / prompt * 100 if prompt > 0 else 0
-            total_tokens = prompt + completion
-
-            lines.append(f"  🧠 {model_key.title()}")
-            lines.append(f"    请求: {reqs}次  |  输出: {completion:,} tok")
-            lines.append(f"    输入: {prompt:,} tok (缓存命中 {cached:,})  |"
-                         f"  总计: {total_tokens:,} tok")
-
-            if prompt > 0:
-                bar_len = 16
-                hit_bars = int(bar_len * hit_ratio / 100)
-                bar = "█" * hit_bars + "░" * (bar_len - hit_bars)
-                saved = prompt - cached  # 未被缓存的部分 = 实际计费的
-                lines.append(f"    缓存: {bar}  {hit_ratio:.0f}%  "
-                             f"(节省 {cached:,} tok, 实际计费 {saved:,} tok)")
-
-        # 总计行
-        lines.append("")
-        t = total
-        t_hit = t.get("cache_hit_tokens", 0) / t["prompt_tokens"] * 100 if t["prompt_tokens"] > 0 else 0
-        t_saved = t.get("cache_hit_tokens", 0)
-        lines.append(f"  📊 总计: {t['requests']}次请求  "
-                      f"{t['prompt_tokens']+t['completion_tokens']:,} token  "
-                      f"缓存命中 {t_hit:.0f}% (节省 {t_saved:,} tok)")
-
-    non_system_msgs = [m for m in log_msgs if m.get("role") != "system"]
-    recent_tokens = 0
-    for m in non_system_msgs[-6:]:
-        content = m.get("content") or ""
-        recent_tokens += len(content) * 0.35
-    recent_pct = recent_tokens / MAX_CONTEXT_TOKENS * 100 if recent_tokens > 0 else 0
-
-    all_non_system = sum(len(m.get("content") or "") * 0.35 for m in non_system_msgs)
-    all_pct = all_non_system / MAX_CONTEXT_TOKENS * 100 if all_non_system > 0 else 0
-
-    lines.append("")
-    lines.append("── Token 分布 ──")
-    lines.append(f"  旧对话:     {all_pct - recent_pct:.1f}%（可压缩）")
-    lines.append(f"  最近对话:   {recent_pct:.1f}%")
-    lines.append("")
-    lines.append("── 预警阈值 ──")
-    lines.append(f"  自动压缩 (70%):  {warn_70:,}")
-    lines.append(f"  紧急停止 (85%):  {warn_85:,}")
+        lines.append("── API 缓存 ──")
+        lines.append(f"  请求:    {reqs} 次")
+        bar_len = 22
+        hit_bars = int(bar_len * hit_pct / 100)
+        bar = "█" * hit_bars + "░" * (bar_len - hit_bars)
+        lines.append(f"  命中率:  {bar}  {hit_pct:.1f}%")
+        lines.append(f"           (命中 {hit:,} / 输入 {prompt:,} tok)")
+        lines.append(f"  每轮 miss: ~{avg_miss:,.0f} tok (对话增量 + 尾部注入)")
 
     r.message = "\n".join(lines)
-
 
 @builtin("/compact", description="手动压缩上下文：驱逐旧对话换摘要（不必等 65% 自动触发）")
 def _cmd_compact(r: CmdResult, ctx, _args, _sid) -> None:
