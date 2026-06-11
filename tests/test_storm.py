@@ -5,6 +5,7 @@ from src.tools.storm import (
     get_storm_stats,
     reset_storm,
     storm_check,
+    storm_invalidate,
     storm_record,
 )
 
@@ -117,6 +118,44 @@ class TestStormDedup:
         assert isinstance(result, str)
         assert "grep_code" in result
         assert "⚡" in result
+
+
+class TestWriteInvalidation:
+    """写失效：read → write → read 绝不能吃到写前的陈旧缓存。
+
+    曾经的双机制叠加 bug：50c78c3 在 run_conversation 外层做了写清缓存，
+    但内层 storm 窗口整轮不清——写后重读落到 storm 仍返回旧内容。
+    收敛回单一机制后，失效逻辑就在 storm 自身，本类测试钉死该失败类。
+    """
+
+    def setup_method(self):
+        reset_storm()
+
+    def test_stale_read_after_write_prevented(self):
+        """写后重读必须真执行（返回 None），不得返回写前缓存。"""
+        # 模拟 execute_tool 真实序列：check → 执行 → record
+        assert storm_check("read_file", {"path": "a.py"}) is None
+        storm_record("read_file", {"path": "a.py"}, "旧内容")
+        dup = storm_check("read_file", {"path": "a.py"})
+        assert dup is not None and "旧内容" in dup
+        # 写操作落盘 → 缓存全失效
+        storm_record("write_file", {"path": "a.py", "content": "新"}, "ok")
+        assert storm_check("read_file", {"path": "a.py"}) is None
+
+    def test_any_blacklisted_tool_invalidates(self):
+        """任何副作用工具（如 run_command）都触发失效——保守正确。"""
+        storm_check("read_file", {"path": "a.py"})
+        storm_record("read_file", {"path": "a.py"}, "内容")
+        storm_record("run_command", {"command": "pytest"}, "out")
+        assert storm_check("read_file", {"path": "a.py"}) is None
+
+    def test_invalidate_clears_window_and_cache(self):
+        storm_check("read_file", {"path": "a.py"})
+        storm_record("read_file", {"path": "a.py"}, "内容")
+        storm_invalidate()
+        stats = get_storm_stats()
+        assert stats["window_size"] == 0
+        assert stats["cached"] == 0
 
     def test_repeated_third_call_still_duplicate(self):
         """第三次重复调用仍应标记为重复（直到窗口淘汰）。"""

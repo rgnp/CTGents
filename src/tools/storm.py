@@ -57,10 +57,24 @@ def _is_blacklisted(name: str) -> bool:
     return name in _DEDUP_BLACKLIST
 
 
+def storm_invalidate() -> None:
+    """写操作后清空窗口与缓存：磁盘/外部状态已变，旧读取结果不可信。
+
+    失败类：read → write → read 若吃到写前的缓存 = 陈旧读取。
+    黑名单工具（写文件/执行命令等）都可能改状态，统一保守清空——
+    think/pin 等无害工具也会触发清空，代价只是少省一次重复调用。
+    """
+    global _window, _result_cache
+    with _lock:
+        _window = []
+        _result_cache = {}
+
+
 def storm_record(name: str, args: dict, result: str) -> None:
     """记录工具执行结果。在工具执行完成后调用。
 
     将结果缓存，后续相同调用去重时直接返回缓存结果而非静态字符串。
+    黑名单（副作用）工具不记录，且使既有缓存全部失效（见 storm_invalidate）。
 
     Args:
         name: 工具名
@@ -68,6 +82,7 @@ def storm_record(name: str, args: dict, result: str) -> None:
         result: 工具执行结果字符串
     """
     if _is_blacklisted(name):
+        storm_invalidate()
         return
     h = _hash_call(name, args)
     with _lock:
