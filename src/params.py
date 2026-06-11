@@ -113,6 +113,9 @@ class RuntimeParams:
     # 可用 API 返回的 prompt_tokens 真值对账校准这两个旋钮。
     token_per_char_cjk: float = _env_float("CTG_TOKEN_PER_CHAR_CJK", 0.6)
     token_per_char_other: float = _env_float("CTG_TOKEN_PER_CHAR_OTHER", 0.3)
+    # git commit 超时地板（秒）：质量门全量 pytest 需 ~40s+，timeout 给小了
+    # 正道必死，会把 agent 推向绕门——commit 命令的 timeout 自动抬到此值
+    git_commit_timeout_floor: int = _env_int("CTG_GIT_COMMIT_TIMEOUT_FLOOR", 300)
 
 
 RUNTIME = RuntimeParams()

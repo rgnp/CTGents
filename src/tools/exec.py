@@ -4,6 +4,7 @@ import subprocess
 from pathlib import Path
 
 from ..config import MAX_EXEC_TIMEOUT
+from ..params import RUNTIME
 
 # ── 安全配置 ──
 
@@ -104,6 +105,26 @@ def _is_blocked(command: str) -> tuple[bool, str]:
     return False, ""
 
 
+def _check_git_hook_bypass(parts: list[str]) -> str:
+    """拦截绕过 git 钩子（质量门）的命令。返回拒绝理由，合法返回空串。
+
+    门超时 ≠ 门失败：质量门要跑全量测试（~40s+），timeout 不够请加大或
+    不传（commit 有自动地板）。人工放行（--no-verify）只能由用户在终端执行。
+    模式拦不全没关系——门通行证审计（gate_audit）按提交树哈希兜底。
+    """
+    if not parts or Path(parts[0]).stem.lower() != "git":
+        return ""
+    # -c core.hooksPath=... 等配置覆盖 = 换掉钩子本体
+    joined = " ".join(parts).lower()
+    if "core.hookspath" in joined:
+        return "git 命令覆盖 core.hooksPath = 替换质量门钩子"
+    if "commit" in parts and ("--no-verify" in parts or "-n" in parts):
+        return "git commit --no-verify/-n 绕过质量门"
+    if "push" in parts and "--no-verify" in parts:
+        return "git push --no-verify 绕过钩子"
+    return ""
+
+
 def _truncate_output(output: str, max_len: int = MAX_OUTPUT_LENGTH) -> str:
     """截断过长的输出。"""
     if len(output) <= max_len:
@@ -185,6 +206,21 @@ def run_command(command: str, timeout: int = 30, workdir: str | None = None) -> 
     cmd_parts = _split_command(command)
     if isinstance(cmd_parts, str):
         return cmd_parts
+
+    bypass_reason = _check_git_hook_bypass(cmd_parts)
+    if bypass_reason:
+        return (
+            f"⛔ 命令被拦截: {bypass_reason}。\n"
+            f"门超时不等于门失败——质量门要跑全量测试（~40s+）。正道：\n"
+            f"1. 用 git_commit 工具提交（推荐），或 run_command 不传 timeout"
+            f"（commit 自动抬到 {RUNTIME.git_commit_timeout_floor}s 地板）；\n"
+            f"2. 门真失败时，修复失败的测试/lint，再提交；\n"
+            f"3. 人工放行是用户的决定——向用户报告障碍，不要替用户决定绕过。"
+        )
+
+    # git commit 超时地板：钩子门 ~40s+，超时给小了正道必死 → 推向绕门
+    if cmd_parts and Path(cmd_parts[0]).stem.lower() == "git" and "commit" in cmd_parts:
+        timeout = max(timeout, RUNTIME.git_commit_timeout_floor)
 
     # ── 执行 ──
     try:
