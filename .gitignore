@@ -100,3 +100,4 @@ knowledge/
 .scan_cache.json
 .scan_conf_cache.json
 .read_cache.json
+.gap_cache.json

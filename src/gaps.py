@@ -8,11 +8,55 @@
 
 from __future__ import annotations
 
+import contextlib
+import json
+import subprocess
 from collections.abc import Callable
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
+_GAP_CACHE_FILE = PROJECT_ROOT / ".gap_cache.json"
+
+
+def _git_tree_hash() -> str:
+    """返回当前 HEAD 的 tree hash；失败返回空串（禁用缓存）。"""
+    try:
+        r = subprocess.run(
+            ["git", "rev-parse", "HEAD^{tree}"],
+            capture_output=True, text=True, timeout=3, cwd=PROJECT_ROOT,
+        )
+        return r.stdout.strip() if r.returncode == 0 else ""
+    except Exception:
+        return ""
+
+
+def _load_gap_cache(tree: str) -> GapReport | None:
+    if not tree or not _GAP_CACHE_FILE.exists():
+        return None
+    try:
+        data = json.loads(_GAP_CACHE_FILE.read_text(encoding="utf-8"))
+        if data.get("tree") != tree:
+            return None
+        gaps = [Gap(**g) for g in data["report"]["gaps"]]
+        return GapReport(
+            gaps=gaps,
+            sources_scanned=data["report"]["sources_scanned"],
+            sources_failed=data["report"]["sources_failed"],
+            failures=data["report"]["failures"],
+        )
+    except Exception:
+        return None
+
+
+def _save_gap_cache(tree: str, report: GapReport) -> None:
+    if not tree:
+        return
+    with contextlib.suppress(Exception):
+        _GAP_CACHE_FILE.write_text(
+            json.dumps({"tree": tree, "report": asdict(report)}, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
 
 
 @dataclass
@@ -210,6 +254,11 @@ def _prioritize(gaps: list[Gap], top_n: int = 5) -> list[Gap]:
 
 def detect_all_gaps(top_n: int = 5) -> GapReport:
     global _LAST_REPORT
+    tree = _git_tree_hash()
+    cached = _load_gap_cache(tree)
+    if cached is not None:
+        _LAST_REPORT = cached
+        return cached
     report = GapReport()
     detectors: list[tuple[str, Callable[[], list[Gap]]]] = [
         ("performance", _detect_performance_gaps),
@@ -225,6 +274,7 @@ def detect_all_gaps(top_n: int = 5) -> GapReport:
             report.failures.append(f"{name}: {e}")
     report.gaps = _prioritize(report.gaps, top_n=top_n)
     _LAST_REPORT = report
+    _save_gap_cache(tree, report)
     return report
 
 
