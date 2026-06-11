@@ -97,7 +97,8 @@ EVOLUTION = EvolutionParams()
 class RuntimeParams:
     """运行时旋钮：LLM 重试、代码执行、token 预算/估算。"""
 
-    # LLM 调用最大重试次数
+    # eager 工具执行线程池大小（LLM 流式期间预启动 SAFE 工具）
+    eager_executor_workers: int = _env_int("CTG_EAGER_EXECUTOR_WORKERS", 8)
     max_retries: int = _env_int("CTG_MAX_RETRIES", 3)
     # 重试退避基数（秒），实际延迟 = base * 2**(attempt-1)
     retry_base_delay: float = _env_float("CTG_RETRY_BASE_DELAY", 1.0)
