@@ -1054,6 +1054,9 @@ def run_conversation(
         ctx.log.append(task_ctx)
     # 追加用户输入到 log（prefix 不变）
     ctx.log.append({"role": "user", "content": user_input})
+    # ── 教训注入：检查本轮任务是否匹配已知失败模式 ──
+    from .lesson import inject_lesson_context
+    inject_lesson_context(ctx.log, "_task", {"desc": user_input})
 
     # 重设 Storm 去重窗口 + SAFE 并行统计（同轮工具循环内）
     from .tools.storm import reset_storm
