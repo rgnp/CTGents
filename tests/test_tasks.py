@@ -21,6 +21,8 @@ def _isolate_tasks(tmp_path, monkeypatch):
     current = tmp_path / "current.md"
     archive = tmp_path / "archive"
     monkeypatch.setattr(tasks, "CURRENT_TASK_FILE", current)
+    ambitions = tmp_path / "ambitions.md"
+    monkeypatch.setattr(tasks, "AMBITIONS_FILE", ambitions)
     monkeypatch.setattr(tasks, "ARCHIVE_DIR", archive)
     return current, archive
 

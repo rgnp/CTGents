@@ -1044,6 +1044,144 @@ def _find_valid_truncation_point(s: str) -> int:
                 last_valid = i
     return last_valid
 
+def _check_storm_breaker(
+    approved: list[tuple],
+    storm_sig: str | None,
+    storm_count: int,
+) -> tuple[str | None, int]:
+    """检测同轮连续同一错误 → 打破死亡螺旋。
+
+    连续 3 次全失败且错误签名相同 → 在最后一条结果注入 loop guard。
+    """
+    all_failed = True
+    sig_parts: list[str] = []
+    for _item in approved:
+        tool_name = _item[1]
+        result = _item[4]
+        has_err = False
+        err_line = ""
+        try:
+            parsed = json.loads(result)
+            if isinstance(parsed, dict) and "error" in parsed:
+                has_err = True
+                err_line = str(parsed["error"]).split("\n")[0][:80]
+        except (json.JSONDecodeError, Exception):
+            pass
+        if not has_err:
+            all_failed = False
+            break
+        sig_parts.append(f"{tool_name}:{err_line}")
+
+    if not all_failed or not sig_parts:
+        return None, 0
+
+    cur_sig = "|".join(sig_parts)
+    if cur_sig == storm_sig:
+        storm_count += 1
+    else:
+        storm_sig = cur_sig
+        storm_count = 1
+
+    if storm_count >= 3 and approved:
+        last = approved[-1]
+        warn = (
+            f"\n\n[loop guard] '{last[1]}' 已连续失败 {storm_count} 次"
+            f"且错误相同。重复发送——即使换了措辞——也不会有帮助。换方法："
+            f"如果参数被截断，拆成多个小调用；"
+            f"否则修正参数、换工具、或在最终回复中说明障碍。"
+        )
+        last_result = last[4] + warn
+        approved[-1] = (last[0], last[1], last[2], last[3], last_result)
+        logger.warning("stormBreaker: %s 连续失败 %d 次，已注入 loop guard", last[1], storm_count)
+
+    return storm_sig, storm_count
+
+
+def _handle_tool_results(
+    ctx: CacheContext,
+    tool_calls: list[dict],
+    eager_results: dict[int, str],
+    on_tool: ToolCallback,
+    storm_sig: str | None,
+    storm_count: int,
+) -> tuple[str | None, int]:
+    """解析工具调用 → 执行 → stormBreaker → 压缩 → 写 log。
+
+    返回 (更新后的 storm_sig, 更新后的 storm_count)。
+    """
+    ctx.log.append({"role": "assistant", "content": None, "tool_calls": tool_calls})
+
+    approved: list[tuple] = []
+    for tc_data in tool_calls:
+        tool_name = tc_data["function"]["name"]
+        try:
+            args = json.loads(tc_data["function"]["arguments"])
+        except json.JSONDecodeError:
+            repaired = _repair_json(tc_data["function"]["arguments"])
+            try:
+                args = json.loads(repaired)
+                logger.info("工具调用 JSON 已修复: %s", tool_name)
+            except json.JSONDecodeError:
+                error_payload = {"error": f"JSON 解析失败: {tc_data['function']['arguments'][:100]}"}
+                dummy_tc = SimpleNamespace(function=SimpleNamespace(name=tool_name, arguments="{}"))
+                approved.append((tc_data, tool_name, {}, dummy_tc, json.dumps(error_payload, ensure_ascii=False)))
+                continue
+        tc = SimpleNamespace(function=SimpleNamespace(name=tool_name, arguments=tc_data["function"]["arguments"]))
+        on_tool(tool_name, args)
+        approved.append((tc_data, tool_name, args, tc, None))
+
+    # 注入 eager 预执行结果
+    for i, eager_result in eager_results.items():
+        if i < len(approved) and approved[i][4] is None:
+            approved[i] = (approved[i][0], approved[i][1], approved[i][2], approved[i][3], eager_result)
+
+    # 执行未跑的工具
+    exec_indices = [i for i, item in enumerate(approved) if item[4] is None]
+    exec_items = [approved[i] for i in exec_indices]
+    if exec_items:
+        exec_results = _execute_tool_batch(exec_items)
+        for idx, result in zip(exec_indices, exec_results, strict=True):
+            approved[idx] = (approved[idx][0], approved[idx][1], approved[idx][2], approved[idx][3], result)
+
+    # stormBreaker
+    storm_sig, storm_count = _check_storm_breaker(approved, storm_sig, storm_count)
+
+    # 写 tool 结果到 log
+    for tc_data, tool_name, _args, _tc, result in approved:
+        result = truncate_to_budget(result, ctx.all)
+        result = _compress_tool_result(tool_name, result)
+        ctx.log.append({"role": "tool", "tool_call_id": tc_data["id"], "content": result, "_tool_name": tool_name})
+
+    return storm_sig, storm_count
+
+
+def _refresh_volatile_signals(ctx: CacheContext) -> None:
+    """刷新 ctx.log 中的 volatile 消息：记忆索引 + 钉板。
+
+    strip-then-append 避免跨轮累积——这是缓存安全的关键，挂尾消息每轮重算，
+    前缀不动保障 DeepSeek KV 命中。
+    """
+    from .tools.memory import clear_dirty, is_dirty
+    from .tools.memory import get_context as _get_mem_ctx
+    if is_dirty():
+        old_idx = next((i for i, m in enumerate(ctx.log)
+                        if m.get("role") == "system" and "你拥有以下记忆" in m.get("content", "")), -1)
+        new_ctx = _get_mem_ctx()
+        if new_ctx and old_idx >= 0:
+            ctx.log[old_idx] = {"role": "system", "content": new_ctx, "_volatile": True}
+        elif new_ctx and old_idx < 0:
+            ctx.log.append({"role": "system", "content": new_ctx, "_volatile": True})
+        clear_dirty()
+
+    from .session_pins import is_pinboard_msg, render_tail
+    pin_idx = next((i for i, m in enumerate(ctx.log) if is_pinboard_msg(m)), -1)
+    pin_content = render_tail()
+    if pin_content and pin_idx >= 0:
+        ctx.log[pin_idx] = {"role": "system", "content": pin_content, "_volatile": True}
+    elif pin_content and pin_idx < 0:
+        ctx.log.append({"role": "system", "content": pin_content, "_volatile": True})
+    elif not pin_content and pin_idx >= 0:
+        ctx.log.pop(pin_idx)
 
 def run_conversation(
     ctx: CacheContext,
