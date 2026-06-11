@@ -48,24 +48,36 @@ def make_task_context_message() -> dict | None:
             + read_current()
         )
 
-    # ── 被动进化反思 ──
+    # ── 被动进化反思（含代码感知诊断）──
+    from .diagnostics import diagnose_anomalies
     from .tracker import get_latest_reflections as _get_reflections
-    reflections = _get_reflections(limit=3)  # noqa: F811
+    reflections = _get_reflections(limit=3)
     if reflections:
-        ref_lines = ["🔍 被动进化发现了以下值得关注的问题："]
-        for i, ref in enumerate(reflections, 1):
+        # 收集所有异常（去重：同工具+同类型只保留最新的）
+        seen: set[tuple[str, str]] = set()
+        anomalies: list[dict] = []
+        for ref in reflections:
             for a in ref.get("anomalies", []):
+                key = (a.get("tool", ""), a.get("type", ""))
+                if key not in seen:
+                    seen.add(key)
+                    anomalies.append(a)
+
+        if anomalies:
+            diagnostics = diagnose_anomalies(anomalies)
+            lines = ["🔍 被动进化发现了以下值得关注的问题："]
+            for a, d in zip(anomalies, diagnostics, strict=True):
                 icon = {"crit": "🔴", "warn": "🟡"}.get(a.get("severity", ""), "⚪")
-                ref_lines.append(
-                    f"  {icon} [{a.get('type', '?')}] {a.get('detail', '')}"
-                )
-            if i >= 2:
-                break
-        ref_lines.append(
-            "如果需要修复，可以说 '处理这些' 或 '看看第一个'。"
-            "我会用 /evolve 机制分析、修改、测试、提交。"
-        )
-        parts.append("\n".join(ref_lines))
+                lines.append(f"  {icon} [{d.anomaly_type}] {d.anomaly_detail}")
+                if d.root_pattern != "unknown" or d.suggested_action:
+                    lines.append(f"     → 诊断: {d.likely_cause}")
+                    if d.suggested_action:
+                        lines.append(f"     → 建议: {d.suggested_action}")
+            lines.append(
+                "如果需要修复，可以说 '处理这些' 或 '看看第一个'。"
+                "我会用 /evolve 机制分析、修改、测试、提交。"
+            )
+            parts.append("\n".join(lines))
 
     if not parts:
         return None

@@ -51,10 +51,15 @@ def test_context_message_injected_when_unfinished(_isolate_tasks):
     assert "47/250" in msg["content"]  # 细进度随注入透出
 
 
-def test_context_message_none_when_done(_isolate_tasks):
+def test_context_message_none_when_done(_isolate_tasks, monkeypatch):
     _isolate_tasks[0].write_text(_DONE, encoding="utf-8")
+    # tracker 的 get_latest_reflections 会读到 stats/ 的真数据；
+    # 隔离掉它，避免历史异常干扰本测试的"全完成→None"断言。
+    monkeypatch.setattr(
+        "src.tracker.get_latest_reflections",
+        lambda limit=3: [],
+    )
     assert tasks.make_task_context_message() is None
-
 
 def test_archive_moves_and_clears(_isolate_tasks):
     current, archive = _isolate_tasks
