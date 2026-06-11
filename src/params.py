@@ -97,6 +97,7 @@ EVOLUTION = EvolutionParams()
 class RuntimeParams:
     """运行时旋钮：LLM 重试、代码执行、token 预算/估算。"""
 
+    tool_result_compress_threshold: int = _env_int("CTG_TOOL_RESULT_COMPRESS_THRESHOLD", 2400)
     # eager 工具执行线程池大小（LLM 流式期间预启动 SAFE 工具）
     eager_executor_workers: int = _env_int("CTG_EAGER_EXECUTOR_WORKERS", 8)
     max_retries: int = _env_int("CTG_MAX_RETRIES", 3)

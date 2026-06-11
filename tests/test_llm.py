@@ -34,7 +34,7 @@ def test_smoke_no_tool_response(monkeypatch):
     这一条就足以执行入口的全部惰性导入（reset_storm / tracker.set_session /
     reset_safe_stats / auto_select_model），tracker 那类越界导入会在此暴露。
     """
-    monkeypatch.setattr(llm, "_invoke_llm", lambda *a, **k: ("最终答复", []))
+    monkeypatch.setattr(llm, "_invoke_llm_eager", lambda *a, **k: ("最终答复", [], {}))
     tools: list[tuple] = []
     ctx = _ctx()
     out = llm.run_conversation(
@@ -55,10 +55,10 @@ def test_smoke_tool_call_then_final(monkeypatch):
     record_tool_call）——这正是 tracker 越界导入的另两处接缝。
     """
     responses = iter([
-        ("", [_tool_call("think", {"thought": "先想想"})]),  # 第一轮：调工具
-        ("干完了", []),                                       # 第二轮：收尾
+        ("", [_tool_call("think", {"thought": "先想想"})], {}),  # 第一轮：调工具
+        ("干完了", [], {}),                                       # 第二轮：收尾
     ])
-    monkeypatch.setattr(llm, "_invoke_llm", lambda *a, **k: next(responses))
+    monkeypatch.setattr(llm, "_invoke_llm_eager", lambda *a, **k: next(responses))
     tools: list[tuple] = []
     ctx = _ctx()
     out = llm.run_conversation(
@@ -84,7 +84,7 @@ def test_smoke_user_interrupt_returns_clean(monkeypatch):
     def _boom(*_a, **_k):
         raise llm.UserInterruptError("Esc")
 
-    monkeypatch.setattr(llm, "_invoke_llm", _boom)
+    monkeypatch.setattr(llm, "_invoke_llm_eager", _boom)
     out = llm.run_conversation(
         _ctx(), "你好",
         on_token=lambda _t: None, on_tool=lambda *_a: None, session_id="",
@@ -101,10 +101,10 @@ def test_smoke_pin_rides_tail(monkeypatch):
     import src.session_pins as sp
     sp.clear_pins()
     responses = iter([
-        ("", [_tool_call("pin", {"content": "决定:走内存易失版"})]),
-        ("好了", []),
+        ("", [_tool_call("pin", {"content": "决定:走内存易失版"})], {}),
+        ("好了", [], {}),
     ])
-    monkeypatch.setattr(llm, "_invoke_llm", lambda *_a, **_k: next(responses))
+    monkeypatch.setattr(llm, "_invoke_llm_eager", lambda *_a, **_k: next(responses))
     ctx = _ctx()
     try:
         out = llm.run_conversation(
@@ -128,10 +128,10 @@ def test_smoke_unpin_removes_tail_message(monkeypatch):
     sp.clear_pins()
     sp.add_pin("旧决定")
     responses = iter([
-        ("", [_tool_call("unpin", {"content": "旧决定"})]),
-        ("取下了", []),
+        ("", [_tool_call("unpin", {"content": "旧决定"})], {}),
+        ("取下了", [], {}),
     ])
-    monkeypatch.setattr(llm, "_invoke_llm", lambda *_a, **_k: next(responses))
+    monkeypatch.setattr(llm, "_invoke_llm_eager", lambda *_a, **_k: next(responses))
     ctx = _ctx()
     try:
         llm.run_conversation(
@@ -152,10 +152,10 @@ def test_smoke_malformed_tool_args_handled(monkeypatch):
     """
     responses = iter([
         ("", [{"id": "call_x", "type": "function",
-               "function": {"name": "think", "arguments": "{坏的"}}]),
-        ("收尾", []),
+               "function": {"name": "think", "arguments": "{坏的"}}], {}),
+        ("收尾", [], {}),
     ])
-    monkeypatch.setattr(llm, "_invoke_llm", lambda *_a, **_k: next(responses))
+    monkeypatch.setattr(llm, "_invoke_llm_eager", lambda *_a, **_k: next(responses))
     ctx = _ctx()
     out = llm.run_conversation(
         ctx, "做事",
@@ -179,9 +179,9 @@ def test_request_breaker_stops_runaway_loop(monkeypatch):
 
     def _always_tools(*_a, **_k):
         calls["n"] += 1
-        return (None, [_tool_call("nonexistent_tool", {})])
+        return (None, [_tool_call("nonexistent_tool", {})], {})
 
-    monkeypatch.setattr(llm, "_invoke_llm", _always_tools)
+    monkeypatch.setattr(llm, "_invoke_llm_eager", _always_tools)
     monkeypatch.setattr(llm, "_MAX_REQUESTS_PER_TURN", 3)
     out = llm.run_conversation(
         _ctx(), "干活",

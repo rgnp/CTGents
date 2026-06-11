@@ -7,6 +7,8 @@ import threading
 import time
 from abc import ABC, abstractmethod
 from collections.abc import Callable
+from concurrent.futures import Future
+from concurrent.futures import ThreadPoolExecutor as _ThreadPoolExecutor
 from dataclasses import dataclass
 from pathlib import Path
 from types import SimpleNamespace
@@ -143,9 +145,12 @@ class DeepSeekBackend(LLMBackend):
         messages: list[dict],
         on_token: TokenCallback,
         tools: list[dict] | None = None,
+        on_tool_ready: Callable[[int, str, str], None] | None = None,
     ) -> tuple[str | None, list[dict] | None]:
+        """流式调用。on_tool_ready(idx, name, args_json) 在工具参数完整时回调。"""
         content_parts: list[str] = []
         tool_calls: list[dict] = []
+        _tc_parsed: set[int] = set()  # 已触发过 on_tool_ready 的索引
 
         kwargs = {
             "model": self.info.id,
@@ -196,6 +201,13 @@ class DeepSeekBackend(LLMBackend):
                                 tc["function"]["name"] += tc_delta.function.name
                             if tc_delta.function.arguments:
                                 tc["function"]["arguments"] += tc_delta.function.arguments
+                                if on_tool_ready and idx not in _tc_parsed:
+                                    try:
+                                        json.loads(tc["function"]["arguments"])
+                                        _tc_parsed.add(idx)
+                                        on_tool_ready(idx, tc["function"]["name"], tc["function"]["arguments"])
+                                    except json.JSONDecodeError:
+                                        pass  # 参数还没收完，等下一个 chunk
         except UserInterruptError:
             # 中断时返回已收到的部分内容，但不作为完整回复
             content = "".join(content_parts) if content_parts else None
@@ -495,6 +507,92 @@ def _invoke_llm(
     raise RuntimeError("unreachable")
 
 
+def _invoke_llm_eager(
+    backend: LLMBackend,
+    messages: list[dict],
+    on_token: TokenCallback,
+    session_id: str = "",
+    track_stats: bool = True,
+    tools: list[dict] | None = None,
+) -> tuple[str | None, list[dict] | None, dict[int, str]]:
+    """Eager 工具执行：LLM 流式期间预启动 SAFE 工具。
+
+    与 _invoke_llm 的差异：
+    - chat_stream 传入 on_tool_ready 回调
+    - 每个 SAFE 工具参数完整后立即提交线程池（与剩余流式并行）
+    - 流结束时 join 所有 future，返回 pre_results
+    - 非 SAFE 工具和 JSON 解析失败的工具 → 留在 tool_calls 中正常返回
+
+    Returns:
+        (content, tool_calls, pre_results)
+        pre_results: {tool_call_index_in_response: result_string}
+    """
+    model_key = backend.info.name.lower()
+    if tools is None:
+        tools = get_tools() if backend.info.supports_tools else None
+
+    pre_results: dict[int, str] = {}
+    pending: list[tuple[int, Future[str], str, dict]] = []
+    lock = threading.Lock()
+    executor = _get_eager_executor()
+
+    def on_tool_ready(idx: int, name: str, args_json: str) -> None:
+        """流式线程回调：参数完整 → 若是 SAFE 工具，立即提交执行。"""
+        if name not in _PARALLEL_SAFE:
+            return
+        try:
+            args = json.loads(args_json)
+        except json.JSONDecodeError:
+            return
+        tc = SimpleNamespace(function=SimpleNamespace(name=name, arguments=args_json))
+        fut = executor.submit(_tracked_execute_tool, tc)
+        with lock:
+            pending.append((idx, fut, name, args))
+        print(f"  ⚡ [Eager] {name}({args_json[:60]}...) 已提交（流未结束）")
+
+    for attempt in range(1, MAX_RETRIES + 1):
+        try:
+            if attempt == 1:
+                content, tool_calls = backend.chat_stream(
+                    messages, on_token, tools, on_tool_ready=on_tool_ready,
+                )
+            else:
+                logger.warning(
+                    "流式失败，降级为非流式重试 (%d/%d)...", attempt, MAX_RETRIES,
+                )
+                content, tool_calls = backend.chat_non_stream(messages, on_token, tools)
+
+            # ── 收集 eager 结果 ──
+            for idx, fut, _name, _args in pending:
+                try:
+                    result = fut.result(timeout=30)
+                    with lock:
+                        pre_results[idx] = result
+                except Exception as e:
+                    with lock:
+                        pre_results[idx] = json.dumps(
+                            {"error": f"eager 执行失败: {e}"}, ensure_ascii=False,
+                        )
+
+            if track_stats:
+                _update_cache_stats(model_key, messages, session_id)
+            return content, tool_calls, pre_results
+
+        except RETRYABLE as e:
+            pre_results.clear()
+            pending.clear()
+            if attempt < MAX_RETRIES:
+                delay = RETRY_BASE_DELAY * (2 ** (attempt - 1))
+                logger.warning("网络波动 (%s)，重试中 (%d/%d)...", e, attempt, MAX_RETRIES)
+                time.sleep(delay)
+            else:
+                raise
+        except Exception:
+            raise
+
+    raise RuntimeError("unreachable")
+
+
 # ═══════════════════════════════════════════════════════════════
 # API 消息构建（前缀缓存友好版）
 # ═══════════════════════════════════════════════════════════════
@@ -510,6 +608,18 @@ _TOOL_RESULT_COMPRESS_THRESHOLD = RUNTIME.tool_result_compress_threshold
 _COMPRESS_MIN_OMITTED = 120
 # 单轮请求数熔断——真值在 params.RUNTIME
 _MAX_REQUESTS_PER_TURN = RUNTIME.max_requests_per_turn
+# eager 工具执行线程池（LLM 流式期间预启动 SAFE 工具，持久复用）
+_EAGER_EXECUTOR: _ThreadPoolExecutor | None = None
+
+
+def _get_eager_executor() -> _ThreadPoolExecutor:
+    global _EAGER_EXECUTOR
+    if _EAGER_EXECUTOR is None:
+        _EAGER_EXECUTOR = _ThreadPoolExecutor(
+            max_workers=RUNTIME.eager_executor_workers,
+            thread_name_prefix="eager-tool",
+        )
+    return _EAGER_EXECUTOR
 
 
 def _compress_tool_result(tool_name: str, result: str) -> str:
@@ -984,7 +1094,9 @@ def run_conversation(
             logger.info("压缩后消息数: %d", len(ctx))
 
         try:
-            content, tool_calls = _invoke_llm(backend, ctx.send(), on_token, session_id)
+            content, tool_calls, eager_results = _invoke_llm_eager(
+                backend, ctx.send(), on_token, session_id,
+            )
             requests_made += 1
         except UserInterruptError:
             clear_interrupt()
@@ -1027,6 +1139,15 @@ def run_conversation(
                     )
                     on_tool(tool_name, args)
                     approved.append((tc_data, tool_name, args, tc, None))
+
+                # ── 注入 eager 预执行结果（LLM 流式期间已跑完的工具）──
+                for i, eager_result in eager_results.items():
+                    if i < len(approved) and approved[i][4] is None:
+                        tc_data = approved[i][0]
+                        tname = approved[i][1]
+                        targs = approved[i][2]
+                        tc = approved[i][3]
+                        approved[i] = (tc_data, tname, targs, tc, eager_result)
 
                 # 同轮去重由 storm.py 在 execute_tool 豁口统一处理（单一机制）
                 exec_indices: list[int] = []

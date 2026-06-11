@@ -32,9 +32,14 @@ def _tool_call(name: str, args: dict) -> dict:
 
 
 def _mock_llm(monkeypatch, *rounds: tuple) -> None:
-    """脚本化 _invoke_llm：按序返回每个 (content, tool_calls)。"""
-    it = iter(rounds)
-    monkeypatch.setattr(llm, "_invoke_llm", lambda *_a, **_k: next(it))
+    """脚本化 _invoke_llm_eager：按序返回每个 (content, tool_calls, pre_results={})。
+
+    兼容旧调用者只给 2-tuple → 自动补第三个空返回。
+    """
+    def _fix(t):
+        return t if len(t) == 3 else (t[0], t[1], {})
+    it = iter(_fix(r) for r in rounds)
+    monkeypatch.setattr(llm, "_invoke_llm_eager", lambda *_a, **_k: next(it))
 
 
 def _drive_turn(ctx: CacheContext, user_input: str) -> None:
