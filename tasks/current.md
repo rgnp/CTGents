@@ -1,9 +1,9 @@
 # 当前长任务
 
 ## 目标
-_summarize_via_llm 走 _invoke_llm → 统计可见
+同轮工具结果去重 — 相同 (tool, args) 只执行一次，复用缓存
 
 ## 步骤
-- [x] _invoke_llm 加 tools 参数（None=默认工具, [] =无工具）
-- [x] _summarize_via_llm 用 _invoke_llm 替代直调 client.chat.completions.create
-- [o] 提交
+
+- [o] Step 1: llm.py — 导入 DEDUP_BLACKLIST + 去重缓存逻辑
+- [ ] Step 2: ruff + pytest 相关模块，提交

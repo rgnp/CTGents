@@ -26,6 +26,7 @@ from .config import (
 )
 from .params import CONTEXT, RUNTIME
 from .tools import execute_tool, get_tools
+from .tools._tool_meta import DEDUP_BLACKLIST as _DEDUP_BLACKLIST
 
 # 工具显示标签（安全确认 + 终端回显共用）
 from .tools._tool_meta import PARALLEL_SAFE as _PARALLEL_SAFE
@@ -957,6 +958,8 @@ def run_conversation(
     # ── stormBreaker：同轮连续同一错误 → 打破死亡螺旋 ──
     _storm_sig: str | None = None   # 上一轮失败签名
     _storm_count = 0                # 同一签名连续次数
+    # ── 工具结果去重：同轮内相同 (tool, args) 只执行一次 ──
+    _dedup_cache: dict[tuple[str, str], str] = {}
     while True:
         if requests_made >= _MAX_REQUESTS_PER_TURN:
             return (
@@ -1023,6 +1026,20 @@ def run_conversation(
                     on_tool(tool_name, args)
                     approved.append((tc_data, tool_name, args, tc, None))
 
+                # ── 工具结果去重：同轮内相同调用复用缓存 ──
+                for i in range(len(approved)):
+                    if approved[i][4] is not None:
+                        continue
+                    _tname = approved[i][1]
+                    _targs = approved[i][2]
+                    if _tname not in _DEDUP_BLACKLIST:
+                        _args_json = json.dumps(_targs, sort_keys=True, ensure_ascii=False)
+                        _key = (_tname, _args_json)
+                        if _key in _dedup_cache:
+                            _tc_data = approved[i][0]
+                            approved[i] = (_tc_data, _tname, _targs, approved[i][3], _dedup_cache[_key])
+                            logger.info("dedup: %s(%s) → 复用缓存", _tname, _args_json[:80])
+
                 exec_indices: list[int] = []
                 exec_items: list[tuple] = []
                 for i, item in enumerate(approved):
@@ -1032,9 +1049,18 @@ def run_conversation(
 
                 if exec_items:
                     exec_results = _execute_tool_batch(exec_items)
+                    _any_write = False
                     for idx, result in zip(exec_indices, exec_results, strict=True):
                         tc_data, tool_name, args, tc, _ = approved[idx]
+                        if tool_name not in _DEDUP_BLACKLIST:
+                            _args_json = json.dumps(args, sort_keys=True, ensure_ascii=False)
+                            _dedup_cache[(tool_name, _args_json)] = result
+                        else:
+                            _any_write = True
                         approved[idx] = (tc_data, tool_name, args, tc, result)
+                    if _any_write:
+                        _dedup_cache.clear()
+                        logger.info("dedup: 写操作 → 清空去重缓存")
 
                 # ── stormBreaker：检测同轮连续同一错误 ──
                 _all_failed = True
