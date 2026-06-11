@@ -13,7 +13,6 @@ from src.cache_context import CacheContext
 pytestmark = pytest.mark.slow
 
 
-
 class TestDispatch:
     """dispatch() 测试。"""
 
@@ -67,7 +66,6 @@ class TestDispatch:
 
     def test_unknown_command(self):
         r = cmds.dispatch("/nonexistent_xyz", self.ctx, None)
-        # 未知命令不崩溃，message 可能为空
         assert isinstance(r.message, str)
 
     def test_compact_empty_noop(self):
@@ -75,8 +73,10 @@ class TestDispatch:
         assert "无可压缩" in r.message
         assert r.save is False
 
-    def test_compact_forces_below_threshold(self):
+    def test_compact_forces_below_threshold(self, monkeypatch):
         """对话远未到 65% 也能手动压缩（force=True 绕过门槛）。"""
+        import src.llm as llm
+        monkeypatch.setattr(llm, "_make_brief_summary", lambda msgs, max_len=500: "摘要")
         log = []
         for i in range(12):
             log.append({"role": "user", "content": f"问题{i} " + "x" * 50})
