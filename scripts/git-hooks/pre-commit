@@ -9,8 +9,16 @@
 # 应急放行（仅人工、明确知情时）：git commit --no-verify
 set -e
 
+# 门通行证：把通过门禁的暂存树哈希记入 .git/ctg-gate-passed。
+# gate_audit 会话启动时核对 HEAD 树哈希——绕门提交（--no-verify/换钩子）
+# 不会有通行证，事后必被发现。键于树而非动作，任何绕门路径都覆盖。
+record_gate_pass() {
+    git write-tree >> "$(git rev-parse --git-dir)/ctg-gate-passed" 2>/dev/null || true
+}
+
 staged_py=$(git diff --cached --name-only --diff-filter=ACMR | grep '\.py$' || true)
 if [ -z "$staged_py" ]; then
+    record_gate_pass  # 无 .py 改动 = 豁免通过，同样发通行证
     exit 0
 fi
 
@@ -68,5 +76,6 @@ if ! $TIMEOUT $PY -m pytest -q --tb=line -p no:cacheprovider; then
     exit 1
 fi
 
+record_gate_pass
 echo "[pre-commit] ✅ 门禁通过。"
 exit 0

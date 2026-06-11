@@ -47,9 +47,13 @@ def make_task_context_message() -> dict | None:
     global _gaps_reported
     parts: list[str] = []
 
-    # ── 主动进化方向发现（L2：每会话只跑一次 ~5s）──
+    # ── 会话启动一次性检查：门通行证审计 + 方向发现（~5s）──
     if not _gaps_reported:
         _gaps_reported = True
+        from .gate_audit import head_gate_notice
+        gate_notice = head_gate_notice()
+        if gate_notice:
+            parts.append(gate_notice)
         from .gaps import detect_all_gaps as _detect_gaps
         from .gaps import format_gap_report as _fmt_gaps
         gap_report = _detect_gaps(top_n=5)
