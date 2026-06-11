@@ -1,6 +1,7 @@
 """LLM 后端抽象：多模型支持、自动路由、流式调用。"""
 
 import contextlib
+import hashlib
 import json
 import logging
 import threading
@@ -738,6 +739,19 @@ def _compact_cache_context(ctx, user_input: str, force: bool = False) -> None:
         len(evicted), len(kept),
     )
 
+# ── LLM 摘要缓存：相同内容哈希不重复调 LLM（滑窗压缩时同段对话反复驱替）──
+_SUMMARIZE_CACHE: dict[str, str] = {}
+_SUMMARIZE_CACHE_MAX = 50
+
+
+def _summarize_cache_key(messages: list[dict]) -> str:
+    """为消息列表生成确定性哈希（key=sha256(compact_text)）。"""
+    compact = "|".join(
+        f"{m.get('role','?')}:{(m.get('content') or '')[:200]}"
+        for m in messages[-20:]  # 只取最近20条做key，防内存膨胀
+    )
+    return hashlib.sha256(compact.encode()).hexdigest()
+
 
 _SUMMARY_PROMPT = (
     "将以下对话片段摘录为「最小可行摘要」，保留 coding agent 续做任务必需的信息。"
@@ -756,6 +770,11 @@ _SUMMARY_PROMPT = (
 
 def _summarize_via_llm(messages: list[dict]) -> str:
     """调用 LLM 生成结构化摘要——保留文件/命令/决策，丢弃闲聊。"""
+    # ── 哈希缓存：相同内容不重复调 LLM ──
+    ck = _summarize_cache_key(messages)
+    if ck in _SUMMARIZE_CACHE:
+        return _SUMMARIZE_CACHE[ck]
+
     transcript_parts = []
     for m in messages:
         role = m.get("role", "?")
@@ -794,6 +813,9 @@ def _summarize_via_llm(messages: list[dict]) -> str:
         )
         summary = (content or "").strip()
         if summary:
+            _SUMMARIZE_CACHE[ck] = summary
+            if len(_SUMMARIZE_CACHE) > _SUMMARIZE_CACHE_MAX:
+                _SUMMARIZE_CACHE.pop(next(iter(_SUMMARIZE_CACHE)))
             return summary
     except Exception as e:
         logger.warning("LLM 摘要失败，回退文本拼接: %s", e)
