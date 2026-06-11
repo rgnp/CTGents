@@ -12,8 +12,12 @@ from __future__ import annotations
 
 import json
 
+import pytest
+
 import src.llm as llm
 from src.cache_context import CacheContext
+
+pytestmark = pytest.mark.slow
 
 
 def _ctx() -> CacheContext:

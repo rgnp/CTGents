@@ -68,5 +68,5 @@ testpaths = ["tests"]
 pythonpath = ["src"]
 addopts = "-v --tb=short -p no:cacheprovider --ignore=tests/test_prefix_cache.py --ignore=tests/analyze_cache_hitrate.py"
 markers = [
-    "slow: 速度较慢的测试（依赖安装等）",
+    "slow: 速度较慢的测试（L2 集成、上下文压缩等，>2s），pre-commit 快速门禁跳过",
 ]

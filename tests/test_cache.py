@@ -1,10 +1,14 @@
 """测试 Phase 1-3 缓存优化：API消息构建 + 工具结果压缩 + 对话历史压缩。"""
 
+import pytest
+
 from src.llm import (
     _TOOL_RESULT_COMPRESS_THRESHOLD,
     _compact_context,
     _compress_tool_result,
 )
+
+pytestmark = pytest.mark.slow
 
 
 class TestCompactContext:

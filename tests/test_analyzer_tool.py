@@ -1,6 +1,13 @@
 """测试 analyzer_tool.py — analyze_code 工具包装层。"""
 
+import pytest
+
 from src.tools.analyzer_tool import execute
+
+pytestmark = pytest.mark.slow
+
+
+
 
 
 class TestAnalyzerTool:

@@ -13,6 +13,8 @@ import pytest
 import src.tasks as tasks
 from src.cache_context import CacheContext
 
+pytestmark = pytest.mark.slow
+
 
 @pytest.fixture(autouse=True)
 def _isolate_tasks(tmp_path, monkeypatch):

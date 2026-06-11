@@ -13,10 +13,17 @@ from __future__ import annotations
 
 import json
 
+import pytest
+
 import src.llm as llm
 import src.main as main
 import src.session_pins as sp
 from src.cache_context import CacheContext
+
+pytestmark = pytest.mark.slow
+
+
+
 
 
 def _prefix_ctx() -> CacheContext:

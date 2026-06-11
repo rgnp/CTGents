@@ -5,8 +5,13 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
+import pytest
+
 import src.commands as cmds
 from src.cache_context import CacheContext
+
+pytestmark = pytest.mark.slow
+
 
 
 class TestDispatch:

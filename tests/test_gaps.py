@@ -5,6 +5,8 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
+import pytest
+
 from src.gaps import (
     Gap,
     GapReport,
@@ -19,6 +21,8 @@ from src.gaps import (
     get_gap_by_index,
     get_last_report,
 )
+
+pytestmark = pytest.mark.slow
 
 
 def test_gap_defaults():
