@@ -85,7 +85,7 @@ class TestCompactContext:
 
 
 class TestCompressToolResult:
-    """测试 _compress_tool_result：阈值压缩 + 工具类型提示语。"""
+    """测试 _compress_tool_result：head+tail 截断 + 省略标记。"""
 
     def test_short_result_not_compressed(self):
         assert _compress_tool_result("grep_code", "hello") == "hello"
@@ -97,50 +97,52 @@ class TestCompressToolResult:
         text = "x" * _TOOL_RESULT_COMPRESS_THRESHOLD
         assert _compress_tool_result("grep_code", text) == text
 
-    def test_one_over_boundary_has_hint(self):
+    def test_barely_over_boundary_not_enlarged(self):
+        """省略量小于标记开销时不压缩——压缩绝不能让结果变大。"""
         text = "y" * (_TOOL_RESULT_COMPRESS_THRESHOLD + 1)
-        compressed = _compress_tool_result("grep_code", text)
-        assert "已压缩" in compressed
-        assert str(_TOOL_RESULT_COMPRESS_THRESHOLD + 1) in compressed
+        assert _compress_tool_result("grep_code", text) == text
 
-    def test_large_result_truncated(self):
-        text = "z" * 5000
+    def test_large_result_keeps_head_and_tail(self):
+        """大结果保留首尾各半阈值——尾部常含结论（如 pytest 摘要行）。"""
+        half = _TOOL_RESULT_COMPRESS_THRESHOLD // 2
+        text = "H" * half + "m" * 3000 + "T" * half
         compressed = _compress_tool_result("grep_code", text)
         assert len(compressed) < len(text)
-        assert "已压缩" in compressed
+        assert compressed.startswith("H" * half)
+        assert compressed.endswith("T" * half)
+        assert "省略" in compressed
 
     def test_read_file_exempt_from_compression(self):
         """read_file 豁免硬截断：即使超过阈值也不压缩。"""
         text = "a" * 5000
         result = _compress_tool_result("read_file", text)
         assert result == text
-        assert "已压缩" not in result
+        assert "省略" not in result
 
     def test_read_file_lines_exempt_from_compression(self):
         """read_file_lines 豁免硬截断。"""
         text = "b" * 5000
         result = _compress_tool_result("read_file_lines", text)
         assert result == text
-        assert "已压缩" not in result
+        assert "省略" not in result
 
-    def test_search_web_hint(self):
-        text = "c" * 5000
-        compressed = _compress_tool_result("search_web", text)
-        assert "搜索" in compressed or "search" in compressed
+    def test_search_tools_plain_marker(self):
+        """search_web / read_page 用纯省略标记，不带 read_file 取回提示。"""
+        for tool in ("search_web", "read_page"):
+            compressed = _compress_tool_result(tool, "c" * 5000)
+            assert "省略" in compressed
+            assert "read_file" not in compressed
 
-    def test_read_page_hint(self):
-        text = "d" * 5000
-        compressed = _compress_tool_result("read_page", text)
-        assert "搜索" in compressed or "search" in compressed
-
-    def test_generic_tool_hint(self):
-        text = "e" * 5000
-        compressed = _compress_tool_result("other_tool", text)
-        assert "已压缩" in compressed
-        assert "read_file" not in compressed
+    def test_generic_tool_hints_retrieval_path(self):
+        """通用工具的标记带取回提示（read_file 指定行范围）。"""
+        compressed = _compress_tool_result("other_tool", "e" * 5000)
+        assert "省略" in compressed
+        assert "read_file" in compressed
 
     def test_compress_shows_size_info(self):
+        """标记中含省略字符数与原始总字符数。"""
         text = "i" * 10000
         compressed = _compress_tool_result("generic", text)
+        omitted = 10000 - (_TOOL_RESULT_COMPRESS_THRESHOLD // 2) * 2
         assert "10000" in compressed
-        assert str(_TOOL_RESULT_COMPRESS_THRESHOLD) in compressed
+        assert str(omitted) in compressed

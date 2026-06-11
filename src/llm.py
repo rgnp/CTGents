@@ -507,6 +507,8 @@ def _invoke_llm(
 
 # 压缩阈值（字符数，约等于 token 数）——真值在 params.RUNTIME
 _TOOL_RESULT_COMPRESS_THRESHOLD = RUNTIME.tool_result_compress_threshold
+# 省略标记自身约 60-100 字符，省略量低于此值时压缩得不偿失
+_COMPRESS_MIN_OMITTED = 120
 # 单轮请求数熔断——真值在 params.RUNTIME
 _MAX_REQUESTS_PER_TURN = RUNTIME.max_requests_per_turn
 
@@ -523,9 +525,12 @@ def _compress_tool_result(tool_name: str, result: str) -> str:
         return result
 
     half = _TOOL_RESULT_COMPRESS_THRESHOLD // 2
+    omitted = len(result) - half * 2
+    # 省略量小于标记本身的开销时压缩反而增大结果，原样返回
+    if omitted < _COMPRESS_MIN_OMITTED:
+        return result
     head = result[:half]
     tail = result[-half:]
-    omitted = len(result) - half * 2
 
     if tool_name in ("search_web", "read_page"):
         hint = (
