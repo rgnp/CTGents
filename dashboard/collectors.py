@@ -50,8 +50,32 @@ def collect_trust() -> dict:
     return {"ok": not notice, "gate": notice or "PASS（HEAD 有通行证，审计静默）"}
 
 
+_DONE_SECTIONS = ("已交付", "已完成", "归档")
+
+
+def _parse_ambitions(text: str) -> list[dict]:
+    """把 ambitions.md 解析成 `## section` + 其下 `- bullet` 列表。"""
+    sections: list[dict] = []
+    cur: dict | None = None
+    for line in text.splitlines():
+        s = line.strip()
+        if s.startswith("## "):
+            cur = {"section": s[3:].strip(), "items": []}
+            sections.append(cur)
+        elif cur is not None and s.startswith("- "):
+            cur["items"].append(s[2:].strip().replace("**", ""))
+    return sections
+
+
+def _to_int(v) -> int:
+    try:
+        return int(str(v).strip())
+    except Exception:
+        return 0
+
+
 def collect_memory() -> dict:
-    """记忆 & 野心：lessons（含指纹/遭遇次数）+ ambitions。"""
+    """记忆 & 野心：lessons（含指纹/遭遇次数，按高频失败排）+ ambitions。"""
     from src.tasks import read_ambitions
     from src.tools.memory import _dir, _split_frontmatter
 
@@ -64,10 +88,69 @@ def collect_memory() -> dict:
             "name": meta.get("name", f.stem),
             "type": meta.get("type", ""),
             "fingerprint": meta.get("fingerprint", ""),
-            "times": meta.get("times_encountered", ""),
+            "times": _to_int(meta.get("times_encountered", "")),
             "desc": meta.get("description", "")[:80],
         })
-    return {"lessons": lessons, "ambitions": read_ambitions()}
+    lessons.sort(key=lambda x: x["times"], reverse=True)
+    ambitions = read_ambitions()
+    sections = _parse_ambitions(ambitions)
+    active = [s for s in sections if s["section"] not in _DONE_SECTIONS and s["items"]]
+    delivered = sum(len(s["items"]) for s in sections if s["section"] in _DONE_SECTIONS)
+    return {
+        "count": len(lessons),
+        "lessons": lessons,
+        "recurring": [x for x in lessons if x["times"] >= 2][:8],
+        "ambition_sections": sections,
+        "ambition_active": active,
+        "ambition_delivered": delivered,
+    }
+
+
+def collect_anomalies(recent_n: int = 6) -> dict:
+    """自反思：最近会话检测到的异常工具行为（stats/*_reflection.json）。"""
+    if not STATS_DIR.exists():
+        return {"recent": []}
+    files = sorted(
+        STATS_DIR.glob("*_reflection.json"),
+        key=lambda p: p.stat().st_mtime, reverse=True,
+    )[:recent_n]
+    recent = []
+    for p in files:
+        try:
+            d = json.loads(p.read_text(encoding="utf-8"))
+        except Exception:
+            continue
+        recent.append({
+            "session": d.get("session_id", p.stem.replace("_reflection", "")),
+            "timestamp": d.get("timestamp", ""),
+            "anomalies": d.get("anomalies", []),
+        })
+    return {"recent": recent}
+
+
+def collect_tools(top_n: int = 6, min_calls: int = 3) -> dict:
+    """工具性能基线：最慢 / 失败率最高（tracker 跨会话聚合）。
+
+    min_calls 过滤单次调用噪声——n=1 的 30s 不是有意义的"最慢"信号。
+    """
+    from src.tracker import get_cross_session_baseline
+    base = get_cross_session_baseline()
+    items = [
+        {"tool": k, **v}
+        for k, v in base.get("tools", {}).items()
+        if v.get("count", 0) >= min_calls
+    ]
+    slowest = sorted(items, key=lambda x: x.get("p50_ms", 0), reverse=True)[:top_n]
+    failing = sorted(
+        (x for x in items if x.get("failure_rate", 0) > 0),
+        key=lambda x: x.get("failure_rate", 0), reverse=True,
+    )[:top_n]
+    return {
+        "sessions_analyzed": base.get("sessions_analyzed", 0),
+        "total_calls": base.get("total_calls", 0),
+        "slowest": slowest,
+        "failing": failing,
+    }
 
 
 def collect_tasks() -> dict:
@@ -168,4 +251,6 @@ def gather_state() -> dict:
         "tasks": guard(collect_tasks),
         "gaps": guard(collect_gaps),
         "performance": guard(collect_performance),
+        "anomalies": guard(collect_anomalies),
+        "tools": guard(collect_tools),
     }
