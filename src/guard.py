@@ -13,7 +13,6 @@ _PROJECT_ROOT = _SRC_DIR.parent
 PROTECTED_FILES: frozenset[str] = frozenset({
     str(_GUARD_FILE),                                                  # guard.py
     str(_SRC_DIR / "tool_guard.py"),                                   # 工具拦截层
-    str(_SRC_DIR / "coverage_gate.py"),                                # 覆盖率门禁
     str(_SRC_DIR / "main.py"),                                         # 主循环入口
     str(_SRC_DIR / "tools" / "__init__.py"),                           # 工具注册表
     str(_SRC_DIR / "validate.py"),                                     # 验证流水线

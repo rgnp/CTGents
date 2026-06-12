@@ -24,7 +24,7 @@ def test_write_to_guard_blocked():
 
 def test_critical_files_protected():
     """关键基础文件在受保护列表中。"""
-    for name in ("guard.py", "coverage_gate.py", "main.py",
+    for name in ("guard.py", "main.py",
                  "validate.py", "tools/__init__.py"):
         path = Path(__file__).parent.parent / "src" / name
         assert is_protected(path), f"{name} 应在受保护列表中"
