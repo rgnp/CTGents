@@ -1,17 +1,27 @@
 """file.py 关键路径测试 — 备份、校验、读写、受保护文件检查。"""
 
+import os
 import sys
 import tempfile
 from pathlib import Path
+
+import pytest
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from src.tools.file import (
     _backup,
+    _find_affected_files,
+    _get_changed_files,
+    _invalidate_pyc,
+    _list_backups,
     _read_cached,
     _resolve,
+    _track_changes,
     _validate_py,
+    count_lines,
     edit_file_lines,
+    list_files,
     read_file,
     write_file,
 )
@@ -34,14 +44,10 @@ class TestBackup:
         f2.write_text("b", encoding="utf-8")
         bp1 = _backup(f1)
         bp2 = _backup(f2)
-        # 不同文件的备份路径不同
         assert bp1 != bp2
 
     def test_backup_and_list(self, tmp_path):
         """备份后可被 _list_backups 发现。"""
-        import os
-
-        import src.tools.file as fmod
         old_cwd = os.getcwd()
         os.chdir(str(tmp_path))
         try:
@@ -49,7 +55,7 @@ class TestBackup:
             f.write_text("hello", encoding="utf-8")
             bp = _backup(f)
             assert bp.exists()
-            backups = fmod._list_backups(f)
+            backups = _list_backups(f)
             assert len(backups) >= 1
             assert backups[0] == bp
         finally:
@@ -73,7 +79,6 @@ class TestValidatePy:
         err = _validate_py(f, backup)
         assert err is not None
         assert "SyntaxError" in err or "语法" in err
-        # 应自动回滚
         assert f.read_text(encoding="utf-8") == "x = 1\n"
 
     def test_non_python_skipped(self, tmp_path):
@@ -81,6 +86,14 @@ class TestValidatePy:
         f.write_text("# hello", encoding="utf-8")
         err = _validate_py(f, None)
         assert err is None
+
+    def test_syntax_error_no_backup_new_file(self, tmp_path):
+        """新建文件语法错，无备份时直接删除。"""
+        f = tmp_path / "new_bad.py"
+        f.write_text("def broken(:\n    pass\n", encoding="utf-8")
+        err = _validate_py(f, None)
+        assert err is not None
+        assert not f.exists()
 
 
 class TestReadWrite:
@@ -102,6 +115,26 @@ class TestReadWrite:
         result = read_file(str(f))
         assert "无法" in result or "二进制" in result
 
+    def test_read_file_with_line_range(self, tmp_path):
+        f = tmp_path / "lines.py"
+        f.write_text("a\nb\nc\nd\ne\n", encoding="utf-8")
+        result = read_file(str(f), start_line=2, end_line=4)
+        assert "2|" in result
+        assert "b" in result
+        assert "d" in result
+
+    def test_read_file_line_range_out_of_bounds(self, tmp_path):
+        f = tmp_path / "lines.py"
+        f.write_text("a\nb\n", encoding="utf-8")
+        result = read_file(str(f), start_line=5, end_line=10)
+        assert "超出" in result
+
+    def test_read_file_line_range_inverted(self, tmp_path):
+        f = tmp_path / "lines.py"
+        f.write_text("a\nb\nc\n", encoding="utf-8")
+        result = read_file(str(f), start_line=3, end_line=1)
+        assert "大于" in result
+
     def test_write_and_read_back(self, tmp_path, monkeypatch):
         monkeypatch.chdir(tmp_path)
         f = tmp_path / "new_file.py"
@@ -118,7 +151,6 @@ class TestReadWrite:
         assert f.exists()
 
     def test_write_new_syntax_error_rejected_and_removed(self, tmp_path, monkeypatch):
-        """新建 .py 有语法错 → 拒绝并删除（无备份可回滚）。"""
         monkeypatch.chdir(tmp_path)
         f = tmp_path / "broken.py"
         result = write_file(str(f), "def broken(:\n    pass\n")
@@ -154,8 +186,35 @@ class TestEditFileLines:
         edit_file_lines(str(f), "insert", 1, None, "b = 2")
         assert f.read_text(encoding="utf-8") == "a = 1\nb = 2\nc = 3\n"
 
+    def test_edit_delete_success(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        f = tmp_path / "m.py"
+        f.write_text("a = 1\nb = 2\nc = 3\n", encoding="utf-8")
+        edit_file_lines(str(f), "delete", 2, 2)
+        assert f.read_text(encoding="utf-8") == "a = 1\nc = 3\n"
+
+    def test_edit_out_of_bounds(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        f = tmp_path / "m.py"
+        f.write_text("a = 1\n", encoding="utf-8")
+        result = edit_file_lines(str(f), "replace", 10, 10, "x")
+        assert "超出" in result
+
+    def test_edit_missing_end_line(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        f = tmp_path / "m.py"
+        f.write_text("a = 1\n", encoding="utf-8")
+        result = edit_file_lines(str(f), "replace", 1, None, "x")
+        assert "需要指定" in result or "end_line" in result
+
+    def test_edit_missing_new_lines(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        f = tmp_path / "m.py"
+        f.write_text("a = 1\n", encoding="utf-8")
+        result = edit_file_lines(str(f), "replace", 1, 1, None)
+        assert "需要" in result
+
     def test_edit_syntax_error_rolls_back(self, tmp_path, monkeypatch):
-        """编辑引入语法错 → 自动回滚，文件保持原样。"""
         monkeypatch.chdir(tmp_path)
         f = tmp_path / "m.py"
         original = "def f():\n    return 1\n"
@@ -211,12 +270,88 @@ class TestReadCached:
         assert r2 == "v2"
 
 
+class TestCountLines:
+    """行数统计测试。"""
+
+    def test_count_lines(self, tmp_path):
+        f = tmp_path / "data.txt"
+        f.write_text("line1\nline2\nline3\n", encoding="utf-8")
+        result = count_lines(str(f))
+        assert "行数" in result
+        assert "3" in result or "行数: 3" in result
+
+    def test_count_lines_nonexistent(self):
+        """count_lines 对不存在的文件抛异常。"""
+        with pytest.raises(FileNotFoundError):
+            count_lines("/nonexistent.txt")
+
+
+class TestListFiles:
+    """目录列表测试。"""
+
+    def test_list_files(self, tmp_path):
+        (tmp_path / "a.txt").write_text("")
+        (tmp_path / "b.txt").write_text("")
+        (tmp_path / "sub").mkdir()
+        result = list_files(str(tmp_path))
+        assert "a.txt" in result
+        assert "b.txt" in result
+        assert "sub" in result
+
+    def test_list_files_nonexistent(self):
+        result = list_files("/nonexistent_dir_xyz")
+        assert "不存在" in result
+
+    def test_list_files_cache(self, tmp_path):
+        """缓存命中。"""
+        r1 = list_files(str(tmp_path))
+        r2 = list_files(str(tmp_path))
+        assert r1 == r2
+
+
+class TestInvalidatePyc:
+    """字节码缓存清理测试。"""
+
+    def test_invalidate_pyc(self, tmp_path):
+        pyc_dir = tmp_path / "__pycache__"
+        pyc_dir.mkdir()
+        (pyc_dir / "test.cpython-312.pyc").write_text("")
+        f = tmp_path / "test.py"
+        f.write_text("x=1", encoding="utf-8")
+        _invalidate_pyc(f)
+        assert not list(pyc_dir.iterdir())
+
+
+class TestTrackChanges:
+    """变更追踪测试。"""
+
+    def test_get_changed_files(self, monkeypatch):
+        """_get_changed_files 至少返回一个列表。"""
+        result = _get_changed_files()
+        assert isinstance(result, list)
+
+    def test_find_affected_files(self, tmp_path, monkeypatch):
+        """在项目文档中搜索受影响的文件。"""
+        monkeypatch.chdir(tmp_path)
+        (tmp_path / "README.md").write_text("This project uses main.py\n", encoding="utf-8")
+        affected = _find_affected_files("src/main.py")
+        assert "README.md" in affected
+
+    def test_track_changes(self, tmp_path, monkeypatch):
+        """_track_changes 返回空或包含变更信息。"""
+        monkeypatch.chdir(tmp_path)
+        result = _track_changes("test.py")
+        assert isinstance(result, str)
+
+
 if __name__ == "__main__":
     import inspect
 
     tests = []
     for cls in [TestBackup, TestValidatePy, TestEditFileLines,
-                TestReadWrite, TestResolve, TestReadCached]:
+                TestReadWrite, TestResolve, TestReadCached,
+                TestCountLines, TestListFiles, TestInvalidatePyc,
+                TestTrackChanges]:
         instance = cls()
         for name in dir(instance):
             if name.startswith("test_"):

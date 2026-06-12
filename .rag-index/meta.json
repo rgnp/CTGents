@@ -1,13 +1,17 @@
 {
-  "total_files": 203,
-  "total_chunks": 924,
+  "total_files": 466,
+  "total_chunks": 2133,
   "languages": [
+    "c",
+    "cpp",
+    "html",
     "json",
     "markdown",
     "python",
+    "shell",
     "toml",
     "yaml"
   ],
   "force_rebuild": false,
-  "updated_at": 1780972102.9452438
+  "updated_at": 1781245831.702772
 }
