@@ -1,3 +1,4 @@
+import atexit
 import contextlib
 import os
 import shlex
@@ -35,15 +36,46 @@ _jobs: dict[str, dict] = {}
 _jobs_lock = threading.Lock()
 
 
+def _kill_job(job: dict | None) -> None:
+    """驱逐 job 前杀掉仍在跑的进程。
+
+    否则 TTL/上限驱逐只 pop 出字典、进程还活着——既不被追踪也再没人能杀，
+    异步任务反复 fire 时孤儿活进程堆积（实测 70 个把机器压垮的根因）。
+    """
+    if not job:
+        return
+    proc = job.get("proc")
+    if proc is not None and proc.poll() is None:  # 仍在运行
+        with contextlib.suppress(OSError):
+            proc.kill()
+        with contextlib.suppress(Exception):
+            proc.wait(timeout=2)
+
+
 def _job_cleanup() -> None:
     now = time.time()
-    with _jobs_lock:
+    victims: list[dict] = []
+    with _jobs_lock:  # 锁内只摘除，杀进程/wait 放锁外，避免阻塞其他 job 操作
         expired = [jid for jid, j in _jobs.items() if now - j["created_at"] > _JOB_TTL_SECONDS]
         for jid in expired:
-            _jobs.pop(jid, None)
+            victims.append(_jobs.pop(jid))
         while len(_jobs) > _JOB_MAX_COUNT:
             oldest = min(_jobs.keys(), key=lambda k: _jobs[k]["created_at"])
-            _jobs.pop(oldest, None)
+            victims.append(_jobs.pop(oldest))
+    for job in victims:
+        _kill_job(job)
+
+
+def _kill_all_jobs() -> None:
+    """进程退出兜底：杀光所有未回收的异步进程，不留孤儿。"""
+    with _jobs_lock:
+        jobs = list(_jobs.values())
+        _jobs.clear()
+    for job in jobs:
+        _kill_job(job)
+
+
+atexit.register(_kill_all_jobs)
 
 
 def _start_job(command: str, timeout: int, workdir: str | None) -> str:

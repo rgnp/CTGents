@@ -1,5 +1,6 @@
 """测试 exec 模块：安全检测、命令执行、异步 job 管理。"""
 
+import contextlib
 import re
 import shlex
 import time
@@ -136,6 +137,24 @@ class TestRunAsync:
         poll_job(job_id)
         result2 = poll_job(job_id)
         assert "不存在" in result2 or "过期" in result2
+
+    def test_evicted_running_job_is_killed(self):
+        """泄漏不变量：驱逐仍在跑的 job 必须杀进程——否则孤儿活进程堆积卡死机器（70 进程根因）。"""
+        exec_mod._jobs.clear()
+        result = run_async("python -c \"__import__('time').sleep(60)\"", timeout=120)
+        job_id = _extract_job_id(result)
+        proc = exec_mod._jobs[job_id]["proc"]
+        assert proc.poll() is None, "前置：job 应仍在跑"
+        orig = exec_mod._JOB_MAX_COUNT
+        try:
+            exec_mod._JOB_MAX_COUNT = 0  # 强制上限驱逐
+            exec_mod._job_cleanup()
+            assert job_id not in exec_mod._jobs, "应被驱逐出追踪"
+            assert proc.poll() is not None, "被驱逐的运行中进程必须已被杀，不留孤儿"
+        finally:
+            exec_mod._JOB_MAX_COUNT = orig
+            with contextlib.suppress(Exception):
+                proc.kill()
 
 
 class TestJobExecute:
