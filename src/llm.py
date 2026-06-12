@@ -564,12 +564,24 @@ def _invoke_llm_eager(
                 content, tool_calls = backend.chat_non_stream(messages, on_token, tools)
 
             # ── 收集 eager 结果 ──
-            for idx, fut, _name, _args in pending:
+            for idx, fut, name, args in pending:
                 try:
                     result = fut.result(timeout=30)
                     with lock:
                         pre_results[idx] = result
                 except Exception as e:
+                    # Tavily quota 自愈：重读 .env → 更新 web.tavily → 同步重试一次
+                    if name == "search_web":
+                        healed = _tavily_self_heal()
+                        if healed:
+                            retry_tc = SimpleNamespace(function=SimpleNamespace(name=name, arguments=json.dumps(args)))
+                            try:
+                                result = _tracked_execute_tool(retry_tc)
+                                with lock:
+                                    pre_results[idx] = result
+                                continue
+                            except Exception:
+                                pass
                     with lock:
                         pre_results[idx] = json.dumps(
                             {"error": f"eager 执行失败: {e}"}, ensure_ascii=False,
@@ -611,6 +623,36 @@ _COMPRESS_MIN_OMITTED = 120
 _MAX_REQUESTS_PER_TURN = RUNTIME.max_requests_per_turn
 # eager 工具执行线程池（LLM 流式期间预启动 SAFE 工具，持久复用）
 _EAGER_EXECUTOR: _ThreadPoolExecutor | None = None
+
+
+def _tavily_self_heal() -> bool:
+    """重读 .env → 重建 tavily 客户端 → 更新 src.tools.web 模块级变量。
+
+    在 eager executor 层（而非在 search_web 内）接线——当下层模块因旧版本
+    内存态未加载 _try_self_heal 时，这层兜底。返回 True 表示自愈成功。
+    """
+    try:
+        import os
+        from pathlib import Path
+
+        from dotenv import load_dotenv
+
+        import src.tools.web as _web
+
+        from .config import MultiKeyTavilyClient
+
+        env_path = Path(__file__).resolve().parent.parent / ".env"
+        load_dotenv(env_path, override=True)
+        keys_raw = os.getenv("TAVILY_API_KEYS", os.getenv("TAVILY_API_KEY", ""))
+        keys = [k.strip() for k in keys_raw.split(",") if k.strip()]
+        if not keys:
+            return False
+        _web.tavily = MultiKeyTavilyClient(keys)
+        logger.info("Tavily 自愈：已更新 web.tavily 客户端（%d keys）", len(keys))
+        return True
+    except Exception as exc:
+        logger.warning("Tavily 自愈失败: %s", exc)
+        return False
 
 
 def _get_eager_executor() -> _ThreadPoolExecutor:
