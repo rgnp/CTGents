@@ -399,6 +399,15 @@ def _finalize_session(ctx: CacheContext, session_id: str | None) -> list[str]:
                 lines.append("已写入会话反思（异常发现将在下次启动注入）。")
         except Exception as e:
             logger.warning("会话反思失败（不阻塞退出）: %s", e)
+    # ── 机械记忆收割：从对话日志自动提取失败模式，不靠 LLM 自觉 ──
+    try:
+        from .lesson import extract_lessons, save_lessons
+        lessons = extract_lessons(ctx.all)
+        if lessons:
+            n = save_lessons(lessons)
+            lines.append(f"已自动收割 {n} 条记忆。")
+    except Exception as e:
+        logger.warning("记忆收割失败（不阻塞退出）: %s", e)
     # 把 durable 钉板转存进记忆（会话内不漂 → 新会话可 recall）
     from .session_pins import promote_durable
     promoted = promote_durable()
