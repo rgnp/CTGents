@@ -565,27 +565,15 @@ def _invoke_llm_eager(
 
             # ── 收集 eager 结果 ──
             for idx, fut, name, args in pending:
-                try:
-                    result = fut.result(timeout=30)
-                    with lock:
-                        pre_results[idx] = result
-                except Exception as e:
-                    # Tavily quota 自愈：重读 .env → 更新 web.tavily → 同步重试一次
-                    if name == "search_web":
-                        healed = _tavily_self_heal()
-                        if healed:
-                            retry_tc = SimpleNamespace(function=SimpleNamespace(name=name, arguments=json.dumps(args)))
-                            try:
-                                result = _tracked_execute_tool(retry_tc)
-                                with lock:
-                                    pre_results[idx] = result
-                                continue
-                            except Exception:
-                                pass
-                    with lock:
-                        pre_results[idx] = json.dumps(
-                            {"error": f"eager 执行失败: {e}"}, ensure_ascii=False,
-                        )
+                result = fut.result(timeout=30)
+                # Tavily quota 自愈：检测结果字符串中的配额错误并重试
+                if name == "search_web" and _is_quota_error(result):
+                    healed = _tavily_self_heal()
+                    if healed:
+                        retry_tc = SimpleNamespace(function=SimpleNamespace(name=name, arguments=json.dumps(args)))
+                        result = _tracked_execute_tool(retry_tc)
+                with lock:
+                    pre_results[idx] = result
 
             if track_stats:
                 _update_cache_stats(model_key, messages, session_id)
@@ -623,6 +611,14 @@ _COMPRESS_MIN_OMITTED = 120
 _MAX_REQUESTS_PER_TURN = RUNTIME.max_requests_per_turn
 # eager 工具执行线程池（LLM 流式期间预启动 SAFE 工具，持久复用）
 _EAGER_EXECUTOR: _ThreadPoolExecutor | None = None
+
+
+def _is_quota_error(result: str) -> bool:
+    """检测工具结果是否为 Tavily 配额耗尽错误——统一检测，替代逐层 try/except。"""
+    return (
+        "UsageLimitExceededError" in result
+        or "plan's set usage limit" in result
+    )
 
 
 def _tavily_self_heal() -> bool:
@@ -920,7 +916,7 @@ def _tracked_execute_tool(tc):
         elapsed_ms = (time.perf_counter() - t0) * 1000
         from .tracker import record_tool_call
         record_tool_call(tc.function.name, elapsed_ms, success=False, error=type(e).__name__)
-        raise
+        return json.dumps({"error": f"{type(e).__name__}: {e}"}, ensure_ascii=False)
 
 def _execute_tool_batch(approved: list[tuple]) -> list[str]:
     """按序分块并行执行工具 — 保留 LLM 原始调用顺序。
@@ -952,10 +948,7 @@ def _execute_tool_batch(approved: list[tuple]) -> list[str]:
         if approved[i][1] not in _PARALLEL_SAFE:
             # 非 SAFE：串行执行
             tc = approved[i][3]
-            try:
-                results[i] = _tracked_execute_tool(tc)
-            except Exception as e:
-                results[i] = json.dumps({"error": f"执行失败: {e}"}, ensure_ascii=False)
+            results[i] = _tracked_execute_tool(tc)
             total_serial += 1
             i += 1
         else:
@@ -982,10 +975,7 @@ def _execute_tool_batch(approved: list[tuple]) -> list[str]:
                         fut_map[fut] = j
                     for fut in as_completed(fut_map):
                         idx = fut_map[fut]
-                        try:
-                            results[idx] = fut.result()
-                        except Exception as e:
-                            results[idx] = json.dumps({"error": f"并行执行失败: {e}"}, ensure_ascii=False)
+                        results[idx] = fut.result()
                 total_parallel += len(batch)
 
     _update_safe_stats(total_parallel, total_serial)
