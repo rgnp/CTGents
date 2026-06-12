@@ -5,6 +5,7 @@ import threading
 import time
 import traceback
 from collections.abc import Callable
+from datetime import datetime
 from pathlib import Path
 
 from .cache_context import CacheContext
@@ -90,9 +91,15 @@ def _make_mechanisms_message() -> dict:
     return {"role": "system", "content": "\n".join(lines), "_volatile": True}
 
 
+def _make_date_message() -> dict:
+    """今天的日期——放前缀，一天不变，缓存无损。解决 LLM 训练截止日期盲区。"""
+    today = datetime.now().strftime("%Y-%m-%d")
+    return {"role": "system", "content": f"今天是 {today}。", "_volatile": True}
+
+
 def _make_prefix_msgs() -> list[dict]:
-    """缓存前缀的不可变系统消息：AGENTS.md（手册）+ 自动派生的运行时机制索引。"""
-    return [_make_agents_message(), _make_mechanisms_message()]
+    """缓存前缀的不可变系统消息：日期 + AGENTS.md（手册）+ 自动派生的运行时机制索引。"""
+    return [_make_date_message(), _make_agents_message(), _make_mechanisms_message()]
 
 
 def _append_volatile_context(ctx: CacheContext) -> None:
