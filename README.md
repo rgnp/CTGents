@@ -1,130 +1,74 @@
 # CTGents — 自进化 AI 编程助手
 
-[![Python](https://img.shields.io/badge/python-3.12%2B-blue)](https://www.python.org/)
-[![License](https://img.shields.io/github/license/rgnp/CTGents)](LICENSE)
-[![DeepSeek](https://img.shields.io/badge/LLM-DeepSeek_V4-green)](https://deepseek.com)
-
-终端里的自进化 AI 编程助手。基于 DeepSeek V4，能写代码、搜索网络、管理知识库、通过 `/evolve` 自主进化。
-
----
+终端里的 AI 编程助手。能写代码、搜索网络、管理知识库，通过多层机械安全门禁保护自身不被破坏。
 
 ## 快速开始
 
 ```bash
 pip install -r requirements.txt
-cp .env.example .env          # 编辑 .env 填入 DEEPSEEK_API_KEY
-python run.py
+cp .env.example .env          # 编辑 .env 填入密钥
+py scripts/install_hooks.py   # 安装 Git 提交钩子
+py src/main.py                # 启动
 ```
 
----
+## 核心机制
 
-## 核心能力
+### 机械安全门禁
 
-### 自进化系统
+规则不是靠 LLM 自觉——到不了的防线代码兜底：
 
-Agent 能自主研究、修改自己的源代码，通过多层验证保证不崩溃：
+| 层 | 管什么 | 怎么拦 |
+|---|---|---|
+| 工具边界 | 文件操作限 cwd、读后写、禁 src/tools/ 新建 | `tool_guard.py` 在 write_file/edit/delete 前机械校验 |
+| 文件保护 | 禁止修改 guard.py 等 9 个核心文件 | `file.py` → `is_protected()` 匹配 PROTECTED_FILES |
+| 覆盖率门禁 | 未测试文件拒绝修改 | `coverage_gate.py` 四层递进阈值 |
+| 提交闸 | lint 零错误 + 全量 pytest | pre-commit hook，任何路径提交都绕不过 |
+| 事后审计 | 改代码没跑测试 → 下轮提醒 | `_inject_completion_audit` 每轮机械注入 |
+| 记忆收割 | 会话关闭自动提取失败模式 | `_finalize_session` → `extract_lessons` + `save_lessons` |
+| Tavily 自愈 | quota 耗尽自动切 key | search_web + eager executor 双层兜底 |
 
-| 组件 | 功能 |
-|------|------|
-| **覆盖率门禁** | 4 级递进：tools/ 0% → config 45% → core 60% → critical 75% |
-| **验证流水线** | AST 语法 → pytest → 覆盖率不降 → 无新 lint 错误 |
-| **进化档案** | JSONL 记录每次自修改，TF-IDF 搜索历史，避免重复踩坑 |
-| `/evolve <目标>` | 触发完整闭环：研究 → 综合 → 生成 → 验证 → 合入/回滚 |
+### 记忆→行为闭环
 
-### RAG 语义搜索
+打破"跨会话记住了但不改变行为"的死结：
 
-| 工具 | 功能 |
-|------|------|
-| `rag_index` | 索引项目代码库（30+ 语言），增量更新 |
-| `rag_query` | 语义搜索，scope='code' 搜代码，'research' 搜知识库 |
-| `rag_status` | 查看索引状态 |
+- **检测失败**：四指纹检测器（签名漂移/重复编辑/工具参数错/预提交拒）
+- **自动收割**：会话关闭时机械提取教训存入 memory/，不靠 LLM 自觉
+- **下次注入**：匹配失败模式时自动在上下文尾部注入 `[⚠️ 经验提醒]`
+- **工具自愈**：search_web quota 耗尽自动重读 .env 并轮换 key
 
-### 编程工具
+### DeepSeek 前缀缓存
 
-| 类别 | 工具 |
-|------|------|
-| 文件 | `read_file` `write_file` `edit_file_lines` `delete_file` `list_files` `count_lines` |
-| 代码 | `grep_code` `run_python` `run_command` |
-| Git | `git_status` `git_diff` `git_log` `git_review` `git_commit` `git_push` `git_pr` `git_branch` |
-| 网络 | `search_web` `read_page` |
-| 记忆 | `remember` `recall` `forget` |
-| 思考 | `think` |
-| 自我 | `self` — 查看自己的完整架构和能力 |
+三段式 CacheContext：不可变 prefix + 只追加 log + 易失 scratch。日常编码命中率 94-96%。
 
-### 性能
+## AGENTS.md — AI 操作手册
 
-- **DeepSeek 前缀缓存**: 三段式 CacheContext（不可变 prefix + 只追加 log + 易失 scratch）
-- **并行执行**: 只读工具自动并行（ThreadPoolExecutor），有副作用工具串行
-- **Storm 去重**: 滑动窗口拦截同轮重复工具调用
-- **预读加速**: 用户输入中的文件路径自动预读到上下文
+[AGENTS.md](AGENTS.md) 是给 AI 看的操作手册。最近重构为三层：
 
----
-
-## 启动后常用命令
-
-```
-/help              # 指令列表
-/context           # 上下文诊断：token 分布、缓存命中
-/evolve <目标>     # 触发自进化
-/model             # 查看/切换 LLM 模型
-/self              # 查看自身架构和能力
-/clear             # 清除对话上下文
-/save              # 保存会话
-/load <id>         # 加载历史会话
-/sessions          # 列出所有会话
-```
-
----
+- `[必须]` 8 条 LLM 操心的规则 + 11 条禁止
+- `[后台]` 11 行机械保障清单（已代码强制，一眼扫过）
+- 行为准则（节奏/任务追踪/沟通/记忆）
 
 ## 项目结构
 
 ```
 src/
-  main.py              # 主入口 + Esc 中断 + 预读优化
-  llm.py               # LLM 后端 + 并行执行 + 缓存统计
+  main.py              # 主入口 + 管线注入
+  llm.py               # LLM 后端 + eager 并行执行
   cache_context.py     # 三段式上下文管理器
-  commands.py          # 指令系统（/help /save /evolve 等）
-  config.py            # 配置中心
+  commands.py          # 指令系统
+  config.py            # 配置中心 + MultiKeyTavilyClient
   session.py           # 会话持久化
-  guard.py             # 自我保护（is_protected 阻止修改 guard.py）
-  coverage_gate.py     # 覆盖率门禁（4 tier 渐进解锁）
-  validate.py          # 三阶段验证流水线（AST→pytest→覆盖率）
-  evolve.py            # 进化档案（JSONL + TF-IDF 查询）
-  evolution_loop.py    # 进化编排器
-  suggest.py           # 主动建议引擎
+  guard.py             # 自我保护（PROTECTED_FILES 9 个关键文件）
+  coverage_gate.py     # 覆盖率门禁（4 tier）
+  validate.py          # 三阶段验证（AST→pytest→覆盖率/lint）
+  lesson.py            # 教训提取 + 记忆存储
+  tracker.py           # 调用追踪 + 被动反思
   tools/
-    __init__.py        # 注册中心 + 调度 + 热加载
-    file.py            # 文件读写/编辑
-    web.py             # 网页搜索/阅读
-    exec.py            # Python/Shell 执行
-    code.py            # 代码搜索
-    git.py             # Git 全流程
-    project.py         # 项目扫描/分析
-    lint.py            # 规范检查/文档同步
-    rag.py             # RAG 索引 + 语义搜索
-    evolve.py          # 进化工具（LLM 可调用）
-    memory.py          # 记忆系统
-    think.py           # 策略思考
-    self.py            # 自我认知
-    storm.py           # 去重引擎
-    tracker.py         # 调用追踪
-    tokens.py          # Token 计数
-tests/                 # 291 个测试用例
-docs/                  # 设计文档
-memory/                # 长期记忆
-knowledge/             # 研究知识库
+    file.py, web.py, exec.py, git.py, code.py
+    rag.py, evolve.py, memory.py, self.py, storm.py ...
+tests/                 # 677 个测试用例
+scripts/               # Git hooks 安装脚本
 AGENTS.md              # AI Agent 操作手册
-```
-
----
-
-## 开发
-
-```bash
-make test           # 全部测试
-make lint           # ruff 检查
-make lint-fix       # 自动修复
-make preflight      # lint + test + docs-sync + check
 ```
 
 ## 许可证
