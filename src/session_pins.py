@@ -102,12 +102,18 @@ def promote_durable() -> int:
     """会话结束:把 durable 的 pin 转存进 memory(下次 recall 可捞)。返回转存条数。
 
     钉板治"本场不漂"(易失);转存把够耐久的决定接力给跨会话记忆系统——
-    两条需求(会话内不漂 / 新会话有记忆)在此衔接。同文本同 name → 覆盖,不累积重复。
+    两条需求(会话内不漂 / 新会话有记忆)在此衔接。
+
+    type 用 strategy(不是 knowledge——已清空该类型)。
+    每条 pin 附 fingerprint=内容 SHA256 前缀，使同一内容跨会话被多次 durable pin
+    时自动合并到同一 memory、递增 times_encountered。times_encountered 本身就是
+    摩擦信号——被反复 pin 的规则说明在行为里持续不稳定。
     """
     from .tools.memory import _remember
     count = 0
     for p in _pins:
         if p.get("durable"):
-            _remember(_promote_name(p["text"]), p["text"], "knowledge")
+            fp = hashlib.sha256(p["text"].encode("utf-8")).hexdigest()[:12]
+            _remember(_promote_name(p["text"]), p["text"], "strategy", fingerprint=fp)
             count += 1
     return count

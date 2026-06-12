@@ -83,20 +83,23 @@ def test_is_pinboard_msg():
 
 
 def test_promote_only_durable(monkeypatch):
-    """只有 durable 的 pin 转存进 memory;转存调用 _remember(name, content, knowledge)。"""
+    """只有 durable 的 pin 转存进 memory，type=strategy，附 fingerprint 合并。"""
     import src.tools.memory as mem
     calls: list[tuple] = []
     monkeypatch.setattr(
         mem, "_remember",
-        lambda name, content, mtype: calls.append((name, content, mtype)) or "ok",
+        lambda name, content, mtype, fingerprint=None: calls.append(
+            (name, content, mtype, fingerprint)) or "ok",
     )
     sp.add_pin("耐久决定X", durable=True)
     sp.add_pin("普通决定Y", durable=False)
     assert sp.promote_durable() == 1
     assert len(calls) == 1
-    name, content, mtype = calls[0]
+    name, content, mtype, fp = calls[0]
     assert content == "耐久决定X"
-    assert mtype == "knowledge"
+    assert mtype == "strategy"
+    assert isinstance(fp, str)
+    assert len(fp) == 12
     assert name.startswith("pin-")
 
 
