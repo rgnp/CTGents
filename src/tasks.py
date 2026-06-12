@@ -34,25 +34,25 @@ def reset_gaps_cache() -> None:
 
 
 def read_ambitions() -> str:
-    """返回 ambitions.md 中自己填写的野心内容（跳过模板说明）。"""
+    """返回 ambitions.md 全文（去掉一级标题）。"""
     if not AMBITIONS_FILE.exists():
         return ""
     text = AMBITIONS_FILE.read_text(encoding="utf-8").strip()
     if not text:
         return ""
-    # 只取"## 当前野心"后的内容（跳过模板说明）
-    marker = "## 当前野心"
-    idx = text.find(marker)
-    if idx == -1:
-        return ""
-    body = text[idx + len(marker):].strip()
-    if not body:
+    # 跳过一级标题行
+    lines = text.splitlines()
+    if lines and lines[0].startswith("# "):
+        lines = lines[1:]
+    body = "\n".join(lines).strip()
+    # 两个分区都空 = 没有实质内容
+    if not body or body == "## 你的目标\n\n_暂无。_\n\n## Agent 的目标\n\n_暂无。_":
         return ""
     return body
 
 
 def has_ambitions() -> bool:
-    """ambitions.md 存在且 agent 自己写了东西。"""
+    """ambitions.md 存在且有实质目标。"""
     return bool(read_ambitions())
 
 
@@ -133,7 +133,7 @@ def is_all_done() -> bool:
 
 
 def make_task_context_message() -> dict | None:
-    """生成 volatile 上下文消息：方向发现 + 未完成长任务 + 被动进化反思。"""
+    """生成 volatile 上下文消息：方向发现 + 长期目标 + 未完成长任务 + 被动进化反思。"""
     global _gaps_reported
     parts: list[str] = []
 
@@ -151,11 +151,11 @@ def make_task_context_message() -> dict | None:
         if gap_text:
             parts.append(gap_text)
 
-    # ── 野心清单（自己发现的事，不是任务）──
+    # ── 长期目标（你与 agent 共同的长期方向）──
     if has_ambitions():
         parts.append(
-            "📋 你之前记下了一些想做的事（tasks/ambitions.md），"
-            "什么时候推进你自己判断：\n\n" + read_ambitions()
+            "📋 你们共同的长期目标（tasks/ambitions.md），"
+            "所有决策的弱方向参考：\n\n" + read_ambitions()
         )
 
     # ── 全完成自动归档（B 方案：下游兜底）──
