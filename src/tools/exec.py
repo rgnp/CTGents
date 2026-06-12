@@ -1,6 +1,10 @@
+import contextlib
 import os
 import shlex
 import subprocess
+import threading
+import time
+import uuid
 from pathlib import Path
 
 from ..config import MAX_EXEC_TIMEOUT
@@ -8,24 +12,108 @@ from ..params import RUNTIME
 
 # ── 安全配置 ──
 
-# 危险命令关键词 — 匹配整个命令字符串（含子串）。只放明确危险的全命令模式。
 _DANGEROUS_PATTERNS = [
-    # 删库跑路（必须先解析才能拦 rm /rmdir，此处只拦明确的全路径破坏模式）
     "rm -rf /", "rm -rf /*", "rmdir /s /q",
-    "format", "mkfs", "dd if=",              # 格式化磁盘
-    "shutdown", "reboot", "poweroff",        # 关机
-    "wget ", "curl ",                        # 下载
-    "sudo ",                                 # 提权
+    "format", "mkfs", "dd if=",
+    "shutdown", "reboot", "poweroff",
+    "wget ", "curl ",
+    "sudo ",
 ]
 
-# 文件操作的命令名 — 只检查第一个词（而非子串），不误拦 `git rm` 之类。
 _BLOCKED_FILE_OPS = frozenset({
-    "rm", "del", "rd", "rmdir",          # 删除 — 走 delete_file 门禁
-    "move", "ren", "rename", "copy", "xcopy",  # 移动/复制 — 走 write_file 门禁
+    "rm", "del", "rd", "rmdir",
+    "move", "ren", "rename", "copy", "xcopy",
 })
-# 最大输出长度（字符）
 MAX_OUTPUT_LENGTH = 100_000
 SHELL_META_CHARS = frozenset("&|;<>\n\r")
+
+# ── 异步 Job 管理 ──
+
+_JOB_TTL_SECONDS = 600
+_JOB_MAX_COUNT = 50
+_jobs: dict[str, dict] = {}
+_jobs_lock = threading.Lock()
+
+
+def _job_cleanup() -> None:
+    now = time.time()
+    with _jobs_lock:
+        expired = [jid for jid, j in _jobs.items() if now - j["created_at"] > _JOB_TTL_SECONDS]
+        for jid in expired:
+            _jobs.pop(jid, None)
+        while len(_jobs) > _JOB_MAX_COUNT:
+            oldest = min(_jobs.keys(), key=lambda k: _jobs[k]["created_at"])
+            _jobs.pop(oldest, None)
+
+
+def _start_job(command: str, timeout: int, workdir: str | None) -> str:
+    cwd = Path(workdir).expanduser().resolve() if workdir else Path.cwd()
+    if not cwd.exists() or not cwd.is_dir():
+        raise ValueError(f"工作目录无效: {cwd}")
+    cmd_parts = _split_command(command)
+    if isinstance(cmd_parts, str):
+        raise ValueError(cmd_parts)
+    job_id = f"job-{uuid.uuid4().hex[:8]}"
+    proc = subprocess.Popen(
+        cmd_parts,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        cwd=cwd,
+    )
+    _job_cleanup()
+    with _jobs_lock:
+        _jobs[job_id] = {
+            "proc": proc,
+            "command": command,
+            "timeout": timeout,
+            "workdir": str(cwd),
+            "created_at": time.time(),
+        }
+    return job_id
+
+
+def _poll_job(job_id: str) -> str:
+    _job_cleanup()
+    with _jobs_lock:
+        job = _jobs.get(job_id)
+    if job is None:
+        return f"job {job_id} 不存在或已过期（TTL={_JOB_TTL_SECONDS}s）"
+
+    proc: subprocess.Popen = job["proc"]
+    timeout = job["timeout"]
+    elapsed = time.time() - job["created_at"]
+
+    if elapsed > timeout:
+        with contextlib.suppress(OSError):
+            proc.kill()
+        with _jobs_lock:
+            _jobs.pop(job_id, None)
+        return f"⏱️ job {job_id} 超时（>{timeout}s）: {job['command']}"
+
+    try:
+        proc.wait(timeout=0)
+    except subprocess.TimeoutExpired:
+        return f"🔄 job {job_id}: 仍在运行（{elapsed:.0f}s / {timeout}s）: {job['command']}"
+
+    stdout_bytes, stderr_bytes = proc.communicate()
+    stdout = stdout_bytes.decode("utf-8", errors="replace") if stdout_bytes else ""
+    stderr = stderr_bytes.decode("utf-8", errors="replace") if stderr_bytes else ""
+    rc = proc.returncode
+
+    parts: list[str] = []
+    if stdout.strip():
+        parts.append(stdout.rstrip())
+    if stderr.strip():
+        parts.append(f"[stderr]\n{stderr.rstrip()}")
+    output = "\n".join(parts) if parts else "(无输出)"
+
+    prefix = f"✅ job {job_id}: 完成（exit={rc}, {elapsed:.0f}s）: {job['command']}\n"
+    if rc != 0:
+        prefix = f"❌ job {job_id}: 完成（exit={rc}, {elapsed:.0f}s）: {job['command']}\n"
+
+    with _jobs_lock:
+        _jobs.pop(job_id, None)
+    return prefix + _truncate_output(output)
 
 
 # ── 工具定义 ──
@@ -75,6 +163,57 @@ TOOLS_EXEC = [
             },
         },
     },
+    {
+        "_meta": {"label": "异步执行", "dedup_blacklist": True},
+        "type": "function",
+        "function": {
+            "name": "run_async",
+            "description": (
+                "异步启动一个 Shell 命令（不阻塞），返回 job_id。"
+                "之后用 poll 查询状态/收结果。适合长命令（全量测试等）。"
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "command": {
+                        "type": "string",
+                        "description": "要异步执行的 Shell 命令，如 'pytest tests/'",
+                    },
+                    "timeout": {
+                        "type": "integer",
+                        "description": "超时秒数，默认 120",
+                    },
+                    "workdir": {
+                        "type": "string",
+                        "description": "工作目录，默认当前项目",
+                    },
+                },
+                "required": ["command"],
+            },
+        },
+    },
+    {
+        "_meta": {"label": "轮询异步任务", "parallel_safe": True},
+        "type": "function",
+        "function": {
+            "name": "poll",
+            "description": (
+                "查询异步命令的状态。返回 running/done。"
+                "done 时返回完整 stdout/stderr + exit_code。"
+                "先调 run_async 获取 job_id。"
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "job_id": {
+                        "type": "string",
+                        "description": "run_async 返回的 job_id",
+                    },
+                },
+                "required": ["job_id"],
+            },
+        },
+    },
 ]
 
 
@@ -82,19 +221,10 @@ TOOLS_EXEC = [
 
 
 def _is_blocked(command: str) -> tuple[bool, str]:
-    """检查命令是否被禁止。返回 (是否禁止, 原因)。
-
-    文件操作命令（rm/del/copy等）只检查命令本身（第一个词），不误拦 git rm；
-    危险模式（rm -rf / 等）匹配整条命令字符串。
-    """
     cmd_lower = command.lower().strip()
-
-    # 危险模式：匹配整条命令
     for pat in _DANGEROUS_PATTERNS:
         if pat in cmd_lower:
             return True, f"命令包含禁止操作: {pat}"
-
-    # 文件操作命令：只检查第一个词（不是子串，不误拦 git rm / copy 等）
     try:
         parts = shlex.split(cmd_lower)
     except ValueError:
@@ -105,20 +235,12 @@ def _is_blocked(command: str) -> tuple[bool, str]:
             f" - 文件增删改必须走工具 API（write_file/delete_file/edit_file_lines）。"
             f" git {parts[0]} 等子命令不受此限。"
         )
-
     return False, ""
 
 
 def _check_git_hook_bypass(parts: list[str]) -> str:
-    """拦截绕过 git 钩子（质量门）的命令。返回拒绝理由，合法返回空串。
-
-    门超时 ≠ 门失败：质量门要跑全量测试（~40s+），timeout 不够请加大或
-    不传（commit 有自动地板）。人工放行（--no-verify）只能由用户在终端执行。
-    模式拦不全没关系——门通行证审计（gate_audit）按提交树哈希兜底。
-    """
     if not parts or Path(parts[0]).stem.lower() != "git":
         return ""
-    # -c core.hooksPath=... 等配置覆盖 = 换掉钩子本体
     joined = " ".join(parts).lower()
     if "core.hookspath" in joined:
         return "git 命令覆盖 core.hooksPath = 替换质量门钩子"
@@ -130,14 +252,12 @@ def _check_git_hook_bypass(parts: list[str]) -> str:
 
 
 def _truncate_output(output: str, max_len: int = MAX_OUTPUT_LENGTH) -> str:
-    """截断过长的输出。"""
     if len(output) <= max_len:
         return output
     return output[:max_len] + f"\n\n...（输出已截断，共 {len(output)} 字符，仅显示前 {max_len} 字符）"
 
 
 def _split_command(command: str) -> list[str] | str:
-    """解析单个命令，拒绝需要 shell 解释的语法。"""
     if any(ch in command for ch in SHELL_META_CHARS):
         return "命令包含 shell 元字符（& | ; < > 或换行），请改用单个可执行文件加参数。"
     try:
@@ -149,13 +269,11 @@ def _split_command(command: str) -> list[str] | str:
     return parts
 
 
-# ── 执行函数 ──
+# ── 同步执行 ──
 
 
 def run_python(code: str) -> str:
-    """在子进程中执行 Python 代码，捕获 stdout/stderr。"""
     env = {**os.environ, "MPLBACKEND": "Agg"}
-
     try:
         result = subprocess.run(
             ["python", "-c", code],
@@ -178,29 +296,15 @@ def run_python(code: str) -> str:
         parts.append(result.stdout.rstrip())
     if result.stderr.strip():
         parts.append(f"[stderr]\n{result.stderr.rstrip()}")
-
     output = "\n".join(parts) if parts else "(无输出)"
     return _truncate_output(output)
 
 
 def run_command(command: str, timeout: int = 30, workdir: str | None = None) -> str:
-    """在终端中执行任意 Shell 命令。
-
-    Args:
-        command: 要执行的命令
-        timeout: 超时秒数，默认 30
-        workdir: 工作目录，默认当前项目目录
-
-    Returns:
-        命令输出（stdout + stderr）
-
-    """
-    # ── 安全检查 ──
     is_blocked, reason = _is_blocked(command)
     if is_blocked:
         return f"⛔ 命令被拦截: {reason}\n命令: {command}"
 
-    # ── 确定工作目录 ──
     cwd = Path(workdir).expanduser().resolve() if workdir else Path.cwd()
     if not cwd.exists():
         return f"工作目录不存在: {cwd}"
@@ -222,11 +326,9 @@ def run_command(command: str, timeout: int = 30, workdir: str | None = None) -> 
             f"3. 人工放行是用户的决定——向用户报告障碍，不要替用户决定绕过。"
         )
 
-    # git commit 超时地板：钩子门 ~40s+，超时给小了正道必死 → 推向绕门
     if cmd_parts and Path(cmd_parts[0]).stem.lower() == "git" and "commit" in cmd_parts:
         timeout = max(timeout, RUNTIME.git_commit_timeout_floor)
 
-    # ── 执行 ──
     try:
         result = subprocess.run(
             cmd_parts,
@@ -241,20 +343,33 @@ def run_command(command: str, timeout: int = 30, workdir: str | None = None) -> 
     except OSError as e:
         return f"执行失败: {e}"
 
-    # ── 格式化输出 ──
     parts: list[str] = []
     if result.stdout.strip():
         parts.append(result.stdout.rstrip())
     if result.stderr.strip():
         parts.append(f"[stderr]\n{result.stderr.rstrip()}")
-
     output = "\n".join(parts) if parts else "(无输出)"
-
-    # 如果命令失败，在输出前加入退出码提示
     if result.returncode != 0:
         output = f"退出码: {result.returncode}\n\n" + output
-
     return _truncate_output(output)
+
+
+# ── 异步执行 ──
+
+
+def run_async(command: str, timeout: int = 120, workdir: str | None = None) -> str:
+    is_blocked, reason = _is_blocked(command)
+    if is_blocked:
+        return f"⛔ 命令被拦截: {reason}"
+    try:
+        job_id = _start_job(command, timeout, workdir)
+    except ValueError as e:
+        return str(e)
+    return f"🚀 已启动 job {job_id}: {command}（超时 {timeout}s）。用 poll({job_id!r}) 查状态。"
+
+
+def poll_job(job_id: str) -> str:
+    return _poll_job(job_id)
 
 
 # ── 调度 ──
@@ -269,4 +384,12 @@ def execute(name: str, args: dict) -> str | None:
             args.get("timeout", 30),
             args.get("workdir"),
         )
+    if name == "run_async":
+        return run_async(
+            args["command"],
+            args.get("timeout", 120),
+            args.get("workdir"),
+        )
+    if name == "poll":
+        return poll_job(args["job_id"])
     return None

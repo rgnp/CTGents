@@ -69,10 +69,12 @@ class TestMetaStripping:
     def test_get_tools_has_all_names(self):
         tools = get_tools()
         names = {t["function"]["name"] for t in tools}
-        assert len(tools) == 55, f"预期 55 个工具，实际 {len(tools)}"
+        assert len(tools) == 57, f"预期 57 个工具，实际 {len(tools)}"
         assert "read_file" in names
         assert "write_file" in names
         assert "self" in names
+        assert "run_async" in names
+        assert "poll" in names
 
 
 class TestLabelCoverage:
@@ -97,15 +99,15 @@ class TestHotReloadPreservesMeta:
 
     def test_refresh_globals_preserves_counts(self):
         _refresh_globals()
-        assert len(PARALLEL_SAFE) == 29
-        assert len(DEDUP_BLACKLIST) == 17
+        assert len(PARALLEL_SAFE) == 30
+        assert len(DEDUP_BLACKLIST) == 18
 
     def test_reload_tools_preserves_meta(self):
         from src.tools import reload_tools
         reload_tools()
         labels, psafe, skip, dedup = _derive()
-        assert len(labels) == 56
-        assert len(psafe) == 29
+        assert len(labels) == 58
+        assert len(psafe) == 30
 
 
 class TestDispatchContract:
