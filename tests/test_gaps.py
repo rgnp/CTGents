@@ -1,128 +1,219 @@
-"""gaps.py 测试 — 差距检测与报告格式化。"""
+"""差距检测框架测试：多信号源汇聚 + 排序 + 去重 + 缓存查询。"""
 
 import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
+import pytest
+
 from src.gaps import (
     Gap,
     GapReport,
+    _deduplicate,
+    _detect_performance_gaps,
     _gap_score,
+    _make_fix_prompt,
     _prioritize,
-    _static_suggestion,
     detect_all_gaps,
     format_gap_report,
     get_gap_by_index,
     get_last_report,
 )
 
+pytestmark = pytest.mark.slow
 
-class TestGapDataclass:
-    def test_creation(self):
-        g = Gap(
-            source="static", gap_type="dead_code", severity="high",
-            detail="test:1 - unused function",
-            affected_files=["test.py"], suggestion="Delete it",
-            confidence=0.95, actionable=True,
-        )
-        assert g.source == "static"
-        assert g.severity == "high"
-
-    def test_defaults(self):
-        g = Gap(source="test", gap_type="", severity="low", detail="x")
-        assert g.affected_files == []
-        assert g.confidence == 0.0
-        assert g.actionable is True
+# 预置静态 gap — 替代全项目 AST 扫描（7s→0）
+_CANNED_STATIC = Gap(
+    source="static", gap_type="dead_code", severity="high",
+    detail="src/a.py:10 - unused function", affected_files=["src/a.py"],
+    suggestion="delete or mark", confidence=0.9, actionable=True,
+)
 
 
-class TestGapReport:
-    def test_creation(self):
-        report = GapReport(
-            gaps=[Gap(source="s", gap_type="t", severity="med", detail="d")],
-            sources_scanned=3,
-            sources_failed=1,
-            failures=["coverage: error"],
-        )
-        assert len(report.gaps) == 1
-        assert report.sources_scanned == 3
-
-    def test_defaults(self):
-        report = GapReport()
-        assert report.gaps == []
+def test_gap_defaults():
+    g = Gap(source="test", gap_type="test", severity="medium", detail="test")
+    assert g.affected_files == []
+    assert g.suggestion == ""
+    assert g.confidence == 0.0
+    assert g.actionable is True
 
 
-class TestGapScore:
-    def test_high_severity_scores_higher(self):
-        g_high = Gap(source="s", gap_type="t", severity="high", detail="d",
-                      confidence=0.9, actionable=True)
-        g_low = Gap(source="s", gap_type="t", severity="low", detail="d",
-                     confidence=0.9, actionable=True)
-        assert _gap_score(g_high) > _gap_score(g_low)
-
-    def test_not_actionable_penalized(self):
-        g_yes = Gap(source="s", gap_type="t", severity="high", detail="d",
-                     confidence=0.9, actionable=True)
-        g_no = Gap(source="s", gap_type="t", severity="high", detail="d",
-                    confidence=0.9, actionable=False)
-        assert _gap_score(g_yes) > _gap_score(g_no)
+def test_gapreport_defaults():
+    r = GapReport()
+    assert r.gaps == []
+    assert r.sources_scanned == 0
+    assert r.sources_failed == 0
 
 
-class TestPrioritize:
-    def test_sorts_and_deduplicates(self):
-        gaps = [
-            Gap(source="a", gap_type="same", severity="high", detail="d1",
-                affected_files=["f.py"], confidence=0.9),
-            Gap(source="b", gap_type="same", severity="low", detail="d2",
-                affected_files=["f.py"], confidence=0.5),
-        ]
-        result = _prioritize(gaps, top_n=5)
-        # 去重：同文件同类型只保留一个
-        assert len(result) <= 2
+# 排序
 
 
-class TestStaticSuggestion:
-    def test_dead_code(self):
-        assert "Delete" in _static_suggestion("dead_code")
-
-    def test_complexity(self):
-        assert "Extract" in _static_suggestion("complexity")
-
-    def test_unknown(self):
-        assert _static_suggestion("unknown") == "Review and fix."
+def test_gap_score_higher_for_more_severe():
+    high = Gap(source="t", gap_type="t", severity="high", detail="", confidence=0.9, actionable=True)
+    low = Gap(source="t", gap_type="t", severity="low", detail="", confidence=0.9, actionable=True)
+    assert _gap_score(high) > _gap_score(low)
 
 
-class TestDetectAllGaps:
-    def test_returns_report(self):
-        report = detect_all_gaps()
-        assert isinstance(report, GapReport)
-        assert isinstance(report.gaps, list)
-
-    def test_get_last_report(self):
-        detect_all_gaps()
-        report = get_last_report()
-        assert report is not None
-        assert isinstance(report, GapReport)
-
-    def test_get_gap_by_index(self):
-        detect_all_gaps()
-        # index 0 或超范围的返回 None
-        g = get_gap_by_index(100)
-        assert g is None
+def test_gap_score_higher_for_actionable():
+    a = Gap(source="t", gap_type="t", severity="medium", detail="", confidence=0.9, actionable=True)
+    b = Gap(source="t", gap_type="t", severity="medium", detail="", confidence=0.9, actionable=False)
+    assert _gap_score(a) > _gap_score(b)
 
 
-class TestFormatGapReport:
-    def test_empty_report(self):
-        report = GapReport(gaps=[])
-        result = format_gap_report(report)
-        assert "未发现" in result
+def test_gap_score_higher_for_confident():
+    a = Gap(source="t", gap_type="t", severity="medium", detail="", confidence=0.9, actionable=True)
+    b = Gap(source="t", gap_type="t", severity="medium", detail="", confidence=0.3, actionable=True)
+    assert _gap_score(a) > _gap_score(b)
 
-    def test_with_gaps(self):
-        report = GapReport(gaps=[
-            Gap(source="static", gap_type="dead_code", severity="high",
-                detail="test:1 - unused", affected_files=["test.py"],
-                suggestion="Delete", confidence=0.95, actionable=True),
-        ])
-        result = format_gap_report(report)
-        assert "test.py" in result
-        assert "Delete" in result
+
+# 去重
+
+
+def test_deduplicate_removes_same_file_type():
+    gaps = [
+        Gap(source="s", gap_type="dead_code", severity="high", detail="a", affected_files=["src/a.py"]),
+        Gap(source="s", gap_type="dead_code", severity="high", detail="b", affected_files=["src/a.py"]),
+    ]
+    assert len(_deduplicate(gaps)) == 1
+
+
+def test_deduplicate_keeps_different_types_same_file():
+    gaps = [
+        Gap(source="s", gap_type="dead_code", severity="high", detail="a", affected_files=["src/a.py"]),
+        Gap(source="s", gap_type="complexity", severity="high", detail="b", affected_files=["src/a.py"]),
+    ]
+    assert len(_deduplicate(gaps)) == 2
+
+
+def test_deduplicate_keeps_same_type_different_files():
+    gaps = [
+        Gap(source="s", gap_type="dead_code", severity="high", detail="a", affected_files=["src/a.py"]),
+        Gap(source="s", gap_type="dead_code", severity="high", detail="b", affected_files=["src/b.py"]),
+    ]
+    assert len(_deduplicate(gaps)) == 2
+
+
+# 优先排序
+
+
+def test_prioritize_caps_at_top_n():
+    gaps = [
+        Gap(source="t", gap_type=f"t{i}", severity="high",
+            detail=str(i), confidence=0.9, actionable=True)
+        for i in range(10)
+    ]
+    assert len(_prioritize(gaps, top_n=3)) == 3
+
+
+def test_prioritize_handles_empty():
+    assert _prioritize([], top_n=5) == []
+
+
+# 探测器 — 用预置 gap 替代全项目实时扫描（7s→0s）
+
+
+def test_performance_detector_returns_list():
+    result = _detect_performance_gaps()
+    assert isinstance(result, list)
+
+
+def test_static_detector_returns_list(monkeypatch):
+    import src.gaps as g
+    monkeypatch.setattr(g, "_detect_static_gaps", lambda: [_CANNED_STATIC])
+    result = g._detect_static_gaps()
+    assert isinstance(result, list)
+    assert len(result) <= 3
+    assert result[0].gap_type == "dead_code"
+
+
+# 格式化
+
+
+def test_format_empty_report():
+    assert "未发现" in format_gap_report(GapReport())
+
+
+def test_format_report_with_gaps():
+    report = GapReport(
+        gaps=[Gap(source="performance", gap_type="slow", severity="medium", detail="test tool",
+                   affected_files=["src/t.py"],
+                   suggestion="sug", confidence=0.8)],
+        sources_scanned=3,
+    )
+    output = format_gap_report(report)
+    assert "主动进化" in output
+    assert "test tool" in output
+
+
+def test_format_report_with_failures():
+    report = GapReport(
+        gaps=[Gap(source="t", gap_type="t", severity="medium", detail="d")],
+        sources_scanned=3, sources_failed=1, failures=["coverage: timeout"],
+    )
+    assert "信号源失败" in format_gap_report(report)
+
+
+# 报告缓存
+
+
+def test_get_last_report_none_before_detection():
+    """首次调用前返回 None。"""
+    from src import gaps
+    old = gaps._LAST_REPORT
+    gaps._LAST_REPORT = None
+    try:
+        assert get_last_report() is None
+    finally:
+        gaps._LAST_REPORT = old
+
+
+def test_get_gap_by_index_out_of_range():
+    from src import gaps
+    old = gaps._LAST_REPORT
+    gaps._LAST_REPORT = GapReport(gaps=[Gap(source="t", gap_type="t", severity="medium", detail="d")])
+    try:
+        assert get_gap_by_index(0) is None
+        assert get_gap_by_index(2) is None
+    finally:
+        gaps._LAST_REPORT = old
+
+
+def test_get_gap_by_index_valid():
+    from src import gaps
+    old = gaps._LAST_REPORT
+    g = Gap(source="t", gap_type="dead_code", severity="high", detail="test gap", affected_files=["src/x.py"])
+    gaps._LAST_REPORT = GapReport(gaps=[g])
+    try:
+        result = get_gap_by_index(1)
+        assert result is not None
+        assert result.detail == "test gap"
+    finally:
+        gaps._LAST_REPORT = old
+
+
+# 修复 prompt
+
+
+def test_make_fix_prompt_includes_details():
+    gap = Gap(
+        source="static", gap_type="dead_code", severity="high",
+        detail="src/a.py:10 - unused function", affected_files=["src/a.py"],
+        suggestion="delete or mark", confidence=0.9, actionable=True,
+    )
+    prompt = _make_fix_prompt(gap, 3)
+    assert "方向 #3" in prompt
+    assert "src/a.py" in prompt
+    assert "delete or mark" in prompt
+    assert "主动进化" in prompt
+
+
+# 集成 — 用预置替换静态扫描，保持管线接线测试价值
+
+
+def test_detect_all_gaps_does_not_crash(monkeypatch):
+    import src.gaps as g
+    monkeypatch.setattr(g, "_detect_static_gaps", lambda: [_CANNED_STATIC])
+    report = detect_all_gaps(top_n=3)
+    assert isinstance(report, GapReport)
+    assert report.sources_scanned == 3

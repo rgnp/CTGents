@@ -3,11 +3,15 @@
 import pytest
 
 from src.tracker import (
+    _discover_sessions,
+    _read_session,
     detect_anomalies,
     flush,
     get_cross_session_baseline,
+    get_latest_reflections,
     get_session_aggregates,
     record_tool_call,
+    reflect_on_session,
     set_session,
 )
 
@@ -93,3 +97,81 @@ class TestAnomalyDetection:
         failure = [a for a in anomalies if a["type"] == "high_failure"]
         assert len(failure) > 0
         assert failure[0]["tool"] == "write_file"
+
+    def test_slow_detected(self, tmp_path, monkeypatch):
+        """工具明显变慢 → 检测到 slow 异常。"""
+        monkeypatch.setattr("src.tracker._STATS_DIR", tmp_path)
+        sid = "slow-session"
+        set_session(sid)
+        # 创建基线：快工具
+        # 创建基线：快工具（多用几次以主导基线）
+        for _ in range(20):
+            record_tool_call("grep_code", 50, True)
+        flush()
+
+        # 下一会话：慢工具
+        sid2 = "slow-session-2"
+        set_session(sid2)
+        for _ in range(5):
+            record_tool_call("grep_code", 500, True)
+        flush()
+        anomalies = detect_anomalies(sid2)
+        set_session(sid2)
+        for _ in range(5):
+            record_tool_call("grep_code", 500, True)
+        flush()
+        anomalies = detect_anomalies(sid2)
+        slow = [a for a in anomalies if a["type"] == "slow"]
+        assert len(slow) > 0
+        assert slow[0]["tool"] == "grep_code"
+
+
+class TestReflection:
+    def test_reflect_on_session_no_anomalies(self, tmp_path, monkeypatch):
+        monkeypatch.setattr("src.tracker._STATS_DIR", tmp_path)
+        sid = "clean-session"
+        set_session(sid)
+        for _ in range(3):
+            record_tool_call("read_file", 10, True)
+        flush()
+        result = reflect_on_session(sid)
+        assert result is None
+
+    def test_reflect_on_session_with_anomalies(self, tmp_path, monkeypatch):
+        monkeypatch.setattr("src.tracker._STATS_DIR", tmp_path)
+        sid = "bad-session"
+        set_session(sid)
+        for _ in range(8):
+            record_tool_call("write_file", 50, False, error="Err")
+        flush()
+        result = reflect_on_session(sid)
+        assert result is not None
+        assert len(result["anomalies"]) > 0
+
+    def test_get_latest_reflections_empty(self, tmp_path, monkeypatch):
+        monkeypatch.setattr("src.tracker._STATS_DIR", tmp_path)
+        refs = get_latest_reflections(limit=3)
+        assert refs == []
+
+
+class TestInternal:
+    def test_read_session(self, tmp_path, monkeypatch):
+        monkeypatch.setattr("src.tracker._STATS_DIR", tmp_path)
+        set_session("s1")
+        record_tool_call("t1", 10, True)
+        flush()
+        records = _read_session("s1")
+        assert len(records) == 1
+        assert records[0]["tool"] == "t1"
+
+    def test_discover_sessions(self, tmp_path, monkeypatch):
+        monkeypatch.setattr("src.tracker._STATS_DIR", tmp_path)
+        set_session("a")
+        record_tool_call("t", 1, True)
+        flush()
+        set_session("b")
+        record_tool_call("t", 1, True)
+        flush()
+        sessions = _discover_sessions()
+        assert "a" in sessions
+        assert "b" in sessions
