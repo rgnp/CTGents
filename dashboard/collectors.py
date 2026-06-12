@@ -153,19 +153,44 @@ def collect_tools(top_n: int = 6, min_calls: int = 3) -> dict:
     }
 
 
+def _archive_title(f: Path, slug: str) -> str:
+    """取归档文件首个 `# 标题`，没有则回退到文件名 slug。"""
+    try:
+        for line in f.read_text(encoding="utf-8").splitlines():
+            st = line.strip()
+            if st.startswith("#"):
+                return st.lstrip("# ").strip()
+    except Exception:
+        pass
+    return slug
+
+
 def collect_tasks() -> dict:
-    """任务态：当前任务 + 进度行 + 完成标记。"""
+    """任务态：当前任务 + 进度 + 全部归档任务（agent 干过的活）。"""
+    from src.config import ARCHIVE_DIR
     from src.tasks import (
         get_task_progress_line,
         has_unfinished,
         is_all_done,
         read_current,
     )
+
+    archived = []
+    adir = Path(ARCHIVE_DIR)
+    if adir.exists():
+        for f in sorted(adir.glob("*.md"), reverse=True):
+            parts = f.stem.split("-", 3)
+            date = "-".join(parts[:3]) if len(parts) >= 3 else ""
+            slug = parts[3] if len(parts) >= 4 else f.stem
+            archived.append({"date": date, "slug": slug, "title": _archive_title(f, slug)})
+
     return {
         "current": read_current(),
         "progress": get_task_progress_line(),
         "unfinished": has_unfinished(),
         "all_done": is_all_done(),
+        "archived": archived,
+        "archived_count": len(archived),
     }
 
 
