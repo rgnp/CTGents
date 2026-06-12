@@ -9,6 +9,8 @@ from ..params import MEMORY as _PARAMS
 
 # recall 片段长度(结构性常量,留本模块)。
 _SNIPPET_CHARS = 200
+# 策略级记忆注入上下文的最大 body 字符数
+_CONTEXT_BODY_CHARS = 300
 # 分词:ASCII alnum 词 + 中文连续块(下方切 bigram)。
 _TOKEN_ASCII = re.compile(r"[a-z0-9]+")
 _TOKEN_CJK = re.compile(r"[一-鿿]+")
@@ -48,30 +50,55 @@ def _split_frontmatter(text: str) -> tuple[dict[str, str], str]:
     return meta, body
 
 
+# ── 上下文注入用类型：策略/用户偏好注入全文；知识/参考注入摘要 ──
+_FULLBODY_TYPES = {"strategy", "user"}
+
+
 def _build_context() -> str | None:
-    """从文件构建记忆索引字符串。"""
+    """构建每轮注入上下文的记忆摘要。
+
+    两级注入（业界共识）：
+    - 策略/用户偏好 → 注入全文（首 _CONTEXT_BODY_CHARS 字），每轮都看到完整内容
+    - 知识/参考 → 注入一行摘要，需要时 recall 深读
+    - lesson.py 文件（有 severity） → 不注入上下文（机械收割的操作记录，信噪比低）
+    """
     mem_dir = Path(MEMORY_DIR)
-    index_file = mem_dir / "MEMORY.md"
-    if not index_file.exists():
-        return None
     d = mem_dir
-    entries: list[str] = []
+    # 收集两类条目
+    full_entries: list[str] = []      # 策略/用户：全文注入
+    brief_entries: list[str] = []     # 知识/参考：摘要
+
     for f in sorted(d.iterdir()):
         if f.name == "MEMORY.md" or f.suffix != ".md":
             continue
         try:
-            meta, _ = _split_frontmatter(f.read_text(encoding="utf-8"))
+            meta, body = _split_frontmatter(f.read_text(encoding="utf-8"))
+            # lesson.py 文件：跳过（22 条操作记录淹没 10 条策略）
+            if meta.get("severity"):
+                continue
             name = meta.get("name", f.stem)
-            desc = meta.get("description", "").rstrip(".")
-            short = desc.split("。")[0].split("，")[0][:30] if desc else ""
-            entries.append((name, short))
+            mem_type = meta.get("type", "")
+            if mem_type in _FULLBODY_TYPES:
+                body_clean = body.replace("\n", " ")[:_CONTEXT_BODY_CHARS]
+                full_entries.append(f"  {name}: {body_clean}")
+            else:
+                desc = meta.get("description", "").rstrip(".")
+                short = desc.split("。")[0].split("，")[0][:40] if desc else ""
+                if short:
+                    brief_entries.append(f"  {name}: {short}")
         except Exception:
             continue
-    if not entries:
+
+    if not full_entries and not brief_entries:
         return None
+
     lines = ["你拥有以下记忆（需要时用 recall 搜索详情，不要在回复中逐字复述）："]
-    for name, short in entries:
-        lines.append(f"  {name}: {short}")
+    if full_entries:
+        lines.extend(full_entries)
+        lines.append("")
+    if brief_entries:
+        lines.append("  此外还有：")
+        lines.extend(brief_entries)
     return "\n".join(lines)
 
 
