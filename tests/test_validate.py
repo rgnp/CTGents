@@ -4,6 +4,8 @@ import sys
 import tempfile
 from pathlib import Path
 
+import pytest
+
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from src.validate import (
@@ -110,6 +112,7 @@ class TestPreCommitChecks:
 
 
 class TestSandboxTests:
+    @pytest.mark.slow  # 真起子进程跑整套测试（实测 ~11s），移出快速门
     def test_quick_sandbox(self):
         """sandbox_tests 短超时 — 可能超时但不崩。"""
         result = sandbox_tests(timeout=5)
@@ -170,6 +173,7 @@ class TestValidationReport:
 
 
 class TestValidate:
+    @pytest.mark.slow  # validate([]) 跑完整流水线(嵌套 pytest+coverage，实测 ~136s)，移出快速门
     def test_validate_no_files(self):
         """Validate 空文件列表 — 不崩。"""
         report = validate([])
