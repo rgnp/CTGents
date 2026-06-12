@@ -86,6 +86,10 @@ def learn(topic: str) -> str:
         "💡 想深入了解某篇，告诉我编号。"
         "我会用 read_paper 读全文 → analyze_paper 分析 → save_paper_card 存知识库。"
     )
+    lines.append(
+        "\n💡 有价值的发现？用 write_file 保存到 knowledge/search/<主题>.md，"
+        "以后 rag_search 可检索。"
+    )
 
     return "\n".join(lines)
 

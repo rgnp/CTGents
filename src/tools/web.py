@@ -164,9 +164,13 @@ def search_web(query: str) -> str:
             return "Tavily API 配额耗尽，所有 key 均已不可用。"
 
     formatted = format_search_results(result, query)
+    formatted = format_search_results(result, query)
+    formatted += (
+        "\n💡 有价值的发现？用 write_file 保存到 knowledge/search/<主题>.md，"
+        "以后 rag_search 可检索。"
+    )
     _cache_set("search_web", {"query": query}, formatted)
     return formatted
-
 
 def _try_self_heal(query: str):
     """自愈：重读 .env → 重建 tavily 客户端 → 用所有 key 重试一次。
