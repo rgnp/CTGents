@@ -202,8 +202,12 @@ def collect_performance(recent_n: int = 12) -> dict:
     """性能：DeepSeek 前缀缓存命中率（#1 目标）——直接读 stats/{sid}.json。"""
     if not STATS_DIR.exists():
         return {"overall_hit_rate": 0.0, "total_requests": 0, "sessions": []}
+    def _ok(p: Path) -> bool:
+        # 跳过 _reflection 与空/点开头的脏 stem（session_id 为空时写出的 .json）
+        return bool(p.stem) and not p.stem.startswith(".") and not p.stem.endswith("_reflection")
+
     files = sorted(
-        (p for p in STATS_DIR.glob("*.json") if not p.stem.endswith("_reflection")),
+        (p for p in STATS_DIR.glob("*.json") if _ok(p)),
         key=lambda p: p.stat().st_mtime,
         reverse=True,
     )[:recent_n]
@@ -221,7 +225,7 @@ def collect_performance(recent_n: int = 12) -> dict:
             "session": p.stem,
             "requests": s["requests"],
             "hit_rate": round(rate, 4),
-            "prompt_tokens": s["prompt_tokens"],
+            "tokens": s["prompt_tokens"] + s["completion_tokens"],
         })
         for k in agg:
             agg[k] += s[k]
@@ -231,6 +235,9 @@ def collect_performance(recent_n: int = 12) -> dict:
     return {
         "overall_hit_rate": round(overall, 4),
         "total_requests": agg["requests"],
+        "total_tokens": agg["prompt_tokens"] + agg["completion_tokens"],
+        "prompt_tokens": agg["prompt_tokens"],
+        "completion_tokens": agg["completion_tokens"],
         "sessions": sessions,
     }
 

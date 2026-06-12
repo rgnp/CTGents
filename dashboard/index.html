@@ -3,68 +3,76 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>CTGents 监控</title>
+<title>CTGents</title>
 <style>
-  :root {
-    --bg:#0d1117; --panel:#161b22; --panel2:#1c2230; --border:#30363d; --fg:#e6edf3;
-    --muted:#8b949e; --accent:#58a6ff; --ok:#3fb950; --warn:#d29922; --bad:#f85149;
-    --mono:'SFMono-Regular',Consolas,'Liberation Mono',Menlo,monospace;
+  :root{
+    --bg:#f5f5f7; --card:#fff; --fg:#1d1d1f; --muted:#86868b; --line:#e8e8ed;
+    --accent:#0071e3; --ok:#34c759; --warn:#ff9f0a; --bad:#ff3b30;
+    --mono:'SF Mono',ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
   }
-  * { box-sizing:border-box; }
-  body { margin:0; background:var(--bg); color:var(--fg);
-         font-family:-apple-system,'Segoe UI',Roboto,'Microsoft YaHei',sans-serif; font-size:14px; }
-  header { display:flex; align-items:center; gap:14px; padding:12px 22px;
-           border-bottom:1px solid var(--border); background:var(--panel); position:sticky; top:0; z-index:5; }
-  header h1 { font-size:15px; margin:0; font-weight:600; letter-spacing:.5px; }
-  header .meta { color:var(--muted); font-size:12px; font-family:var(--mono); }
-  .dot { width:8px; height:8px; border-radius:50%; background:var(--ok); display:inline-block; }
-  .dot.stale { background:var(--warn); }
-  main { display:grid; grid-template-columns:repeat(12,1fr); gap:14px; padding:18px; max-width:1480px; margin:0 auto; }
-  .panel { background:var(--panel); border:1px solid var(--border); border-radius:8px; padding:14px 16px; overflow:hidden; }
-  .panel h2 { font-size:12px; text-transform:uppercase; letter-spacing:.8px; color:var(--muted);
-              margin:0 0 12px; font-weight:600; display:flex; align-items:center; gap:8px; }
-  .col-12{grid-column:span 12} .col-8{grid-column:span 8} .col-7{grid-column:span 7}
-  .col-6{grid-column:span 6} .col-5{grid-column:span 5} .col-4{grid-column:span 4}
-  @media(max-width:980px){ [class*=col-]{grid-column:span 12} }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--fg);
+    font-family:-apple-system,'SF Pro Display','SF Pro Text','Helvetica Neue','Microsoft YaHei',system-ui,sans-serif;
+    font-size:14px;-webkit-font-smoothing:antialiased;}
+  header{display:flex;align-items:center;gap:12px;padding:16px 28px;
+    background:rgba(255,255,255,.72);backdrop-filter:saturate(180%) blur(20px);
+    border-bottom:1px solid var(--line);position:sticky;top:0;z-index:5;}
+  header h1{font-size:18px;margin:0;font-weight:600;letter-spacing:-.02em}
+  header .meta{color:var(--muted);font-size:12px;font-family:var(--mono)}
+  .dot{width:7px;height:7px;border-radius:50%;background:var(--ok);display:inline-block}
+  .dot.stale{background:var(--warn)}
+  main{display:grid;grid-template-columns:repeat(12,1fr);gap:18px;padding:24px 28px;max-width:1320px;margin:0 auto}
+  .card{background:var(--card);border-radius:20px;padding:22px 24px;
+    box-shadow:0 1px 2px rgba(0,0,0,.04),0 8px 24px rgba(0,0,0,.05);overflow:hidden}
+  .card h2{font-size:13px;margin:0 0 16px;font-weight:600;color:var(--muted);
+    letter-spacing:-.01em;display:flex;align-items:center;gap:8px}
+  .card h2 .sub{font-weight:400;font-size:11px;color:var(--muted);opacity:.8}
+  .col-12{grid-column:span 12}.col-8{grid-column:span 8}.col-6{grid-column:span 6}
+  .col-4{grid-column:span 4}.col-3{grid-column:span 3}
+  @media(max-width:920px){[class*=col-]{grid-column:span 12}}
 
-  /* ── 开屏重点：健康带 ── */
-  .hero { grid-column:span 12; background:linear-gradient(135deg,var(--panel2),var(--panel));
-          border:1px solid var(--border); border-radius:10px; padding:18px 22px;
-          display:flex; align-items:center; gap:30px; flex-wrap:wrap; }
-  .verdict { display:flex; align-items:center; gap:14px; }
-  .verdict .big { width:54px; height:54px; border-radius:50%; display:grid; place-items:center;
-                  font-size:26px; font-weight:800; }
-  .verdict .vlabel .t { font-size:22px; font-weight:700; }
-  .verdict .vlabel .s { font-size:12px; color:var(--muted); }
-  .heroStats { display:flex; gap:28px; flex-wrap:wrap; flex:1; }
-  .hs { display:flex; flex-direction:column; gap:3px; }
-  .hs .n { font-size:26px; font-weight:700; font-family:var(--mono); line-height:1; }
-  .hs .l { font-size:11px; color:var(--muted); }
-  .spark { display:flex; align-items:flex-end; gap:2px; height:30px; margin-top:3px; }
-  .spark i { width:6px; background:var(--accent); border-radius:1px; opacity:.85; }
+  /* hero */
+  .hero{grid-column:span 12;display:flex;align-items:center;gap:40px;flex-wrap:wrap;
+    padding:26px 30px}
+  .verdict{display:flex;align-items:center;gap:16px;min-width:170px}
+  .verdict .ring{width:60px;height:60px;border-radius:50%;display:grid;place-items:center;
+    font-size:26px;font-weight:700}
+  .verdict .t{font-size:24px;font-weight:600;letter-spacing:-.02em;line-height:1.1}
+  .verdict .s{font-size:12px;color:var(--muted);margin-top:2px}
+  .metrics{display:flex;gap:38px;flex-wrap:wrap;flex:1}
+  .m .n{font-size:30px;font-weight:600;letter-spacing:-.03em;line-height:1}
+  .m .l{font-size:12px;color:var(--muted);margin-top:6px}
+  .spark{display:flex;align-items:flex-end;gap:2px;height:26px;margin-top:8px}
+  .spark i{width:5px;border-radius:2px;opacity:.9}
 
-  .stat .num{font-size:26px;font-weight:700;font-family:var(--mono);line-height:1}
-  table { width:100%; border-collapse:collapse; font-size:12.5px; }
-  th,td { text-align:left; padding:6px 8px; border-bottom:1px solid var(--border); vertical-align:top; }
-  th { color:var(--muted); font-weight:500; font-size:11px; }
-  tr:last-child td { border-bottom:none; }
-  .mono { font-family:var(--mono); } .sha { color:var(--accent); }
-  .pill { display:inline-block; padding:1px 7px; border-radius:10px; font-size:10px; font-family:var(--mono); white-space:nowrap; }
-  .pill.ok{background:rgba(63,185,80,.15);color:var(--ok)} .pill.warn{background:rgba(210,153,34,.15);color:var(--warn)}
-  .pill.bad{background:rgba(248,81,73,.15);color:var(--bad)} .pill.dim{background:rgba(139,148,158,.15);color:var(--muted)}
-  pre { white-space:pre-wrap; word-break:break-word; font-family:var(--mono); font-size:12px; margin:0; max-height:240px; overflow:auto; }
-  .muted{color:var(--muted)} .empty{color:var(--muted);font-size:12px;font-style:italic}
-  .bar{height:6px;border-radius:3px;background:var(--border);overflow:hidden;min-width:46px}
+  table{width:100%;border-collapse:collapse;font-size:13px}
+  td,th{text-align:left;padding:8px 4px;vertical-align:middle}
+  tr+tr td{border-top:1px solid var(--line)}
+  th{font-size:11px;color:var(--muted);font-weight:500;padding-bottom:6px}
+  .mono{font-family:var(--mono);font-size:12px}
+  .sha{color:var(--accent);font-family:var(--mono);font-size:12px}
+  .muted{color:var(--muted)}
+  .ellip{max-width:1px;width:100%;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .empty{color:var(--muted);font-size:12px;padding:6px 4px}
+  .pill{display:inline-block;padding:2px 9px;border-radius:980px;font-size:11px;font-weight:500;white-space:nowrap}
+  .pill.ok{background:rgba(52,199,89,.14);color:#1c8c3b}
+  .pill.warn{background:rgba(255,159,10,.16);color:#b35e00}
+  .pill.bad{background:rgba(255,59,48,.14);color:#cc2a22}
+  .pill.dim{background:#f0f0f3;color:var(--muted)}
+  .bar{height:5px;border-radius:3px;background:var(--line);overflow:hidden;flex:1}
   .bar>span{display:block;height:100%}
-  .err{color:var(--bad);font-size:12px;font-family:var(--mono);margin-bottom:6px}
-  .row{display:flex;align-items:center;gap:8px}
-  .big-task{font-size:13px;line-height:1.5}
-  .tag{font-size:10px;color:var(--muted);font-family:var(--mono)}
+  .row{display:flex;align-items:center;gap:10px}
+  .err{color:var(--bad);font-size:12px;font-family:var(--mono);margin-bottom:8px}
+  .lead{font-size:14px;line-height:1.55}
+  .tag{font-size:11px;color:var(--muted);font-family:var(--mono)}
+  pre{white-space:pre-wrap;word-break:break-word;font-family:var(--mono);font-size:12px;
+    margin:0;color:var(--fg);max-height:180px;overflow:auto;background:#fafafa;
+    border-radius:12px;padding:12px 14px}
 </style>
 </head>
 <body>
 <header>
-  <h1>CTGents 监控</h1>
+  <h1>CTGents</h1>
   <span class="meta" id="branch"></span>
   <span style="flex:1"></span>
   <span class="dot" id="dot"></span>
@@ -73,139 +81,115 @@
 <main id="root"></main>
 
 <script>
-const $=(h)=>{const t=document.createElement('template');t.innerHTML=h.trim();return t.content.firstChild;};
+const $=(h)=>{const t=document.createElement('template');t.innerHTML=h.trim();return t.content.firstChild};
 const esc=(s)=>String(s==null?'':s).replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));
 const pct=(r)=>(r*100).toFixed(1)+'%';
-const rc=(r)=> r>=0.9?'ok' : r>=0.7?'warn' : 'bad';
-const sevc=(s)=> (s==='crit'||s==='high')?'bad':'warn';
-const errB=(d)=> d&&d._error ? `<div class="err">⚠ ${esc(d._error)}</div>` : '';
-function ago(iso){ if(!iso)return''; const d=(Date.now()-new Date(iso))/1000;
-  if(d<60)return Math.floor(d)+'秒前'; if(d<3600)return Math.floor(d/60)+'分前';
-  if(d<86400)return Math.floor(d/3600)+'小时前'; return Math.floor(d/86400)+'天前'; }
+const rc=(r)=>r>=0.9?'ok':r>=0.7?'warn':'bad';
+const sevc=(s)=>(s==='crit'||s==='high')?'bad':'warn';
+const trunc=(s,n=52)=>{s=String(s||'');return s.length>n?s.slice(0,n-1)+'…':s};
+const errB=(d)=>d&&d._error?`<div class="err">⚠ ${esc(d._error)}</div>`:'';
+const fmt=(n)=>{n=n||0;return n>=1e9?(n/1e9).toFixed(2)+'B':n>=1e6?(n/1e6).toFixed(1)+'M':n>=1e3?(n/1e3).toFixed(1)+'k':String(n)};
+function ago(iso){if(!iso)return'';const d=(Date.now()-new Date(iso))/1000;
+  if(d<60)return Math.floor(d)+'秒前';if(d<3600)return Math.floor(d/60)+'分前';
+  if(d<86400)return Math.floor(d/3600)+'小时前';return Math.floor(d/86400)+'天前'}
 
 function render(s){
-  document.getElementById('branch').textContent = s.git&&s.git.branch ? '⎇ '+s.git.branch : '';
-  const root=document.getElementById('root'); root.innerHTML='';
-  const perf=s.performance||{}, trust=s.trust||{}, mem=s.memory||{}, gaps=s.gaps||{},
-        anom=s.anomalies||{}, tools=s.tools||{}, git=s.git||{}, tasks=s.tasks||{};
+  document.getElementById('branch').textContent=s.git&&s.git.branch?'⎇ '+s.git.branch:'';
+  const root=document.getElementById('root');root.innerHTML='';
+  const perf=s.performance||{},trust=s.trust||{},mem=s.memory||{},gaps=s.gaps||{},
+        anom=s.anomalies||{},tools=s.tools||{},git=s.git||{},tasks=s.tasks||{};
   const hr=perf.overall_hit_rate||0;
-  const flat=[]; (anom.recent||[]).forEach(r=>(r.anomalies||[]).forEach(a=>flat.push({...a,session:r.session,ts:r.timestamp})));
+  const flat=[];(anom.recent||[]).forEach(r=>(r.anomalies||[]).forEach(a=>flat.push({...a,session:r.session})));
   const crit=flat.some(a=>a.severity==='crit');
 
-  // ── 健康裁决 ──
   let v,vc,vs;
-  if(trust.ok===false || crit || hr<0.7){ v='告警'; vc='bad'; vs='!'; }
-  else if(hr<0.9 || flat.length){ v='注意'; vc='warn'; vs='~'; }
-  else { v='健康'; vc='ok'; vs='✓'; }
-
-  // sparkline（命中率，按会话时间正序）
+  if(trust.ok===false||crit||hr<0.7){v='告警';vc='bad';vs='!'}
+  else if(hr<0.9||flat.length){v='注意';vc='warn';vs='~'}
+  else{v='健康';vc='ok';vs='✓'}
+  const tint={ok:'52,199,89',warn:'255,159,10',bad:'255,59,48'}[vc];
   const rates=(perf.sessions||[]).map(x=>x.hit_rate).reverse();
-  const spark=rates.map(r=>`<i style="height:${Math.max(3,r*30).toFixed(0)}px;background:var(--${rc(r)})"></i>`).join('');
+  const spark=rates.map(r=>`<i style="height:${Math.max(3,r*26).toFixed(0)}px;background:var(--${rc(r)})"></i>`).join('');
 
-  root.appendChild($(`<section class="hero">
+  // ── 开屏：健康 + 重点指标 ──
+  root.appendChild($(`<section class="card hero">
     <div class="verdict">
-      <div class="big" style="background:rgba(${vc==='ok'?'63,185,80':vc==='warn'?'210,153,34':'248,81,73'},.15);color:var(--${vc})">${vs}</div>
-      <div class="vlabel"><div class="t" style="color:var(--${vc})">${v}</div><div class="s">综合健康</div></div>
+      <div class="ring" style="background:rgba(${tint},.14);color:var(--${vc})">${vs}</div>
+      <div><div class="t" style="color:var(--${vc})">${v}</div><div class="s">综合健康</div></div>
     </div>
-    <div class="heroStats">
-      <div class="hs"><div class="n" style="color:var(--${rc(hr)})">${pct(hr)}</div><div class="l">前缀缓存命中率</div>
+    <div class="metrics">
+      <div class="m"><div class="n" style="color:var(--${rc(hr)})">${pct(hr)}</div><div class="l">缓存命中率</div>
         <div class="spark">${spark}</div></div>
-      <div class="hs"><div class="n"><span class="pill ${trust.ok?'ok':'bad'}" style="font-size:15px;padding:3px 10px">${trust.ok?'PASS':'ALERT'}</span></div><div class="l">门通行证审计</div></div>
-      <div class="hs"><div class="n">${perf.total_requests??'—'}</div><div class="l">总请求</div></div>
-      <div class="hs"><div class="n">${mem.count??(mem.lessons||[]).length}</div><div class="l">记忆条数</div></div>
-      <div class="hs"><div class="n" style="color:${flat.length?'var(--warn)':'inherit'}">${flat.length}</div><div class="l">近期异常</div></div>
-      <div class="hs"><div class="n" style="color:${(gaps.gaps||[]).length?'var(--warn)':'inherit'}">${(gaps.gaps||[]).length}</div><div class="l">待办方向</div></div>
+      <div class="m"><div class="n">${fmt(perf.total_tokens)}</div><div class="l">Token 消耗</div></div>
+      <div class="m"><div class="n">${fmt(perf.total_requests)}</div><div class="l">请求数</div></div>
+      <div class="m"><div class="n">${mem.count??(mem.lessons||[]).length}</div><div class="l">记忆</div></div>
+      <div class="m"><div class="n" style="color:${flat.length?'var(--warn)':'inherit'}">${flat.length}</div><div class="l">近期异常</div></div>
+      <div class="m"><div class="n"><span class="pill ${trust.ok?'ok':'bad'}">${trust.ok?'PASS':'ALERT'}</span></div><div class="l">门审计</div></div>
     </div>
   </section>`));
-  if(trust.ok===false) root.appendChild($(`<section class="panel col-12"><pre style="color:var(--bad)">${esc(trust.gate)}</pre></section>`));
+  if(trust.ok===false)root.appendChild($(`<section class="card col-12"><pre style="color:var(--bad);background:rgba(255,59,48,.06)">${esc(trust.gate)}</pre></section>`));
 
-  // ── 开屏第二行：最近活动 / 正在做 ──
-  const recent=(git.commits||[]).slice(0,4).map(c=>`<tr>
-     <td class="mono sha">${esc(c.sha)}</td><td class="tag">${ago(c.date)}</td><td>${esc(c.subject)}</td></tr>`).join('');
-  root.appendChild($(`<section class="panel col-6"><h2>最近活动</h2>${errB(git)}
-     <table><tbody>${recent||'<tr><td class="empty">无提交</td></tr>'}</tbody></table></section>`));
+  // ── 最近活动 / 正在做 ──
+  const recent=(git.commits||[]).slice(0,3).map(c=>`<tr>
+    <td class="sha" style="width:64px">${esc(c.sha)}</td><td class="tag" style="width:64px">${ago(c.date)}</td>
+    <td class="ellip">${esc(c.subject)}</td></tr>`).join('');
+  root.appendChild($(`<section class="card col-6"><h2>最近活动</h2>${errB(git)}
+    <table><tbody>${recent||'<tr><td class="empty">无提交</td></tr>'}</tbody></table></section>`));
 
   const act=mem.ambition_active||[];
-  const doingTask = tasks.current
-    ? `<div class="big-task">${tasks.progress?`<span class="pill dim">${esc(tasks.progress)}</span> `:''}${esc((tasks.current.split('\n')[0]||'').replace(/^#\s*/,''))}</div>`
-    : `<div class="empty">无进行中任务（空闲）</div>`;
-  const doingAmb = act.length
-    ? act.map(a=>`<div class="big-task">🎯 <b>${esc(a.section)}</b>：${a.items.map(esc).join('；')}</div>`).join('')
-    : `<div class="muted" style="font-size:12px">无活跃野心 · 已交付 ${mem.ambition_delivered||0} 项</div>`;
-  root.appendChild($(`<section class="panel col-6"><h2>正在做</h2>${errB(tasks)}
-     ${doingTask}<div style="height:8px"></div>${doingAmb}</section>`));
+  const taskLine=tasks.current
+    ?`<div class="lead">${tasks.progress?`<span class="pill dim">${esc(tasks.progress)}</span> `:''}${esc(trunc((tasks.current.split('\n')[0]||'').replace(/^#\s*/,''),48))}</div>`
+    :`<div class="muted lead">空闲 · 无进行中任务</div>`;
+  const ambLine=act.length
+    ?`<div class="lead" style="margin-top:8px">🎯 ${act.map(a=>esc(a.section)).join('、')}</div>`
+    :`<div class="muted" style="margin-top:8px;font-size:12px">无活跃野心 · 已交付 ${mem.ambition_delivered||0} 项</div>`;
+  root.appendChild($(`<section class="card col-6"><h2>正在做</h2>${errB(tasks)}${taskLine}${ambLine}</section>`));
 
-  // ── 详情网格 ──
-  // 进化时间线
-  const rows=(git.commits||[]).map(c=>`<tr><td class="mono sha">${esc(c.sha)}</td>
-     <td class="tag">${esc((c.date||'').slice(0,16).replace('T',' '))}</td><td>${esc(c.subject)}</td></tr>`).join('');
-  root.appendChild($(`<section class="panel col-7"><h2>进化时间线</h2>
-     <table><thead><tr><th>commit</th><th>时间</th><th>说明</th></tr></thead>
-     <tbody>${rows||'<tr><td colspan=3 class="empty">无</td></tr>'}</tbody></table></section>`));
+  // ── 命中率·各会话 ──
+  const sess=(perf.sessions||[]).slice(0,6).map(x=>`<tr>
+    <td class="mono" style="width:96px">${esc(trunc(x.session,12))}</td>
+    <td style="width:120px"><div class="row"><div class="bar"><span style="width:${(x.hit_rate*100).toFixed(0)}%;background:var(--${rc(x.hit_rate)})"></span></div>
+      <span class="mono" style="color:var(--${rc(x.hit_rate)})">${pct(x.hit_rate)}</span></div></td>
+    <td class="tag" style="text-align:right">${fmt(x.tokens)} tok</td></tr>`).join('');
+  root.appendChild($(`<section class="card col-6"><h2>命中率 <span class="sub">近 ${(perf.sessions||[]).length} 会话</span></h2>
+    <table><tbody>${sess||'<tr><td class="empty">无数据</td></tr>'}</tbody></table></section>`));
 
-  // 各会话命中率
-  const sess=(perf.sessions||[]).map(x=>`<tr><td class="mono">${esc(x.session)}</td>
-     <td class="mono">${x.requests}</td>
-     <td><div class="row"><div class="bar" style="flex:1"><span style="width:${(x.hit_rate*100).toFixed(0)}%;background:var(--${rc(x.hit_rate)})"></span></div>
-     <span class="mono" style="color:var(--${rc(x.hit_rate)})">${pct(x.hit_rate)}</span></div></td></tr>`).join('');
-  root.appendChild($(`<section class="panel col-5"><h2>各会话命中率</h2>
-     <table><thead><tr><th>会话</th><th>请求</th><th>命中</th></tr></thead>
-     <tbody>${sess||'<tr><td colspan=3 class="empty">无数据</td></tr>'}</tbody></table></section>`));
+  // ── 高频失败模式 ──
+  const rec=(mem.recurring||[]).slice(0,5).map(l=>`<tr>
+    <td class="mono">${esc(l.fingerprint||trunc(l.name,18))}</td>
+    <td style="width:60px;text-align:right"><span class="pill ${l.times>=10?'bad':l.times>=5?'warn':'dim'}">${l.times}次</span></td></tr>`).join('');
+  root.appendChild($(`<section class="card col-6"><h2>高频失败 <span class="sub">反复踩的坑</span></h2>${errB(mem)}
+    <table><tbody>${rec||'<tr><td class="empty">无重复失败</td></tr>'}</tbody></table></section>`));
 
-  // 高频失败模式
-  const rec=(mem.recurring||[]).map(l=>`<tr><td class="mono">${esc(l.fingerprint||l.name)}</td>
-     <td><div class="row"><span class="pill ${l.times>=10?'bad':l.times>=5?'warn':'dim'}">${l.times}次</span></div></td>
-     <td class="muted">${esc(l.desc)}</td></tr>`).join('');
-  root.appendChild($(`<section class="panel col-6"><h2>高频失败模式 <span class="tag" style="text-transform:none">agent 反复踩的坑</span></h2>${errB(mem)}
-     <table><thead><tr><th>指纹</th><th>遭遇</th><th>描述</th></tr></thead>
-     <tbody>${rec||'<tr><td colspan=3 class="empty">无重复失败</td></tr>'}</tbody></table></section>`));
+  // ── 自反思·异常 ──
+  const ar=flat.slice(0,5).map(a=>`<tr>
+    <td class="mono" style="width:96px">${esc(a.tool)}</td>
+    <td style="width:48px"><span class="pill ${sevc(a.severity)}">${esc(a.type)}</span></td>
+    <td class="ellip muted">${esc(trunc(a.detail,46))}</td></tr>`).join('');
+  root.appendChild($(`<section class="card col-6"><h2>自反思 <span class="sub">agent 自己标的异常</span></h2>${errB(anom)}
+    <table><tbody>${ar||'<tr><td class="empty">近期无异常</td></tr>'}</tbody></table></section>`));
 
-  // 自反思 / 异常
-  const ar=flat.slice(0,10).map(a=>`<tr><td class="mono">${esc(a.tool)}</td>
-     <td><span class="pill ${sevc(a.severity)}">${esc(a.type)}</span></td>
-     <td class="muted">${esc(a.detail)}</td></tr>`).join('');
-  root.appendChild($(`<section class="panel col-6"><h2>自反思 · 异常 <span class="tag" style="text-transform:none">agent 自己标的</span></h2>${errB(anom)}
-     <table><thead><tr><th>工具</th><th>类型</th><th>详情</th></tr></thead>
-     <tbody>${ar||'<tr><td colspan=3 class="empty">近期无异常</td></tr>'}</tbody></table></section>`));
+  // ── 工具性能（最慢） ──
+  const slow=(tools.slowest||[]).slice(0,5).map(t=>`<tr>
+    <td class="mono">${esc(t.tool)}</td>
+    <td class="mono" style="width:60px;text-align:right">${(t.p50_ms/1000).toFixed(1)}s</td>
+    <td class="tag" style="width:48px;text-align:right">n=${t.count}</td></tr>`).join('');
+  const failTop=(tools.failing||[])[0];
+  root.appendChild($(`<section class="card col-6"><h2>最慢工具 <span class="sub">p50${failTop?` · 最易失败 ${esc(failTop.tool)} ${(failTop.failure_rate*100).toFixed(0)}%`:''}</span></h2>${errB(tools)}
+    <table><tbody>${slow||'<tr><td class="empty">—</td></tr>'}</tbody></table></section>`));
 
-  // 工具性能
-  const slow=(tools.slowest||[]).map(t=>`<tr><td class="mono">${esc(t.tool)}</td>
-     <td class="mono">${(t.p50_ms/1000).toFixed(1)}s</td><td class="tag">n=${t.count}</td></tr>`).join('');
-  const fail=(tools.failing||[]).map(t=>`<tr><td class="mono">${esc(t.tool)}</td>
-     <td><span class="pill ${t.failure_rate>=0.3?'bad':'warn'}">${(t.failure_rate*100).toFixed(1)}%</span></td><td class="tag">n=${t.count}</td></tr>`).join('');
-  root.appendChild($(`<section class="panel col-6"><h2>工具性能 <span class="tag" style="text-transform:none">${tools.sessions_analyzed||0} 会话 / ${tools.total_calls||0} 次调用</span></h2>${errB(tools)}
-     <div class="row" style="align-items:flex-start;gap:18px">
-       <div style="flex:1"><div class="tag" style="margin-bottom:4px">最慢（p50）</div>
-         <table><tbody>${slow||'<tr><td class="empty">—</td></tr>'}</tbody></table></div>
-       <div style="flex:1"><div class="tag" style="margin-bottom:4px">最易失败</div>
-         <table><tbody>${fail||'<tr><td class="empty">无失败</td></tr>'}</tbody></table></div>
-     </div></section>`));
-
-  // gaps + 当前任务
-  const gl=(gaps.gaps||[]).map(g=>`<tr><td><span class="pill ${sevc(g.severity)}">${esc(g.severity)}</span></td>
-     <td class="tag">${esc(g.source)}</td><td>${esc(g.detail)}</td></tr>`).join('');
-  root.appendChild($(`<section class="panel col-6"><h2>改进方向 gaps ${gaps.available===false?'<span class="tag" style="text-transform:none">· 等 agent 下次启动计算</span>':''}</h2>${errB(gaps)}
-     <table><tbody>${gl||'<tr><td class="empty">无</td></tr>'}</tbody></table></section>`));
-
-  const taskBody=tasks.current?`<pre>${esc(tasks.current)}</pre>`:'<div class="empty">无进行中任务</div>';
-  root.appendChild($(`<section class="panel col-6"><h2>当前任务详情 ${tasks.progress?`<span class="tag" style="text-transform:none">${esc(tasks.progress)}</span>`:''}</h2>${taskBody}</section>`));
-
-  // 全部记忆
-  const all=(mem.lessons||[]).map(l=>`<tr><td class="mono">${esc(l.name)}</td>
-     <td>${l.type?`<span class="pill dim">${esc(l.type)}</span>`:''}</td>
-     <td class="mono">${l.fingerprint?esc(l.fingerprint):'<span class="muted">—</span>'}</td>
-     <td class="mono">${l.times||'<span class="muted">—</span>'}</td>
-     <td class="muted">${esc(l.desc)}</td></tr>`).join('');
-  root.appendChild($(`<section class="panel col-12"><h2>全部记忆 <span class="tag" style="text-transform:none">${(mem.lessons||[]).length} 条</span></h2>
-     <table><thead><tr><th>name</th><th>类型</th><th>指纹</th><th>遭遇</th><th>描述</th></tr></thead>
-     <tbody>${all||'<tr><td colspan=5 class="empty">空</td></tr>'}</tbody></table></section>`));
+  // ── 改进方向（有才显示） ──
+  const gl=(gaps.gaps||[]).slice(0,5).map(g=>`<tr>
+    <td style="width:48px"><span class="pill ${sevc(g.severity)}">${esc(g.severity)}</span></td>
+    <td class="ellip">${esc(trunc(g.detail,70))}</td></tr>`).join('');
+  if((gaps.gaps||[]).length||gaps.available===false){
+    root.appendChild($(`<section class="card col-12"><h2>改进方向 ${gaps.available===false?'<span class="sub">等 agent 下次启动计算</span>':`<span class="sub">${(gaps.gaps||[]).length} 项</span>`}</h2>${errB(gaps)}
+      <table><tbody>${gl||'<tr><td class="empty">无</td></tr>'}</tbody></table></section>`));
+  }
 }
 
-let lastOk=0;
 async function tick(){
   try{
-    const r=await fetch('/api/state',{cache:'no-store'}); const s=await r.json();
-    render(s); lastOk=Date.now();
+    const r=await fetch('/api/state',{cache:'no-store'});const s=await r.json();render(s);
     document.getElementById('dot').classList.remove('stale');
     document.getElementById('updated').textContent='更新于 '+new Date(s.generated_at).toLocaleTimeString();
   }catch(e){
@@ -213,7 +197,7 @@ async function tick(){
     document.getElementById('updated').textContent='读取失败，重试中…';
   }
 }
-tick(); setInterval(tick,5000);
+tick();setInterval(tick,5000);
 </script>
 </body>
 </html>
