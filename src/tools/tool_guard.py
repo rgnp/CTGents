@@ -89,15 +89,32 @@ def check(name: str, args: dict) -> str | None:
 
 
 def _check_placement(path: str) -> str | None:
-    """C14：不得在项目根新建 .py/.json/.txt/.log（改已有文件不限）。"""
+    """C14：不得在项目根新建受限后缀；不得在 src/tools/ 下新建 .py。
+
+    改已有文件不限（编辑已有工具文件走 C10 读后写 + guard 保护关键文件）。
+    """
     target = _resolve(path)
     if target.exists():
         return None
-    if target.parent == _project_root() and target.suffix in _BANNED_ROOT_EXTS:
+    root = _project_root()
+    # 项目根：禁止 .py/.json/.txt/.log
+    if target.parent == root and target.suffix in _BANNED_ROOT_EXTS:
         return (
             f"⛔ C14 拒绝：不在项目根新建 {target.name}。"
             ".py→src/，测试→tests/，文档→docs/，再试。"
         )
+    # src/tools/ 下禁止新建 .py（热加载使新工具立即生效，需人工审查）
+    tools_dir = root / "src" / "tools"
+    if target.suffix == ".py":
+        try:
+            target.relative_to(tools_dir)
+            return (
+                f"⛔ C14 拒绝：不在 src/tools/ 下新建工具模块 {target.name}。"
+                "工具注册需经人工审查——热加载会使新工具立即生效。"
+                "编辑已有工具文件不受此限。"
+            )
+        except ValueError:
+            pass
     return None
 
 
