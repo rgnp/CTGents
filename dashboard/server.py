@@ -12,9 +12,22 @@ import json
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
-from dashboard.collectors import gather_state
+from dashboard.collectors import (
+    build_evolution,
+    build_memory,
+    build_overview,
+    build_safety,
+)
 
 _HTML_PATH = Path(__file__).resolve().parent / "index.html"
+
+# 四视图四接口：每个接口数据源见 collectors 各 build_* docstring。
+_ROUTES = {
+    "/api/overview": build_overview,
+    "/api/safety": build_safety,
+    "/api/memory": build_memory,
+    "/api/evolution": build_evolution,
+}
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -26,10 +39,12 @@ class Handler(BaseHTTPRequestHandler):
         self.wfile.write(body)
 
     def do_GET(self) -> None:  # noqa: N802 — http.server 接口约定
-        if self.path.startswith("/api/state"):
-            body = json.dumps(gather_state(), ensure_ascii=False).encode("utf-8")
-            self._send(200, body, "application/json; charset=utf-8")
-        elif self.path in ("/", "/index.html"):
+        for prefix, builder in _ROUTES.items():
+            if self.path.startswith(prefix):
+                body = json.dumps(builder(), ensure_ascii=False).encode("utf-8")
+                self._send(200, body, "application/json; charset=utf-8")
+                return
+        if self.path in ("/", "/index.html"):
             # 每次读盘：改 index.html 后刷新即生效，无需重启 server
             body = _HTML_PATH.read_text(encoding="utf-8").encode("utf-8")
             self._send(200, body, "text/html; charset=utf-8")

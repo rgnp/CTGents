@@ -1,6 +1,7 @@
 """状态采集 — 只读，复用 src 读函数 / 直接读盘 artifact。
 
-每个采集器独立 try/except（gather_state 的 guard）：一个数据源坏掉不拖垮整个面板。
+每个采集器经 _guard 包裹：一个数据源坏掉隔离为该块 _error，不拖垮整个视图。
+对外是四个 build_*（对应 /api/overview|safety|memory|evolution 四接口）。
 缓存命中率刻意直接读 stats/{sid}.json（形状镜像 llm.py _CACHE_STATS），
 不 import llm.py——那会把 API 客户端栈拉进监控进程，违背解耦。
 其余非平凡解析（frontmatter / gap 缓存 / 门审计）复用 src，避免重写产生漂移。
@@ -9,12 +10,24 @@
 from __future__ import annotations
 
 import json
+import re
 import subprocess
 from datetime import UTC, datetime
 from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 STATS_DIR = PROJECT_ROOT / "stats"
+
+# session 落盘以 YYYY-MM-DD-… 命名；test-verify.json 等非会话统计无日期前缀，排除。
+_SESSION_RE = re.compile(r"^\d{4}-\d{2}-\d{2}")
+
+
+def _now() -> str:
+    return datetime.now(UTC).isoformat()
+
+
+def _is_session_stem(p: Path) -> bool:
+    return bool(_SESSION_RE.match(p.stem)) and not p.stem.endswith("_reflection")
 
 _EMPTY_CACHE = {
     "requests": 0,
@@ -74,9 +87,17 @@ def _to_int(v) -> int:
         return 0
 
 
+def collect_ambitions() -> dict:
+    """野心（轻量）：直接解析 ambitions.md，不读 lesson 文件——供总览复用。"""
+    from src.tasks import read_ambitions
+    sections = _parse_ambitions(read_ambitions())
+    active = [s for s in sections if s["section"] not in _DONE_SECTIONS and s["items"]]
+    delivered = sum(len(s["items"]) for s in sections if s["section"] in _DONE_SECTIONS)
+    return {"sections": sections, "active": active, "delivered": delivered}
+
+
 def collect_memory() -> dict:
     """记忆 & 野心：lessons（含指纹/遭遇次数，按高频失败排）+ ambitions。"""
-    from src.tasks import read_ambitions
     from src.tools.memory import _dir, _split_frontmatter
 
     lessons = []
@@ -92,17 +113,43 @@ def collect_memory() -> dict:
             "desc": meta.get("description", "")[:80],
         })
     lessons.sort(key=lambda x: x["times"], reverse=True)
-    ambitions = read_ambitions()
-    sections = _parse_ambitions(ambitions)
-    active = [s for s in sections if s["section"] not in _DONE_SECTIONS and s["items"]]
-    delivered = sum(len(s["items"]) for s in sections if s["section"] in _DONE_SECTIONS)
+    amb = collect_ambitions()
     return {
         "count": len(lessons),
         "lessons": lessons,
         "recurring": [x for x in lessons if x["times"] >= 2][:8],
-        "ambition_sections": sections,
-        "ambition_active": active,
-        "ambition_delivered": delivered,
+        "ambition_sections": amb["sections"],
+        "ambition_active": amb["active"],
+        "ambition_delivered": amb["delivered"],
+    }
+
+
+def collect_session() -> dict:
+    """当前会话：最新合法 stats stem 即最近会话 id（只读盘，不碰运行态）。"""
+    sid = ""
+    if STATS_DIR.exists():
+        files = sorted(
+            (p for p in STATS_DIR.glob("*.json") if _is_session_stem(p)),
+            key=lambda p: p.stat().st_mtime, reverse=True,
+        )
+        if files:
+            sid = files[0].stem
+    return {"session_id": sid, "branch": _git(["rev-parse", "--abbrev-ref", "HEAD"])}
+
+
+def collect_current_task() -> dict:
+    """当前任务（轻量，不扫归档）——供总览。"""
+    from src.tasks import (
+        get_task_progress_line,
+        has_unfinished,
+        is_all_done,
+        read_current,
+    )
+    return {
+        "current": read_current(),
+        "progress": get_task_progress_line(),
+        "unfinished": has_unfinished(),
+        "all_done": is_all_done(),
     }
 
 
@@ -227,12 +274,8 @@ def collect_performance(recent_n: int = 12) -> dict:
     """性能：DeepSeek 前缀缓存命中率（#1 目标）——直接读 stats/{sid}.json。"""
     if not STATS_DIR.exists():
         return {"overall_hit_rate": 0.0, "total_requests": 0, "sessions": []}
-    def _ok(p: Path) -> bool:
-        # 跳过 _reflection 与空/点开头的脏 stem（session_id 为空时写出的 .json）
-        return bool(p.stem) and not p.stem.startswith(".") and not p.stem.endswith("_reflection")
-
     files = sorted(
-        (p for p in STATS_DIR.glob("*.json") if _ok(p)),
+        (p for p in STATS_DIR.glob("*.json") if _is_session_stem(p)),
         key=lambda p: p.stat().st_mtime,
         reverse=True,
     )[:recent_n]
@@ -267,22 +310,116 @@ def collect_performance(recent_n: int = 12) -> dict:
     }
 
 
-def gather_state() -> dict:
-    """聚合所有采集器。单个失败被隔离为该块的 _error，不影响其余面板。"""
-    def guard(fn):
-        try:
-            return fn()
-        except Exception as e:  # noqa: BLE001 — 面板容错优先
-            return {"_error": f"{type(e).__name__}: {e}"}
+def collect_checks() -> dict:
+    """检查状态：pre-commit 由门审计推导；test/lint 无落盘 artifact 则 unknown。
 
+    刻意不主动跑测试/lint（面板只读、不触发行为）。门审计是唯一有真实落盘证据的检查。
+    """
+    pre = "pass" if collect_trust().get("ok") else "alert"
     return {
-        "generated_at": datetime.now(UTC).isoformat(),
-        "git": guard(collect_git),
-        "trust": guard(collect_trust),
-        "memory": guard(collect_memory),
-        "tasks": guard(collect_tasks),
-        "gaps": guard(collect_gaps),
-        "performance": guard(collect_performance),
-        "anomalies": guard(collect_anomalies),
-        "tools": guard(collect_tools),
+        "pre_commit": pre,
+        "test": "unknown",
+        "lint": "unknown",
+        "note": "测试/lint 无落盘状态 artifact；面板只读，不主动运行",
+    }
+
+
+def _modified_protected() -> list[str]:
+    """受保护文件里被改动（未提交）的——风险信号，非阻断。"""
+    from src.guard import PROTECTED_FILES
+    mods = []
+    for line in _git(["status", "--porcelain"]).splitlines():
+        path = line[3:].strip()
+        if path and str((PROJECT_ROOT / path).resolve()) in PROTECTED_FILES:
+            mods.append(path)
+    return mods
+
+
+def _hit_rate_drop(threshold: float = 0.05) -> str:
+    """最近一会话命中率较前序均值的跌幅（>=threshold 才报）。"""
+    sess = collect_performance().get("sessions", [])
+    if len(sess) < 4:
+        return ""
+    latest, prior = sess[0]["hit_rate"], [s["hit_rate"] for s in sess[1:]]
+    avg = sum(prior) / len(prior)
+    if avg - latest >= threshold:
+        return f"最近 {latest * 100:.1f}% vs 前均 {avg * 100:.1f}%"
+    return ""
+
+
+def collect_risks() -> dict:
+    """风险提示：门禁失败 / 受保护文件改动 / 命中率下滑 / 高频失败模式。"""
+    risks: list[dict] = []
+    trust = collect_trust()
+    if not trust.get("ok"):
+        risks.append({"level": "high", "kind": "门审计失败", "detail": str(trust.get("gate", ""))[:140]})
+    for f in _modified_protected():
+        risks.append({"level": "high", "kind": "受保护文件改动", "detail": f})
+    drop = _hit_rate_drop()
+    if drop:
+        risks.append({"level": "med", "kind": "命中率下滑", "detail": drop})
+    for lesson in collect_memory().get("recurring", []):
+        if lesson.get("times", 0) >= 5:
+            risks.append({
+                "level": "med", "kind": "高频失败",
+                "detail": f"{lesson.get('fingerprint') or lesson.get('name')} ×{lesson['times']}",
+            })
+    return {"risks": risks, "count": len(risks)}
+
+
+def _guard(fn):
+    """单个采集器失败被隔离为该块的 _error，不拖垮整个视图。"""
+    try:
+        return fn()
+    except Exception as e:  # noqa: BLE001 — 面板容错优先
+        return {"_error": f"{type(e).__name__}: {e}"}
+
+
+def build_overview() -> dict:
+    """/api/overview — 会话 + 当前任务 + 野心摘要 + 缓存性能 + 健康判定输入。"""
+    perf = _guard(collect_performance)
+    anom = _guard(collect_anomalies)
+    trust = _guard(collect_trust)
+    acount = sum(len(r.get("anomalies", [])) for r in anom.get("recent", []))
+    return {
+        "generated_at": _now(),
+        "session": _guard(collect_session),
+        "task": _guard(collect_current_task),
+        "ambitions": _guard(collect_ambitions),
+        "performance": perf,
+        "health": {
+            "gate_ok": trust.get("ok", True),
+            "anomaly_count": acount,
+            "hit_rate": perf.get("overall_hit_rate", 0.0),
+        },
+    }
+
+
+def build_safety() -> dict:
+    """/api/safety — 门审计 + 检查状态 + 风险提示。"""
+    return {
+        "generated_at": _now(),
+        "trust": _guard(collect_trust),
+        "checks": _guard(collect_checks),
+        "risks": _guard(collect_risks),
+    }
+
+
+def build_memory() -> dict:
+    """/api/memory — lessons（含指纹/频次）+ 野心 + 自反思异常。"""
+    return {
+        "generated_at": _now(),
+        "memory": _guard(collect_memory),
+        "anomalies": _guard(collect_anomalies),
+    }
+
+
+def build_evolution() -> dict:
+    """/api/evolution — git 时间线 + 全部任务 + 工具基线 + 改进方向。"""
+    return {
+        "generated_at": _now(),
+        "git": _guard(collect_git),
+        "tasks": _guard(collect_tasks),
+        "tools": _guard(collect_tools),
+        "gaps": _guard(collect_gaps),
     }

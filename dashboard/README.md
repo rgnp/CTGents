@@ -9,21 +9,22 @@ python -m dashboard.server          # 默认 127.0.0.1:8765
 python -m dashboard.server --port 9000
 ```
 
-然后浏览器打开 `http://127.0.0.1:8765`。页面每 5 秒自动刷新。
+然后浏览器打开 `http://127.0.0.1:8765`。页面顶部四个标签页，每 5 秒自动刷新当前页。
 
 **agent 随便重启**——本进程读盘上的文件，互不牵连（无共享生命周期）。起一次挂那儿即可。
 
-## 看什么
+## 四视图 / 四接口
 
-| 面板 | 数据源 | 复用 / 读盘 |
-|---|---|---|
-| 前缀缓存命中率（#1 目标） | `stats/{sid}.json` | 直接读盘 |
-| 门通行证审计（绕门会暴露） | git HEAD 树 vs 通行证 | 复用 `src.gate_audit.head_gate_notice` |
-| 进化时间线 | `git log` | subprocess |
-| 记忆 lessons（指纹/遭遇次数）| `memory/*.md` | 复用 `src.tools.memory._split_frontmatter` |
-| 野心 ambitions | `tasks/ambitions.md` | 复用 `src.tasks.read_ambitions` |
-| 改进方向 gaps | `.gap_cache.json` | 复用 `src.gaps._load_gap_cache`（不触发 5s 冷算）|
-| 当前任务 + 进度 | `tasks/current.md` | 复用 `src.tasks` 读函数 |
+每个接口由 `collectors.py` 的一个 `build_*` 聚合（容错：单个采集器失败隔离为该块 `_error`，不拖垮整页）。
+
+| 接口 | 视图 | 含面板 | 数据源 |
+|---|---|---|---|
+| `/api/overview` | 总览 | 健康判定 · 命中率/Token/请求/异常/门审计 · 正在做 · 各会话命中率 | `stats/{sid}.json`（命中率，直接读盘）+ `tasks/current.md` + `tasks/ambitions.md` + 门审计 + 自反思异常计数 |
+| `/api/safety` | 安全门禁 | 门审计大状态 · 检查状态（pre-commit/测试/lint）· 风险提示 | `src.gate_audit.head_gate_notice`（门）；测试/lint 无落盘 artifact → `unknown`（不主动跑）；风险 = 门禁失败 / 受保护文件改动（`git status` ∩ `src.guard.PROTECTED_FILES`）/ 命中率下滑 / 高频失败 |
+| `/api/memory` | 记忆教训 | lessons（指纹/频次）· 野心分区 · 自反思异常 | `memory/*.md`（复用 `_split_frontmatter`）+ `tasks/ambitions.md` + `stats/*_reflection.json` |
+| `/api/evolution` | 进化日志 | 提交时间线 · 全部任务（当前+归档）· 最慢/最易失败工具 · 改进方向 | `git log` + `ARCHIVE_DIR` + `src.tracker` 基线 + `.gap_cache.json`（复用 `_load_gap_cache`，不触发 5s 冷算）|
+
+session id = 最新合法 `stats/{sid}.json`（日期前缀命名；`test-verify.json` 等非会话统计已排除，不计入命中率）。
 
 ## 设计约束（别破坏）
 

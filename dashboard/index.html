@@ -14,13 +14,18 @@
   body{margin:0;background:var(--bg);color:var(--fg);
     font-family:-apple-system,'SF Pro Display','SF Pro Text','Helvetica Neue','Microsoft YaHei',system-ui,sans-serif;
     font-size:14px;-webkit-font-smoothing:antialiased;}
-  header{display:flex;align-items:center;gap:12px;padding:16px 28px;
+  header{display:flex;align-items:center;gap:14px;padding:14px 28px;
     background:rgba(255,255,255,.72);backdrop-filter:saturate(180%) blur(20px);
-    border-bottom:1px solid var(--line);position:sticky;top:0;z-index:5;}
+    border-bottom:1px solid var(--line);position:sticky;top:0;z-index:5;flex-wrap:wrap}
   header h1{font-size:18px;margin:0;font-weight:600;letter-spacing:-.02em}
   header .meta{color:var(--muted);font-size:12px;font-family:var(--mono)}
   .dot{width:7px;height:7px;border-radius:50%;background:var(--ok);display:inline-block}
   .dot.stale{background:var(--warn)}
+  nav{display:flex;gap:4px}
+  nav button{font:inherit;font-size:13px;border:0;background:transparent;color:var(--muted);
+    padding:6px 14px;border-radius:980px;cursor:pointer;font-weight:500;transition:.15s}
+  nav button:hover{color:var(--fg)}
+  nav button.active{background:var(--fg);color:#fff}
   main{display:grid;grid-template-columns:repeat(12,1fr);gap:18px;padding:24px 28px;max-width:1320px;margin:0 auto}
   .card{background:var(--card);border-radius:20px;padding:22px 24px;
     box-shadow:0 1px 2px rgba(0,0,0,.04),0 8px 24px rgba(0,0,0,.05);overflow:hidden}
@@ -31,12 +36,9 @@
   .col-4{grid-column:span 4}.col-3{grid-column:span 3}
   @media(max-width:920px){[class*=col-]{grid-column:span 12}}
 
-  /* hero */
-  .hero{grid-column:span 12;display:flex;align-items:center;gap:40px;flex-wrap:wrap;
-    padding:26px 30px}
+  .hero{grid-column:span 12;display:flex;align-items:center;gap:40px;flex-wrap:wrap;padding:26px 30px}
   .verdict{display:flex;align-items:center;gap:16px;min-width:170px}
-  .verdict .ring{width:60px;height:60px;border-radius:50%;display:grid;place-items:center;
-    font-size:26px;font-weight:700}
+  .verdict .ring{width:60px;height:60px;border-radius:50%;display:grid;place-items:center;font-size:26px;font-weight:700}
   .verdict .t{font-size:24px;font-weight:600;letter-spacing:-.02em;line-height:1.1}
   .verdict .s{font-size:12px;color:var(--muted);margin-top:2px}
   .metrics{display:flex;gap:38px;flex-wrap:wrap;flex:1}
@@ -65,15 +67,22 @@
   .err{color:var(--bad);font-size:12px;font-family:var(--mono);margin-bottom:8px}
   .lead{font-size:14px;line-height:1.55}
   .tag{font-size:11px;color:var(--muted);font-family:var(--mono)}
+  .big{font-size:34px;font-weight:600;letter-spacing:-.03em;line-height:1}
+  .chk{display:flex;gap:14px;flex-wrap:wrap}
+  .chk .c{flex:1;min-width:120px;background:#fafafa;border-radius:14px;padding:14px 16px}
+  .chk .c .l{font-size:12px;color:var(--muted);margin-bottom:8px}
+  .sec{margin-bottom:14px}
+  .sec .h{font-size:12px;font-weight:600;margin-bottom:6px}
+  .sec .it{font-size:13px;color:var(--fg);padding:3px 0;line-height:1.5}
   pre{white-space:pre-wrap;word-break:break-word;font-family:var(--mono);font-size:12px;
-    margin:0;color:var(--fg);max-height:180px;overflow:auto;background:#fafafa;
-    border-radius:12px;padding:12px 14px}
+    margin:0;color:var(--fg);max-height:200px;overflow:auto;background:#fafafa;border-radius:12px;padding:12px 14px}
 </style>
 </head>
 <body>
 <header>
   <h1>CTGents</h1>
   <span class="meta" id="branch"></span>
+  <nav id="nav"></nav>
   <span style="flex:1"></span>
   <span class="dot" id="dot"></span>
   <span class="meta" id="updated">连接中…</span>
@@ -89,119 +98,171 @@ const sevc=(s)=>(s==='crit'||s==='high')?'bad':'warn';
 const trunc=(s,n=52)=>{s=String(s||'');return s.length>n?s.slice(0,n-1)+'…':s};
 const errB=(d)=>d&&d._error?`<div class="err">⚠ ${esc(d._error)}</div>`:'';
 const fmt=(n)=>{n=n||0;return n>=1e9?(n/1e9).toFixed(2)+'B':n>=1e6?(n/1e6).toFixed(1)+'M':n>=1e3?(n/1e3).toFixed(1)+'k':String(n)};
+const taskTitle=(t)=>esc(trunc((String(t||'').split('\n')[0]||'').replace(/^#\s*/,''),64));
 function ago(iso){if(!iso)return'';const d=(Date.now()-new Date(iso))/1000;
   if(d<60)return Math.floor(d)+'秒前';if(d<3600)return Math.floor(d/60)+'分前';
   if(d<86400)return Math.floor(d/3600)+'小时前';return Math.floor(d/86400)+'天前'}
+const card=(cls,h,body,d)=>$(`<section class="card ${cls}"><h2>${h}</h2>${errB(d)}${body}</section>`);
+const tbl=(rows,empty)=>`<table><tbody>${rows||`<tr><td class="empty">${empty}</td></tr>`}</tbody></table>`;
 
-function render(s){
-  document.getElementById('branch').textContent=s.git&&s.git.branch?'⎇ '+s.git.branch:'';
-  const root=document.getElementById('root');root.innerHTML='';
-  const perf=s.performance||{},trust=s.trust||{},mem=s.memory||{},gaps=s.gaps||{},
-        anom=s.anomalies||{},tools=s.tools||{},git=s.git||{},tasks=s.tasks||{};
-  const hr=perf.overall_hit_rate||0;
-  const flat=[];(anom.recent||[]).forEach(r=>(r.anomalies||[]).forEach(a=>flat.push({...a,session:r.session})));
-  const crit=flat.some(a=>a.severity==='crit');
-
+// ─────────── 总览 ───────────
+function renderOverview(s){
+  const root=document.getElementById('root');
+  const perf=s.performance||{},sess=s.session||{},task=s.task||{},amb=s.ambitions||{},h=s.health||{};
+  const hr=h.hit_rate||0,ac=h.anomaly_count||0;
   let v,vc,vs;
-  if(trust.ok===false||crit||hr<0.7){v='告警';vc='bad';vs='!'}
-  else if(hr<0.9||flat.length){v='注意';vc='warn';vs='~'}
+  if(h.gate_ok===false||hr<0.7){v='告警';vc='bad';vs='!'}
+  else if(hr<0.9||ac){v='注意';vc='warn';vs='~'}
   else{v='健康';vc='ok';vs='✓'}
   const tint={ok:'52,199,89',warn:'255,159,10',bad:'255,59,48'}[vc];
   const rates=(perf.sessions||[]).map(x=>x.hit_rate).reverse();
   const spark=rates.map(r=>`<i style="height:${Math.max(3,r*26).toFixed(0)}px;background:var(--${rc(r)})"></i>`).join('');
 
-  // ── 开屏：健康 + 重点指标 ──
   root.appendChild($(`<section class="card hero">
     <div class="verdict">
       <div class="ring" style="background:rgba(${tint},.14);color:var(--${vc})">${vs}</div>
       <div><div class="t" style="color:var(--${vc})">${v}</div><div class="s">综合健康</div></div>
     </div>
     <div class="metrics">
-      <div class="m"><div class="n" style="color:var(--${rc(hr)})">${pct(hr)}</div><div class="l">缓存命中率</div>
-        <div class="spark">${spark}</div></div>
+      <div class="m"><div class="n" style="color:var(--${rc(hr)})">${pct(hr)}</div><div class="l">缓存命中率</div><div class="spark">${spark}</div></div>
       <div class="m"><div class="n">${fmt(perf.total_tokens)}</div><div class="l">Token 消耗</div></div>
       <div class="m"><div class="n">${fmt(perf.total_requests)}</div><div class="l">请求数</div></div>
-      <div class="m"><div class="n">${mem.count??(mem.lessons||[]).length}</div><div class="l">记忆</div></div>
-      <div class="m"><div class="n" style="color:${flat.length?'var(--warn)':'inherit'}">${flat.length}</div><div class="l">近期异常</div></div>
-      <div class="m"><div class="n"><span class="pill ${trust.ok?'ok':'bad'}">${trust.ok?'PASS':'ALERT'}</span></div><div class="l">门审计</div></div>
+      <div class="m"><div class="n" style="color:${ac?'var(--warn)':'inherit'}">${ac}</div><div class="l">近期异常</div></div>
+      <div class="m"><div class="n"><span class="pill ${h.gate_ok===false?'bad':'ok'}">${h.gate_ok===false?'ALERT':'PASS'}</span></div><div class="l">门审计</div></div>
     </div>
   </section>`));
-  if(trust.ok===false)root.appendChild($(`<section class="card col-12"><pre style="color:var(--bad);background:rgba(255,59,48,.06)">${esc(trust.gate)}</pre></section>`));
 
-  // ── 最近活动 / 正在做 ──
-  const recent=(git.commits||[]).slice(0,3).map(c=>`<tr>
-    <td class="sha" style="width:64px">${esc(c.sha)}</td><td class="tag" style="width:64px">${ago(c.date)}</td>
-    <td class="ellip">${esc(c.subject)}</td></tr>`).join('');
-  root.appendChild($(`<section class="card col-6"><h2>最近活动</h2>${errB(git)}
-    <table><tbody>${recent||'<tr><td class="empty">无提交</td></tr>'}</tbody></table></section>`));
-
-  const act=mem.ambition_active||[];
-  const taskLine=tasks.current
-    ?`<div class="lead">${tasks.progress?`<span class="pill dim">${esc(tasks.progress)}</span> `:''}${esc(trunc((tasks.current.split('\n')[0]||'').replace(/^#\s*/,''),48))}</div>`
+  const act=amb.active||[];
+  const taskLine=task.current
+    ?`<div class="lead">${task.progress?`<span class="pill dim">${esc(task.progress)}</span> `:''}${taskTitle(task.current)}</div>`
     :`<div class="muted lead">空闲 · 无进行中任务</div>`;
   const ambLine=act.length
     ?`<div class="lead" style="margin-top:8px">🎯 ${act.map(a=>esc(a.section)).join('、')}</div>`
-    :`<div class="muted" style="margin-top:8px;font-size:12px">无活跃野心 · 已交付 ${mem.ambition_delivered||0} 项</div>`;
-  root.appendChild($(`<section class="card col-6"><h2>正在做</h2>${errB(tasks)}${taskLine}${ambLine}</section>`));
+    :`<div class="muted" style="margin-top:8px;font-size:12px">无活跃野心 · 已交付 ${amb.delivered||0} 项</div>`;
+  const sidLine=`<div class="tag" style="margin-top:10px">会话 ${esc(sess.session_id||'—')}</div>`;
+  root.appendChild(card('col-6','正在做',taskLine+ambLine+sidLine,task));
 
-  // ── 命中率·各会话 ──
-  const sess=(perf.sessions||[]).slice(0,6).map(x=>`<tr>
+  const sr=(perf.sessions||[]).slice(0,6).map(x=>`<tr>
     <td class="mono" style="width:96px">${esc(trunc(x.session,12))}</td>
     <td style="width:120px"><div class="row"><div class="bar"><span style="width:${(x.hit_rate*100).toFixed(0)}%;background:var(--${rc(x.hit_rate)})"></span></div>
       <span class="mono" style="color:var(--${rc(x.hit_rate)})">${pct(x.hit_rate)}</span></div></td>
     <td class="tag" style="text-align:right">${fmt(x.tokens)} tok</td></tr>`).join('');
-  root.appendChild($(`<section class="card col-6"><h2>命中率 <span class="sub">近 ${(perf.sessions||[]).length} 会话</span></h2>
-    <table><tbody>${sess||'<tr><td class="empty">无数据</td></tr>'}</tbody></table></section>`));
+  root.appendChild(card('col-6',`命中率 <span class="sub">近 ${(perf.sessions||[]).length} 会话</span>`,tbl(sr,'无数据'),perf));
+}
 
-  // ── 高频失败模式 ──
-  const rec=(mem.recurring||[]).slice(0,5).map(l=>`<tr>
-    <td class="mono">${esc(l.fingerprint||trunc(l.name,18))}</td>
-    <td style="width:60px;text-align:right"><span class="pill ${l.times>=10?'bad':l.times>=5?'warn':'dim'}">${l.times}次</span></td></tr>`).join('');
-  root.appendChild($(`<section class="card col-6"><h2>高频失败 <span class="sub">反复踩的坑</span></h2>${errB(mem)}
-    <table><tbody>${rec||'<tr><td class="empty">无重复失败</td></tr>'}</tbody></table></section>`));
+// ─────────── 安全门禁 ───────────
+function renderSafety(s){
+  const root=document.getElementById('root');
+  const trust=s.trust||{},chk=s.checks||{},rk=s.risks||{};
+  const ok=trust.ok!==false;
+  root.appendChild($(`<section class="card col-12"><h2>门审计 <span class="sub">绕门提交会在此暴露</span></h2>${errB(trust)}
+    <div class="big" style="color:var(--${ok?'ok':'bad'})">${ok?'PASS':'ALERT'}</div>
+    <pre style="margin-top:12px;${ok?'':'color:var(--bad);background:rgba(255,59,48,.06)'}">${esc(trust.gate||'')}</pre></section>`));
 
-  // ── 自反思·异常 ──
-  const ar=flat.slice(0,5).map(a=>`<tr>
-    <td class="mono" style="width:96px">${esc(a.tool)}</td>
-    <td style="width:48px"><span class="pill ${sevc(a.severity)}">${esc(a.type)}</span></td>
-    <td class="ellip muted">${esc(trunc(a.detail,46))}</td></tr>`).join('');
-  root.appendChild($(`<section class="card col-6"><h2>自反思 <span class="sub">agent 自己标的异常</span></h2>${errB(anom)}
-    <table><tbody>${ar||'<tr><td class="empty">近期无异常</td></tr>'}</tbody></table></section>`));
+  const cp=(label,st)=>{const c=st==='pass'?'ok':st==='alert'?'bad':'dim';
+    return `<div class="c"><div class="l">${label}</div><span class="pill ${c}">${st==='unknown'?'未知':st.toUpperCase()}</span></div>`};
+  root.appendChild($(`<section class="card col-6"><h2>检查状态 <span class="sub">只读，不主动运行</span></h2>${errB(chk)}
+    <div class="chk">${cp('pre-commit',chk.pre_commit||'unknown')}${cp('测试',chk.test||'unknown')}${cp('lint',chk.lint||'unknown')}</div>
+    <div class="tag" style="margin-top:12px">${esc(chk.note||'')}</div></section>`));
 
-  // ── 工具性能（最慢） ──
-  const slow=(tools.slowest||[]).slice(0,5).map(t=>`<tr>
+  const lv=(l)=>l==='high'?'bad':'warn';
+  const rr=(rk.risks||[]).map(r=>`<tr>
+    <td style="width:56px"><span class="pill ${lv(r.level)}">${r.level==='high'?'高':'中'}</span></td>
+    <td class="mono" style="width:120px">${esc(r.kind)}</td>
+    <td class="ellip muted">${esc(r.detail)}</td></tr>`).join('');
+  root.appendChild(card('col-6',`风险提示 <span class="sub">${(rk.risks||[]).length} 项</span>`,
+    tbl(rr,'无风险信号'),rk));
+}
+
+// ─────────── 记忆 & 教训 ───────────
+function renderMemory(s){
+  const root=document.getElementById('root');
+  const mem=s.memory||{},anom=s.anomalies||{};
+  const flat=[];(anom.recent||[]).forEach(r=>(r.anomalies||[]).forEach(a=>flat.push({...a,session:r.session})));
+
+  const ls=(mem.lessons||[]).slice(0,12).map(l=>`<tr>
+    <td class="mono">${esc(trunc(l.name,26))}</td>
+    <td class="ellip muted">${esc(l.desc||'')}</td>
+    <td style="width:56px;text-align:right"><span class="pill ${l.times>=10?'bad':l.times>=5?'warn':'dim'}">${l.times}次</span></td></tr>`).join('');
+  root.appendChild(card('col-8',`教训 <span class="sub">${mem.count||0} 条 · 按踩坑频次</span>`,
+    `<div style="max-height:420px;overflow:auto">${tbl(ls,'无教训')}</div>`,mem));
+
+  const secs=(mem.ambition_sections||[]).map(sec=>{
+    const items=(sec.items||[]).map(i=>`<div class="it">· ${esc(trunc(i,80))}</div>`).join('');
+    return `<div class="sec"><div class="h">${esc(sec.section)}</div>${items||'<div class="empty">—</div>'}</div>`}).join('');
+  root.appendChild(card('col-4',`野心 <span class="sub">已交付 ${mem.ambition_delivered||0}</span>`,
+    secs||'<div class="empty">无</div>',{}));
+
+  const ar=flat.slice(0,8).map(a=>`<tr>
+    <td class="mono" style="width:110px">${esc(a.tool)}</td>
+    <td style="width:56px"><span class="pill ${sevc(a.severity)}">${esc(a.type)}</span></td>
+    <td class="ellip muted">${esc(trunc(a.detail,60))}</td></tr>`).join('');
+  root.appendChild(card('col-12',`自反思异常 <span class="sub">agent 自己标的</span>`,tbl(ar,'近期无异常'),anom));
+}
+
+// ─────────── 进化日志 ───────────
+function renderEvolution(s){
+  const root=document.getElementById('root');
+  const git=s.git||{},tasks=s.tasks||{},tools=s.tools||{},gaps=s.gaps||{};
+
+  const commits=(git.commits||[]).slice(0,12).map(c=>`<tr>
+    <td class="sha" style="width:64px">${esc(c.sha)}</td><td class="tag" style="width:64px">${ago(c.date)}</td>
+    <td class="ellip">${esc(c.subject)}</td></tr>`).join('');
+  root.appendChild(card('col-7','提交时间线',tbl(commits,'无提交'),git));
+
+  const slow=(tools.slowest||[]).slice(0,6).map(t=>`<tr>
     <td class="mono">${esc(t.tool)}</td>
     <td class="mono" style="width:60px;text-align:right">${(t.p50_ms/1000).toFixed(1)}s</td>
     <td class="tag" style="width:48px;text-align:right">n=${t.count}</td></tr>`).join('');
   const failTop=(tools.failing||[])[0];
-  root.appendChild($(`<section class="card col-6"><h2>最慢工具 <span class="sub">p50${failTop?` · 最易失败 ${esc(failTop.tool)} ${(failTop.failure_rate*100).toFixed(0)}%`:''}</span></h2>${errB(tools)}
-    <table><tbody>${slow||'<tr><td class="empty">—</td></tr>'}</tbody></table></section>`));
+  root.appendChild(card('col-5',`最慢工具 <span class="sub">p50${failTop?` · 最易失败 ${esc(failTop.tool)} ${(failTop.failure_rate*100).toFixed(0)}%`:''}</span>`,
+    tbl(slow,'—'),tools));
 
-  // ── 任务列表：全部任务（当前 + 归档），纯清单、不带进度 ──
-  const taskRow=(label,cls,date,title,bold)=>`<tr>
+  const tr=(label,cls,date,title,bold)=>`<tr>
     <td style="width:64px"><span class="pill ${cls}">${label}</span></td>
     <td class="tag" style="width:92px">${esc(date)}</td>
     <td class="ellip">${bold?'<b>'+esc(title)+'</b>':esc(title)}</td></tr>`;
-  const curRow=tasks.current
-    ?taskRow('进行中','warn','',trunc((tasks.current.split('\n')[0]||'').replace(/^#\s*/,''),64),true):'';
-  const archRows=(tasks.archived||[]).map(a=>taskRow('已完成','dim',a.date,a.title,false)).join('');
-  const taskTotal=(tasks.archived_count||0)+(tasks.current?1:0);
-  root.appendChild($(`<section class="card col-12"><h2>任务列表 <span class="sub">共 ${taskTotal} 个</span></h2>${errB(tasks)}
-    <div style="max-height:440px;overflow:auto"><table><tbody>${curRow}${archRows||(curRow?'':'<tr><td class="empty">无任务</td></tr>')}</tbody></table></div></section>`));
+  const curRow=tasks.current?tr('进行中','warn','',taskTitle(tasks.current),true):'';
+  const archRows=(tasks.archived||[]).map(a=>tr('已完成','dim',a.date,esc(a.title),false)).join('');
+  const total=(tasks.archived_count||0)+(tasks.current?1:0);
+  root.appendChild(card('col-7',`任务列表 <span class="sub">共 ${total} 个</span>`,
+    `<div style="max-height:440px;overflow:auto">${tbl(curRow+archRows,'无任务')}</div>`,tasks));
 
-  // ── 改进方向（有才显示） ──
-  const gl=(gaps.gaps||[]).slice(0,5).map(g=>`<tr>
+  const gl=(gaps.gaps||[]).slice(0,8).map(g=>`<tr>
     <td style="width:48px"><span class="pill ${sevc(g.severity)}">${esc(g.severity)}</span></td>
     <td class="ellip">${esc(trunc(g.detail,70))}</td></tr>`).join('');
-  if((gaps.gaps||[]).length||gaps.available===false){
-    root.appendChild($(`<section class="card col-12"><h2>改进方向 ${gaps.available===false?'<span class="sub">等 agent 下次启动计算</span>':`<span class="sub">${(gaps.gaps||[]).length} 项</span>`}</h2>${errB(gaps)}
-      <table><tbody>${gl||'<tr><td class="empty">无</td></tr>'}</tbody></table></section>`));
-  }
+  root.appendChild(card('col-5',`改进方向 ${gaps.available===false?'<span class="sub">等 agent 下次启动计算</span>':`<span class="sub">${(gaps.gaps||[]).length} 项</span>`}`,
+    tbl(gl,'无'),gaps));
+}
+
+// ─────────── tab 调度 ───────────
+const TABS=[
+  {id:'overview',label:'总览',ep:'/api/overview',render:renderOverview},
+  {id:'safety',label:'安全门禁',ep:'/api/safety',render:renderSafety},
+  {id:'memory',label:'记忆教训',ep:'/api/memory',render:renderMemory},
+  {id:'evolution',label:'进化日志',ep:'/api/evolution',render:renderEvolution},
+];
+let active=TABS[0];
+
+function buildNav(){
+  const nav=document.getElementById('nav');
+  TABS.forEach(t=>{
+    const b=document.createElement('button');b.textContent=t.label;b.dataset.id=t.id;
+    b.onclick=()=>{active=t;syncNav();tick()};nav.appendChild(b);
+  });
+  syncNav();
+}
+function syncNav(){
+  document.querySelectorAll('#nav button').forEach(b=>b.classList.toggle('active',b.dataset.id===active.id));
 }
 
 async function tick(){
   try{
-    const r=await fetch('/api/state',{cache:'no-store'});const s=await r.json();render(s);
+    const r=await fetch(active.ep,{cache:'no-store'});const s=await r.json();
+    const root=document.getElementById('root');root.innerHTML='';
+    active.render(s);
+    const br=(s.session&&s.session.branch)||(s.git&&s.git.branch);
+    if(br)document.getElementById('branch').textContent='⎇ '+br;
     document.getElementById('dot').classList.remove('stale');
     document.getElementById('updated').textContent='更新于 '+new Date(s.generated_at).toLocaleTimeString();
   }catch(e){
@@ -209,7 +270,7 @@ async function tick(){
     document.getElementById('updated').textContent='读取失败，重试中…';
   }
 }
-tick();setInterval(tick,5000);
+buildNav();tick();setInterval(tick,5000);
 </script>
 </body>
 </html>
