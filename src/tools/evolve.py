@@ -2,10 +2,8 @@
 
 工具列表：
   evolve_query        — 查询进化档案，了解过去的自修改尝试
-  evolve_check_access — 检查是否有权限修改指定文件
-  evolve_coverage     — 获取当前测试覆盖率报告
   evolve_validate     — 运行验证流水线（静态检查→沙箱测试→后检查）
-  evolve_suggest_tests— 获取解锁修改权限的测试建议
+  evolve_status       — 进化系统状态总览
 """
 
 import ast
@@ -171,38 +169,6 @@ TOOLS_EVOLVE: list[dict] = [
         },
     },
     {
-        "_meta": {"label": "权限检查"},
-        "type": "function",
-        "function": {
-            "name": "evolve_check_access",
-            "description": "检查文件修改权限。优先函数级关联测试，否则回退全局覆盖率。",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "filepath": {
-                        "type": "string",
-                        "description": "要检查的文件路径",
-                    },
-                    "touched_functions": {
-                        "type": "array",
-                        "items": {"type": "string"},
-                        "description": "计划修改的函数名列表。提供后走函数级检查，更精确。",
-                    },
-                },
-                "required": ["filepath"],
-            },
-        },
-    },
-    {
-        "_meta": {"label": "覆盖率报告"},
-        "type": "function",
-        "function": {
-            "name": "evolve_coverage",
-            "description": "获取覆盖率报告：各层解锁状态、可修改文件列表。",
-            "parameters": {"type": "object", "properties": {}, "required": []},
-        },
-    },
-    {
         "_meta": {"label": "进化验证"},
         "type": "function",
         "function": {
@@ -234,34 +200,11 @@ TOOLS_EVOLVE: list[dict] = [
         },
     },
     {
-        "_meta": {"label": "测试建议"},
-        "type": "function",
-        "function": {
-            "name": "evolve_suggest_tests",
-            "description": "获取解锁修改权限的测试建议。支持函数级精确建议（提供 touched_functions）。",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "target_file": {
-                        "type": "string",
-                        "description": "想要修改的文件路径",
-                    },
-                    "touched_functions": {
-                        "type": "array",
-                        "items": {"type": "string"},
-                        "description": "计划修改的函数名列表。提供后走函数级建议。",
-                    },
-                },
-                "required": ["target_file"],
-            },
-        },
-    },
-    {
         "_meta": {"label": "进化状态"},
         "type": "function",
         "function": {
             "name": "evolve_status",
-            "description": "进化系统状态总览：档案统计 + 覆盖率门禁 + 最近进化记录。",
+            "description": "进化系统状态总览：档案统计 + 最近进化记录。",
             "parameters": {"type": "object", "properties": {}, "required": []},
         },
     },
@@ -272,14 +215,8 @@ def execute(name: str, args: dict) -> str | None:
     """执行进化系统工具调用。"""
     if name == "evolve_query":
         return _cmd_query(args)
-    if name == "evolve_check_access":
-        return _cmd_check_access(args)
-    if name == "evolve_coverage":
-        return _cmd_coverage(args)
     if name == "evolve_validate":
         return _cmd_validate(args)
-    if name == "evolve_suggest_tests":
-        return _cmd_suggest_tests(args)
     if name == "evolve_status":
         return _cmd_status(args)
     return None
@@ -311,31 +248,6 @@ def _cmd_query(args: dict) -> str:
         lessons = r.get("lessons_learned", "")
         if lessons:
             lines.append(f"     教训: {lessons[:120]}")
-    return "\n".join(lines)
-
-
-def _cmd_check_access(args: dict) -> str:
-    from ..coverage_gate import can_modify
-    filepath = args.get("filepath", "")
-    touched_functions = args.get("touched_functions")
-    if not filepath:
-        return "请提供 filepath 参数。"
-    allowed, reason = can_modify(filepath, touched_functions=touched_functions)
-    if allowed:
-        return f"✅ 可以修改: {reason}"
-    else:
-        return f"⛔ 不能修改: {reason}"
-
-
-def _cmd_coverage(args: dict) -> str:
-    from ..coverage_gate import get_modifiable_files, get_tier_summary
-    summary = get_tier_summary()
-    files = get_modifiable_files()
-    lines = [summary, "", f"可修改文件 ({len(files)} 个):"]
-    for f in files[:30]:
-        lines.append(f"  - {f}")
-    if len(files) > 30:
-        lines.append(f"  ... 及其他 {len(files) - 30} 个文件")
     return "\n".join(lines)
 
 
@@ -489,22 +401,11 @@ def _build_failure_guidance(report, changed_files: list[str]) -> str:
     return "\n".join(parts)
 
 
-def _cmd_suggest_tests(args: dict) -> str:
-    from ..coverage_gate import suggest_tests_to_unlock
-    target = args.get("target_file", "")
-    touched_functions = args.get("touched_functions")
-    if not target:
-        return "请提供 target_file 参数。"
-    return suggest_tests_to_unlock(target, touched_functions=touched_functions)
-
-
 def _cmd_status(args: dict) -> str:
-    from ..coverage_gate import get_tier_summary
     from ..evolution_runner import describe_active_evolution_run
     from ..evolve import get_last_n, get_stats
 
     stats = get_stats()
-    tier = get_tier_summary()
     recent = get_last_n(3)
 
     lines = [
@@ -522,7 +423,6 @@ def _cmd_status(args: dict) -> str:
     else:
         lines.append("  暂无进化记录")
 
-    lines.extend(["", tier])
     lines.extend(["", "── Active Runner ──", describe_active_evolution_run()])
 
     if recent:

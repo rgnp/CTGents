@@ -94,8 +94,7 @@ class TestToolRegistry:
         from src.tools import get_tools
         tools = get_tools()
         names = [t["function"]["name"] for t in tools]
-        for name in ["evolve_query", "evolve_validate", "evolve_check_access",
-                      "evolve_coverage", "evolve_suggest_tests", "evolve_status"]:
+        for name in ["evolve_query", "evolve_validate", "evolve_status"]:
             assert name in names, f"{name} 未注册"
 
     def test_memory_tools_registered(self):
@@ -141,30 +140,3 @@ class TestToolRegistry:
         result = dispatch("/model pro", ctx, "test-session")
         assert "Pro" in result.message or "pro" in result.message.lower()
 
-# ═══════════════════════════════════════════════════════════════
-# 7. 覆盖率门禁
-# ═══════════════════════════════════════════════════════════════
-
-class TestCoverageGate:
-    """覆盖率门禁必须覆盖所有关键层。"""
-
-    def test_file_tiers_covers_critical_files(self):
-        from src.coverage_gate import FILE_TIERS
-        assert "tier_0_open" in FILE_TIERS
-        assert "tier_3_critical" in FILE_TIERS
-        assert FILE_TIERS["tier_3_critical"]["threshold"] >= 0.75
-
-    def test_can_modify_returns_tuple(self):
-        from src.coverage_gate import can_modify
-        allowed, reason = can_modify(str(PROJECT_ROOT / "src" / "tools" / "web.py"))
-        assert isinstance(allowed, bool)
-        assert isinstance(reason, str)
-
-    def test_get_tier_summary(self):
-        from src.coverage_gate import get_tier_summary
-        summary = get_tier_summary()
-        assert "覆盖率" in summary
-
-# ═══════════════════════════════════════════════════════════════
-# 7. 覆盖率门禁
-# ═══════════════════════════════════════════════════════════════

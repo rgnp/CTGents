@@ -98,9 +98,9 @@ SYSTEM_MAP = {
     },
     "guard": {
         "name": "自我保护系统",
-        "files": "src/guard.py + src/coverage_gate.py",
-        "what": "is_protected() 保护关键文件不被修改 + 覆盖率门禁渐进解锁",
-        "why": "agent 可修改自身代码，约束是靠 is_protected() 硬保护 guard.py + coverage_gate 覆盖率门槛控制",
+        "files": "src/guard.py",
+        "what": "is_protected() 保护关键文件不被修改",
+        "why": "agent 可修改自身代码，约束是靠 is_protected() 硬保护关键文件",
         "tools": [],
         "connections": {
             "tools/file": "write_file/edit_file_lines 前检查 is_protected()",
@@ -114,14 +114,10 @@ SYSTEM_MAP = {
         "tools": [
             "evolve_query",
             "evolve_status",
-            "evolve_check_access",
-            "evolve_coverage",
-            "evolve_suggest_tests",
             "evolve_validate",
         ],
         "connections": {
             "validate": "三阶段验证（AST→pytest→覆盖率/lint）",
-            "coverage_gate": "改文件前检查权限，覆盖率不足时建议测试",
             "git": "git_commit 使用具体文件暂存，提交前强制 ruff + pytest",
             "evolution_runner": "/evolve 启动 active run，evolve_validate/git_commit 回写状态",
             "evolve": "每次尝试写入 JSONL 进化档案",
@@ -167,7 +163,6 @@ CONNECTION_GRAPH = [
     ("llm", "tools/__init__", "get_tools() → API tool definitions"),
     ("tools/__init__", "storm", "同轮重复调用 → 返回缓存结果"),
     ("evolution", "validate", "改完后跑三阶段验证"),
-    ("evolution", "coverage_gate", "改前检查 can_modify()"),
     ("evolution", "evolve", "结果记录到 JSONL 档案"),
     ("evolution", "git", "成功提交后关闭 active runner"),
     ("commands", "evolution_runner", "/evolve → run/state/patch + 进化 prompt"),
@@ -319,14 +314,6 @@ def _runtime_section() -> str:
         from . import get_tools
         tools = get_tools()
         lines.append(f"工具: {len(tools)} 个已注册 | PID: {os.getpid()}")
-    except Exception:
-        pass
-
-    # 覆盖率
-    try:
-        from ..coverage_gate import get_overall_coverage
-        cov = get_overall_coverage()
-        lines.append(f"覆盖率: {cov:.0%}")
     except Exception:
         pass
 
