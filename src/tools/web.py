@@ -149,16 +149,53 @@ def format_search_results(response: dict, query: str) -> str:
 
 
 def search_web(query: str) -> str:
-    """搜索互联网并返回格式化结果（带缓存）。"""
+    """搜索互联网并返回格式化结果（带缓存 + quota 耗尽自愈切 key）。"""
     cached = _cache_get("search_web", {"query": query}, _CACHE_TTL_SEARCH)
     if cached is not None:
         return cached
 
-    result = tavily.search(query, max_results=5)
+    from tavily import UsageLimitExceededError
+
+    try:
+        result = tavily.search(query, max_results=5)
+    except UsageLimitExceededError:
+        result = _try_self_heal(query)
+        if result is None:
+            return "Tavily API 配额耗尽，所有 key 均已不可用。"
+
     formatted = format_search_results(result, query)
     _cache_set("search_web", {"query": query}, formatted)
     return formatted
 
+
+def _try_self_heal(query: str):
+    """自愈：重读 .env → 重建 tavily 客户端 → 用所有 key 重试一次。
+
+    当 Tavily 报 quota exceeded 时调用。如果磁盘 .env 被另一会话加过新 key，
+    这里会捡起来——agent 不需要重启或人工 reload。
+
+    返回 search result dict，失败返回 None。
+    """
+    global tavily
+    import os
+    from pathlib import Path
+
+    from dotenv import load_dotenv
+    from tavily import InvalidAPIKeyError, UsageLimitExceededError
+
+    from ..config import MultiKeyTavilyClient
+
+    env_path = Path(__file__).resolve().parent.parent.parent / ".env"
+    load_dotenv(env_path, override=True)
+    keys_raw = os.getenv("TAVILY_API_KEYS", os.getenv("TAVILY_API_KEY", ""))
+    keys = [k.strip() for k in keys_raw.split(",") if k.strip()]
+    if not keys:
+        return None
+    tavily = MultiKeyTavilyClient(keys)
+    try:
+        return tavily.search(query, max_results=5)
+    except (UsageLimitExceededError, InvalidAPIKeyError):
+        return None
 
 def _fetch_url_with_timeout(url: str) -> tuple[str | None, int | None]:
     """用 urllib 下载网页，带超时控制。
