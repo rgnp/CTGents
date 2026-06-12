@@ -199,6 +199,28 @@ TOOLS_GIT = [
             },
         },
     },
+    {
+        "_meta": {"label": "Git 还原", "dedup_blacklist": True},
+        "type": "function",
+        "function": {
+            "name": "git_restore",
+            "description": "还原未暂存的改动（git checkout -- <file>）。不碰已暂存内容。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "file": {
+                        "type": "string",
+                        "description": "要还原的文件路径（支持多文件，空格分隔）",
+                    },
+                    "path": {
+                        "type": "string",
+                        "description": "Git 仓库路径，默认当前目录",
+                    },
+                },
+                "required": ["file"],
+            },
+        },
+    },
 ]
 
 
@@ -290,8 +312,31 @@ def _scope_paths_to_active_run(paths: list[str]) -> list[str]:
         return paths  # 任何异常都不阻断正常提交
 
 
+def _filter_gitignored(workdir: str, paths: list[str]) -> list[str]:
+    """过滤 .gitignore 覆盖的路径，避免 git add 暂存时因被忽略文件报错。"""
+    if not paths:
+        return paths
+    try:
+        result = subprocess.run(
+            ["git", "check-ignore", "--stdin"],
+            input="\n".join(paths),
+            capture_output=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=10,
+            cwd=workdir,
+        )
+        ignored = {p.strip() for p in result.stdout.strip().split("\n") if p.strip()}
+        if ignored:
+            return [p for p in paths if p not in ignored]
+    except Exception:
+        pass
+    return paths
+
+
 def _stage_changed_files(workdir: str) -> str | None:
     paths = _changed_paths_for_stage(workdir)
+    paths = _filter_gitignored(workdir, paths)
     paths = _scope_paths_to_active_run(paths)
     if not paths:
         return None
@@ -861,6 +906,21 @@ def git_branch(all_branches: bool = False, path: str | None = None) -> str:
     return "\n".join(lines)
 
 
+def git_restore(file: str, path: str | None = None) -> str:
+    """还原指定文件的未暂存改动（git checkout -- <file>）。"""
+    if not _is_git_repo(path):
+        return "当前目录不是 Git 仓库（未找到 .git 目录）"
+    workdir = str(Path(path).resolve()) if path else str(Path.cwd())
+    files = [f.strip() for f in file.split() if f.strip()]
+    if not files:
+        return "请指定要还原的文件路径"
+    r = _git(["checkout", "--", *files], workdir)
+    if r["success"]:
+        names = ", ".join(files)
+        return f"已还原: {names}"
+    return f"还原失败:\n{r['stderr']}"
+
+
 # ── 调度 ──
 
 
@@ -905,4 +965,9 @@ def execute(name: str, args: dict) -> str | None:
         )
     if name == "git_review":
         return git_review(path=args.get("path"))
+    if name == "git_restore":
+        return git_restore(
+            file=args.get("file", ""),
+            path=args.get("path"),
+        )
     return None

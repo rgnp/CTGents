@@ -8,22 +8,21 @@ from ..params import RUNTIME
 
 # ── 安全配置 ──
 
-# 禁止执行的命令（黑名单）
-BLOCKED_COMMANDS = [
-    "rm -rf /", "rm -rf /*", "rmdir /s /q",  # 删库跑路
+# 危险命令关键词 — 匹配整个命令字符串（含子串）。只放明确危险的全命令模式。
+_DANGEROUS_PATTERNS = [
+    # 删库跑路（必须先解析才能拦 rm /rmdir，此处只拦明确的全路径破坏模式）
+    "rm -rf /", "rm -rf /*", "rmdir /s /q",
     "format", "mkfs", "dd if=",              # 格式化磁盘
     "shutdown", "reboot", "poweroff",        # 关机
-    "wget ", "curl ",                        # 下载（改成白名单模式，允许某些）
+    "wget ", "curl ",                        # 下载
     "sudo ",                                 # 提权
-    # 文件破坏操作 — 必须走 write_file/delete_file/edit_file_lines 门禁
-    "rm ", "del ", "rd ", "rmdir ",          # 删除文件/目录
-    "move ", "ren ", "copy ", "xcopy ",      # 移动/重命名/复制
 ]
 
-# 只允许这些命令（空列表 = 不限制，只用黑名单）
-# 设置为允许的通配模式，如 ["npm", "pip", "git", "node", "python"...]
-ALLOWED_COMMANDS: list[str] = []  # 空列表表示不限制，只用黑名单
-
+# 文件操作的命令名 — 只检查第一个词（而非子串），不误拦 `git rm` 之类。
+_BLOCKED_FILE_OPS = frozenset({
+    "rm", "del", "rd", "rmdir",          # 删除 — 走 delete_file 门禁
+    "move", "ren", "rename", "copy", "xcopy",  # 移动/复制 — 走 write_file 门禁
+})
 # 最大输出长度（字符）
 MAX_OUTPUT_LENGTH = 100_000
 SHELL_META_CHARS = frozenset("&|;<>\n\r")
@@ -83,24 +82,29 @@ TOOLS_EXEC = [
 
 
 def _is_blocked(command: str) -> tuple[bool, str]:
-    """检查命令是否被禁止。返回 (是否禁止, 原因)。"""
+    """检查命令是否被禁止。返回 (是否禁止, 原因)。
+
+    文件操作命令（rm/del/copy等）只检查命令本身（第一个词），不误拦 git rm；
+    危险模式（rm -rf / 等）匹配整条命令字符串。
+    """
     cmd_lower = command.lower().strip()
 
-    # 黑名单检查
-    for blocked in BLOCKED_COMMANDS:
-        if blocked in cmd_lower:
-            return True, f"命令包含禁止操作: {blocked}"
+    # 危险模式：匹配整条命令
+    for pat in _DANGEROUS_PATTERNS:
+        if pat in cmd_lower:
+            return True, f"命令包含禁止操作: {pat}"
 
-    # 白名单检查（仅当 ALLOWED_COMMANDS 非空时生效）
-    if ALLOWED_COMMANDS:
-        first_word = shlex.split(command)[0] if shlex.split(command) else ""
-        allowed = False
-        for pattern in ALLOWED_COMMANDS:
-            if first_word == pattern or first_word.startswith(pattern):
-                allowed = True
-                break
-        if not allowed:
-            return True, f"命令不在允许列表中: {first_word}"
+    # 文件操作命令：只检查第一个词（不是子串，不误拦 git rm / copy 等）
+    try:
+        parts = shlex.split(cmd_lower)
+    except ValueError:
+        parts = cmd_lower.split()
+    if parts and parts[0] in _BLOCKED_FILE_OPS:
+        return True, (
+            f"禁止直接执行 {parts[0]} 命令"
+            f" - 文件增删改必须走工具 API（write_file/delete_file/edit_file_lines）。"
+            f" git {parts[0]} 等子命令不受此限。"
+        )
 
     return False, ""
 
