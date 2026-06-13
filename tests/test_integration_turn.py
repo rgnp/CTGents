@@ -257,3 +257,36 @@ def test_no_task_stops_normally(monkeypatch, tmp_path):
     _drive_turn(ctx, "随便问一句")
     assert len(invoked) == 1, "无任务不该续做"
     assert not any(m.get("_task_continue") for m in ctx.log)
+
+
+# ── 建任务建议:干了不少活却没 current.md → 提示建任务(一次/会话) ──
+
+def test_substantial_work_no_task_suggests(monkeypatch, tmp_path):
+    """多步干活后空手收尾、又没 current.md 任务 → 尾部提示用 create_task 落计划。
+
+    事实触发(请求数达阈值 + 无任务文件),判断('算不算长任务')连同 opt-out 留给 agent。
+    """
+    import src.tasks as tasks
+    monkeypatch.setattr("src.tasks.CURRENT_TASK_FILE", tmp_path / "current.md")  # 无任务
+    tasks.reset_gaps_cache()
+    monkeypatch.setattr(llm, "_TASK_SUGGEST_MIN_REQUESTS", 3)  # 压低阈值便于触发
+    ctx = _prefix_ctx()
+    rounds = [("", [_tool_call("think", {"thought": f"第{i}步"})]) for i in range(3)]
+    rounds.append(("这部分先做到这。", []))  # 空手收尾,requests_made=4>=3
+    _mock_llm(monkeypatch, *rounds)
+    _drive_turn(ctx, "帮我把这件事推进一下")
+    tail = "\n".join(m.get("content") or "" for m in ctx.log if m.get("role") == "system")
+    assert "任务建议" in tail, "干了不少活又没任务,应提示建任务"
+
+
+def test_short_turn_no_suggest(monkeypatch, tmp_path):
+    """活儿少(未达阈值)→ 不提示建任务,普通问答不被唠叨(防假阳性)。"""
+    import src.tasks as tasks
+    monkeypatch.setattr("src.tasks.CURRENT_TASK_FILE", tmp_path / "current.md")
+    tasks.reset_gaps_cache()
+    monkeypatch.setattr(llm, "_TASK_SUGGEST_MIN_REQUESTS", 5)
+    ctx = _prefix_ctx()
+    _mock_llm(monkeypatch, ("一句话答完。", []))  # requests_made=1 < 5
+    _drive_turn(ctx, "随便问")
+    tail = "\n".join(m.get("content") or "" for m in ctx.log if m.get("role") == "system")
+    assert "任务建议" not in tail

@@ -530,10 +530,12 @@ def main() -> None:
                     ctx.clear_log()
                     # 重建 prefix 并追加 volatile 上下文（与 session start 一致）
                     ctx.rebuild_prefix(_make_prefix_msgs())
-                    if r.save:   # /new: 同时重置 session + 清空会话钉板
+                    if r.save:   # /new: 同时重置 session + 清空会话钉板 + 会话级缓存
                         session_id = None
                         from .session_pins import clear_pins
                         clear_pins()
+                        from .tasks import reset_gaps_cache
+                        reset_gaps_cache()
                     _append_volatile_context(ctx)
                 if r.goal:
                     session_id = _handle_goal(ctx, r.goal, session_id)

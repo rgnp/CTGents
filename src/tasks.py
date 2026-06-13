@@ -25,12 +25,35 @@ _SLUG_FALLBACK = "task"
 _ANCHOR_HEADING = "# 目标锚点"
 # 方向发现缓存：同会话只跑一次（~5s），不进每轮循环
 _gaps_reported = False
+# 建任务建议：同会话只提示一次，避免每轮唠叨
+_task_suggested = False
 
 
 def reset_gaps_cache() -> None:
-    """新会话开始时重置，允许再次上报方向发现。"""
-    global _gaps_reported
+    """新会话开始时重置会话级一次性缓存（方向发现 + 建任务建议）。"""
+    global _gaps_reported, _task_suggested
     _gaps_reported = False
+    _task_suggested = False
+
+
+def maybe_suggest_task_nudge(requests_made: int, threshold: int) -> str | None:
+    """干了不少活（requests_made>=threshold）却没有 current.md 任务 → 一次性建议建任务。
+
+    触发是【事实】（这一轮的请求数 + 没有任务文件），可机械判定、无假阳性；
+    '这到底算不算需要跟踪的长任务' 是【判断】，连同 opt-out 一起留给 agent——
+    不机械分类长任务（那会假阳性，见记忆 rule-placement）。同会话只提示一次。
+    """
+    global _task_suggested
+    if _task_suggested or requests_made < threshold:
+        return None
+    if read_current().strip():  # 已有任务在跟踪，无需建议
+        return None
+    _task_suggested = True
+    return (
+        "[任务建议] 这一轮做了不少步，且当前没有 tasks/current.md 任务记录。"
+        "如果这是个跨多步、可能跨会话的长任务，用 create_task 写下目标锚点 + 步骤清单——"
+        "之后断点能自动续做、换会话也接得上；若马上就收尾，忽略本提示即可。"
+    )
 
 
 def read_ambitions() -> str:

@@ -253,3 +253,29 @@ class TestTaskCommand:
         _isolate_tasks[0].write_text(_UNFINISHED, encoding="utf-8")
         r = cmds.dispatch("/task archive ad-papers", CacheContext(), None)
         assert "已归档" in r.message
+
+
+class TestSuggestTaskNudge:
+    """maybe_suggest_task_nudge: 事实触发(请求数+无任务)、判断留 agent、一会话一次。"""
+
+    def test_suggests_when_busy_and_no_task(self, _isolate_tasks):
+        tasks.reset_gaps_cache()
+        assert tasks.maybe_suggest_task_nudge(6, threshold=5) is not None
+
+    def test_silent_below_threshold(self, _isolate_tasks):
+        tasks.reset_gaps_cache()
+        assert tasks.maybe_suggest_task_nudge(2, threshold=5) is None
+
+    def test_silent_when_task_exists(self, _isolate_tasks):
+        """已有 current.md 任务在跟踪 → 不重复建议(逃生口:agent 已经建了)。"""
+        tasks.reset_gaps_cache()
+        _isolate_tasks[0].write_text(_UNFINISHED, encoding="utf-8")
+        assert tasks.maybe_suggest_task_nudge(99, threshold=5) is None
+
+    def test_only_once_per_session(self, _isolate_tasks):
+        """同会话只提示一次,防每轮唠叨;reset 后可再触发。"""
+        tasks.reset_gaps_cache()
+        assert tasks.maybe_suggest_task_nudge(6, threshold=5) is not None
+        assert tasks.maybe_suggest_task_nudge(6, threshold=5) is None  # 第二次静默
+        tasks.reset_gaps_cache()
+        assert tasks.maybe_suggest_task_nudge(6, threshold=5) is not None  # 新会话再提示

@@ -611,6 +611,8 @@ _COMPRESS_MIN_OMITTED = 120
 _MAX_REQUESTS_PER_TURN = RUNTIME.max_requests_per_turn
 # 长任务未完成时空手收尾的自动续做上限——真值在 params.RUNTIME
 _TASK_AUTO_CONTINUE_MAX = RUNTIME.task_auto_continue_max
+# 干了不少活却没建任务 → 提示建任务的请求数阈值——真值在 params.RUNTIME
+_TASK_SUGGEST_MIN_REQUESTS = RUNTIME.task_suggest_min_requests
 # eager 工具执行线程池（LLM 流式期间预启动 SAFE 工具，持久复用）
 _EAGER_EXECUTOR: _ThreadPoolExecutor | None = None
 
@@ -1539,6 +1541,12 @@ def run_conversation(
                 })
                 logger.info("任务续做：current.md 未完成，自动续做第 %d 次", _auto_continue_count)
                 continue
+            # ── 建任务建议：干了不少活却没 current.md 任务 → 提示建任务（一次/会话）──
+            # 事实触发（请求数+无任务），判断留 agent（带 opt-out），不机械分类长任务。
+            from .tasks import maybe_suggest_task_nudge
+            _suggest = maybe_suggest_task_nudge(requests_made, _TASK_SUGGEST_MIN_REQUESTS)
+            if _suggest:
+                ctx.log.append({"role": "system", "content": _suggest, "_volatile": True})
             if on_progress:
                 on_progress()
             from .tasks import get_task_progress_line

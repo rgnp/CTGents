@@ -110,6 +110,8 @@ class RuntimeParams:
     # 长任务未完成（current.md 仍有 [ ]/[o]）时 LLM 空手收尾 → 自动续做的最大连续次数。
     # 每次调工具有进展即重置，仅在"反复空转不干活"时耗尽 → 交还用户（防卡死）。
     task_auto_continue_max: int = _env_int("CTG_TASK_AUTO_CONTINUE_MAX", 3)
+    # 一轮请求数达此值却没有 current.md 任务 → 提示 agent 建任务（事实触发，判断留 agent）。
+    task_suggest_min_requests: int = _env_int("CTG_TASK_SUGGEST_MIN_REQUESTS", 6)
     # 单条工具结果允许占用的上下文比例上限
     tool_result_budget: float = _env_float("CTG_TOOL_RESULT_BUDGET", 0.15)
     # 工具结果超过此字符数即压缩（read_file 等除外，见 SKIP_COMPRESS_TOOLS）
