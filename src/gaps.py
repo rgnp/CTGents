@@ -194,35 +194,42 @@ def _detect_coverage_gaps() -> list[Gap]:
         return []
     gaps: list[Gap] = []
     for line in result.stdout.splitlines():
-        parts = line.split()
-        if len(parts) < 4:
-            continue
-        name = parts[0]
-        if not name.startswith("src/"):
-            continue
-        try:
-            stmts = int(parts[1])
-            missed = int(parts[2])
-            cov_pct = int(parts[3].rstrip("%"))
-        except (ValueError, IndexError):
-            continue
-        if stmts < 5:
-            continue
-        if cov_pct < 50:
-            severity = "high"
-        elif cov_pct < 80:
-            severity = "medium"
-        else:
-            continue
-        gaps.append(Gap(
-            source="coverage", gap_type="low_coverage", severity=severity,
-            detail=f"{name}: {cov_pct}% ({missed}/{stmts} uncovered)",
-            affected_files=[name],
-            suggestion=f"Add tests for {name}, at least critical paths.",
-            confidence=0.95, actionable=True,
-        ))
+        g = _parse_coverage_line(line)
+        if g:
+            gaps.append(g)
     gaps.sort(key=lambda g: 0 if g.severity == "high" else 1)
     return _deduplicate(gaps)[:_PER_SOURCE_MAX]
+
+
+def _parse_coverage_line(line: str) -> Gap | None:
+    """解析 coverage report 单行，返回 Gap 或 None（跳过/无意义行）。"""
+    parts = line.split()
+    if len(parts) < 4:
+        return None
+    name = parts[0]
+    if not name.startswith("src/"):
+        return None
+    try:
+        stmts = int(parts[1])
+        missed = int(parts[2])
+        cov_pct = int(parts[3].rstrip("%"))
+    except (ValueError, IndexError):
+        return None
+    if stmts < 5:
+        return None
+    if cov_pct < 50:
+        severity = "high"
+    elif cov_pct < 80:
+        severity = "medium"
+    else:
+        return None
+    return Gap(
+        source="coverage", gap_type="low_coverage", severity=severity,
+        detail=f"{name}: {cov_pct}% ({missed}/{stmts} uncovered)",
+        affected_files=[name],
+        suggestion=f"Add tests for {name}, at least critical paths.",
+        confidence=0.95, actionable=True,
+    )
 
 
 _SEVERITY_WEIGHT = {"crit": 4, "high": 3, "medium": 2, "low": 1}
