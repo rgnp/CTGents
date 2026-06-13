@@ -1400,7 +1400,7 @@ def run_conversation(
 
         try:
             content, tool_calls, eager_results = _invoke_llm_eager(
-                backend, ctx.send(), on_token, session_id,
+                backend, ctx.send(skip_volatile_system=(requests_made > 0)), on_token, session_id,
             )
             requests_made += 1
         except UserInterruptError:

@@ -110,7 +110,7 @@ class CacheContext:
 
     # ── 核心方法 ──────────────────────────────────────────
 
-    def send(self, validate: bool = True) -> list[dict]:
+    def send(self, validate: bool = True, skip_volatile_system: bool = False) -> list[dict]:
         """构建发给 LLM API 的消息列表。
 
         策略（保障 DeepSeek 前缀缓存）：
@@ -120,6 +120,8 @@ class CacheContext:
           4. log 中 system 消息放末尾，不影响缓存前缀
         Args:
             validate: 是否校验 prefix 完整性，默认 True。
+            skip_volatile_system: True 时跳过 log 中带 _volatile 标记的
+                system 消息。工具循环中间调用时设 True，节省尾部 token。
 
         Returns:
             API-ready 消息列表。
@@ -143,6 +145,9 @@ class CacheContext:
         # log 中的 system 消息放末尾
         for m in self.log:
             if m.get("role") == "system":
+                # 工具循环中跳过装饰性尾挂消息（只对首轮判断有意义）
+                if skip_volatile_system and m.get("_volatile"):
+                    continue
                 api.append({"role": "system", "content": m.get("content", "")})
 
         return api
