@@ -241,13 +241,26 @@ def _cmd_context(r: CmdResult, ctx, _args, _sid) -> None:
         "── 前缀（始终命中）──",
     ]
 
-    # 前缀内容（按 _make_prefix_msgs 顺序：日期, AGENTS.md, 运行时机制索引）
+    _append_prefix_section(lines, ctx)
+    _append_log_section(lines, log_msgs)
+    _append_tail_section(lines, log_msgs)
+    _append_cache_section(lines, _sid)
+
+    r.message = "\n".join(lines)
+
+
+def _append_prefix_section(lines: list[str], ctx) -> None:
+    """在前缀段追加 prefix 内容清单。"""
     _prefix_labels = ["日期", "AGENTS.md", "运行时机制索引"]
     for i, m in enumerate(ctx.prefix):
         content = m.get("content", "")
         label = _prefix_labels[i] if i < len(_prefix_labels) else "前缀"
         lines.append(f"  [{i + 1}] {label:<16} {len(content):,} 字符")
     lines.append(f"  哈希: {ctx.prefix_hash}")
+
+
+def _append_log_section(lines: list[str], log_msgs: list[dict]) -> None:
+    """在对话段追加非 system 角色的消息计数。"""
     roles: dict[str, int] = {}
     for m in log_msgs:
         if m.get("role") != "system":
@@ -259,7 +272,11 @@ def _cmd_context(r: CmdResult, ctx, _args, _sid) -> None:
         bar = "█" * min(n, 40) if n else "—"
         lines.append(f"  {role:<10} {n:>3} 条  {bar}")
 
-    # 尾部注入
+
+def _append_tail_section(lines: list[str], log_msgs: list[dict]) -> None:
+    """在尾部注入段追加各注入标签的命中状态。
+    去重扫描：同一条消息多标签命中只报一次完整长度，其余标"与上同条"。
+    """
     lines.append("")
     lines.append("── 尾部注入（每轮在末尾 → 必然 miss）──")
 
@@ -274,9 +291,6 @@ def _cmd_context(r: CmdResult, ctx, _args, _sid) -> None:
         ("⏪ 对话归档", "压缩归档"),
     ]
 
-    # 去重扫描：方向发现+长期目标+长任务+被动诊断被 make_task_context_message 合成
-    # 同一条消息，多个标签会命中它——只对首次命中报完整长度，其余标"与上同条"，
-    # 否则同一条 2000+ 字符消息被重复计数列好几遍（虚高失真）。
     seen_ids: set[int] = set()
     for tag, label in _tail_tags:
         found = None
@@ -293,29 +307,30 @@ def _cmd_context(r: CmdResult, ctx, _args, _sid) -> None:
             chars = len(found.get("content", ""))
             lines.append(f"  [✓] {label:<10} {chars:>7,} 字符")
 
-    # API 缓存
+
+def _append_cache_section(lines: list[str], _sid: str | None) -> None:
+    """在 API 缓存段追加缓存命中率统计。无请求数据则跳过。"""
     from .llm import get_cache_stats
     cache = get_cache_stats(_sid)
     t = cache.get("total", {}) if isinstance(cache, dict) else {}
     reqs = t.get("requests", 0)
-    if reqs > 0:
-        prompt = t.get("prompt_tokens", 0)
-        hit = t.get("cache_hit_tokens", 0)
-        miss = prompt - hit
-        hit_pct = hit / prompt * 100 if prompt > 0 else 0
-        avg_miss = miss / reqs if reqs > 0 else 0
+    if reqs == 0:
+        return
+    prompt = t.get("prompt_tokens", 0)
+    hit = t.get("cache_hit_tokens", 0)
+    miss = prompt - hit
+    hit_pct = hit / prompt * 100 if prompt > 0 else 0
+    avg_miss = miss / reqs if reqs > 0 else 0
 
-        lines.append("")
-        lines.append("── API 缓存 ──")
-        lines.append(f"  请求:    {reqs} 次")
-        bar_len = 22
-        hit_bars = int(bar_len * hit_pct / 100)
-        bar = "█" * hit_bars + "░" * (bar_len - hit_bars)
-        lines.append(f"  命中率:  {bar}  {hit_pct:.1f}%")
-        lines.append(f"           (命中 {hit:,} / 输入 {prompt:,} tok)")
-        lines.append(f"  每轮 miss: ~{avg_miss:,.0f} tok (对话增量 + 尾部注入)")
-
-    r.message = "\n".join(lines)
+    lines.append("")
+    lines.append("── API 缓存 ──")
+    lines.append(f"  请求:    {reqs} 次")
+    bar_len = 22
+    hit_bars = int(bar_len * hit_pct / 100)
+    bar = "█" * hit_bars + "░" * (bar_len - hit_bars)
+    lines.append(f"  命中率:  {bar}  {hit_pct:.1f}%")
+    lines.append(f"           (命中 {hit:,} / 输入 {prompt:,} tok)")
+    lines.append(f"  每轮 miss: ~{avg_miss:,.0f} tok (对话增量 + 尾部注入)")
 
 @builtin("/compact", description="手动压缩上下文：驱逐旧对话换摘要（不必等 65% 自动触发）")
 def _cmd_compact(r: CmdResult, ctx, _args, _sid) -> None:
@@ -383,8 +398,14 @@ def _cmd_self(r: CmdResult, _ctx, _args, _sid) -> None:
     from .tools import get_tools
 
     parts: list[str] = []
+    _append_arch_section(parts)
+    _append_tools_section(parts, get_tools())
+    _append_cmd_list_section(parts)
+    r.message = "\n".join(parts)
 
-    # ── 1. 架构概览 ──
+
+def _append_arch_section(parts: list[str]) -> None:
+    """追加架构概览：文件列表 + 职责说明。"""
     parts.append("## 架构")
     parts.append("src/")
     parts.append("  main.py           — 主循环：接收输入 → dispatch → LLM → 输出")
@@ -415,66 +436,61 @@ def _cmd_self(r: CmdResult, _ctx, _args, _sid) -> None:
     parts.append("tests/              — pytest 测试")
     parts.append("")
 
-    # ── 2. 工具清单（按模块分组） ──
-    all_tools = get_tools()
+
+def _guess_tool_group(name: str) -> str:
+    """根据工具名推断所属模块分组。"""
+    if name.startswith("git_"):
+        return "git"
+    if name.startswith("rag_"):
+        return "rag"
+    if name in ("remember", "recall", "forget"):
+        return "memory"
+    if name in ("search_web", "read_page"):
+        return "web"
+    if name in ("read_file", "read_file_lines", "write_file", "edit_file_lines",
+                "delete_file", "list_files", "count_lines"):
+        return "file"
+    if name in ("run_command", "run_python"):
+        return "exec"
+    if name == "grep_code":
+        return "code"
+    if name in ("scan_project", "check_project", "generate_agents_md", "docs_sync_check"):
+        return "project"
+    if name == "think":
+        return "think"
+    return "other"
+
+
+def _append_tools_section(parts: list[str], all_tools: list[dict]) -> None:
+    """追加工具清单：按模块分组，附描述。"""
     parts.append(f"## 工具（共 {len(all_tools)} 个）")
-    # 按模块分组：从工具名推测分组
     groups: dict[str, list[str]] = {}
     name_to_desc: dict[str, str] = {}
     for t in all_tools:
         fn = t.get("function", {})
         n = fn.get("name", "?")
-        desc = fn.get("description", "")[:80]
-        name_to_desc[n] = desc
-        # 猜测分组名
-        if n.startswith("git_"):
-            g = "git"
-        elif n.startswith("rag_"):
-            g = "rag"
-        elif n in ("remember", "recall", "forget"):
-            g = "memory"
-        elif n in ("search_web", "read_page"):
-            g = "web"
-        elif n in ("read_file", "read_file_lines", "write_file", "edit_file_lines",
-                    "delete_file", "list_files", "count_lines"):
-            g = "file"
-        elif n in ("run_command", "run_python"):
-            g = "exec"
-        elif n == "grep_code":
-            g = "code"
-        elif n in ("scan_project", "check_project", "generate_agents_md", "docs_sync_check"):
-            g = "project"
-        elif n == "think":
-            g = "think"
-        else:
-            g = "other"
-        groups.setdefault(g, []).append(n)
-
+        name_to_desc[n] = fn.get("description", "")[:80]
+        groups.setdefault(_guess_tool_group(n), []).append(n)
     for gname in sorted(groups.keys()):
-        tools_in_group = groups[gname]
         parts.append(f"  [{gname}]")
-        for tn in sorted(tools_in_group):
-            d = name_to_desc.get(tn, "")
-            parts.append(f"    {tn}  — {d}")
-
+        for tn in sorted(groups[gname]):
+            parts.append(f"    {tn}  — {name_to_desc.get(tn, '')}")
     parts.append("")
 
-    # ── 3. 指令清单 ──
+
+def _append_cmd_list_section(parts: list[str]) -> None:
+    """追加指令清单：按 handler 去重，同 handler 别名合并。"""
     seen: dict[int, list[Command]] = {}
     for cmd in _registry:
         hid = id(cmd.handler)
         seen.setdefault(hid, []).append(cmd)
-
     parts.append(f"## 指令（共 {len(seen)} 个）")
     for group in sorted(seen.values(), key=lambda g: g[0].name):
         primary = group[0]
         aliases = [c.name for c in group[1:]]
         name_display = f"{primary.name}（{'、'.join(aliases)}）" if aliases else primary.name
         parts.append(f"  {name_display:<24} {primary.description}")
-
     parts.append("")
-
-    r.message = "\n".join(parts)
 
 
 # ═══════════════════════════════════════════════════════════════
