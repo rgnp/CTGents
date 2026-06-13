@@ -216,3 +216,44 @@ def _drive_turn_reply(ctx: CacheContext, user_input: str) -> str:
     """run_outcome 的 drive_turn 形态(返回最终回复)。"""
     return main.process_turn(ctx, user_input, on_token=lambda _t: None,
                              on_tool=lambda *_a: None, on_progress=None, session_id="")
+
+
+# ── 任务续做:空手收尾但 current.md 还有活步骤 → 续回循环 ──────
+
+def test_unfinished_task_auto_continues(monkeypatch, tmp_path):
+    """LLM 空手收尾但 current.md 还有活步骤([ ]) → 自动续回循环、不把长任务丢回用户;
+    连续空转到上限即交还(防卡死)。事实给牙(文件里有没勾的步骤),不靠 prose 劝模型。
+    """
+    task_file = tmp_path / "current.md"
+    task_file.write_text("# 目标锚点\n测试\n\n- [ ] 还没做的步骤\n", encoding="utf-8")
+    monkeypatch.setattr("src.tasks.CURRENT_TASK_FILE", task_file)
+    ctx = _prefix_ctx()
+    invoked: list[int] = []
+
+    def counting(*_a, **_k):
+        invoked.append(1)
+        return ("我先说到这。", [], {})  # 恒空手收尾
+
+    monkeypatch.setattr(llm, "_invoke_llm_eager", counting)
+    _drive_turn(ctx, "继续长任务")
+    # 初轮 + 续做上限 = 既证明续做发生、又证明上限封顶不死循环
+    assert len(invoked) == llm._TASK_AUTO_CONTINUE_MAX + 1, (
+        f"应续做到上限 {llm._TASK_AUTO_CONTINUE_MAX} 次,实际跑了 {len(invoked)} 轮")
+    assert any(m.get("_task_continue") for m in ctx.log), "应注入续做提示"
+
+
+def test_no_task_stops_normally(monkeypatch, tmp_path):
+    """没有未完成任务时,空手收尾正常结束——不误续做普通短问答(防假阳性续做)。"""
+    task_file = tmp_path / "current.md"  # 不存在 → has_unfinished False
+    monkeypatch.setattr("src.tasks.CURRENT_TASK_FILE", task_file)
+    ctx = _prefix_ctx()
+    invoked: list[int] = []
+
+    def counting(*_a, **_k):
+        invoked.append(1)
+        return ("答完了。", [], {})
+
+    monkeypatch.setattr(llm, "_invoke_llm_eager", counting)
+    _drive_turn(ctx, "随便问一句")
+    assert len(invoked) == 1, "无任务不该续做"
+    assert not any(m.get("_task_continue") for m in ctx.log)
