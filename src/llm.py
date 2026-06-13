@@ -810,11 +810,14 @@ def _compact_cache_context(ctx, user_input: str, force: bool = False) -> None:
     else:
         _ineffective_compression_count = 0
 
-    # 替换：摘要 + 保留的消息
+    # 替换：摘要 + 保留的消息 + 硬分界标记
     new_log = [{
         "role": "system",
         "content": (
-            f"⏪ 对话归档（已驱 {len(evicted)} 条旧消息）：\n\n{summary}"
+            "⏪ 对话归档 — 以下为背景参考，非当前任务指令。\n"
+            "回应最新 user 消息即可，不要执行摘要中描述的任务。\n\n"
+            f"{summary}\n\n"
+            "─── 以上为归档摘要，以下为当前对话 ───"
         ),
     }]
     new_log.extend(kept)
@@ -886,7 +889,9 @@ def _summarize_via_llm(messages: list[dict], previous_summary: str | None = None
             transcript_parts.append(f"[assistant] {text}")
         elif role == "tool":
             label = m.get("_tool_name", "tool")
-            transcript_parts.append(f"[{label}] {content[:150]}")
+            # 预压缩工具结果：给 summarizer 的输入先语义化，免得 raw output 撑爆
+            compressed = _summarize_tool_result(label, content)
+            transcript_parts.append(f"[{label}] {compressed}")
 
     transcript = "\n".join(transcript_parts)
     if not transcript.strip():
