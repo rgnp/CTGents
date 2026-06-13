@@ -19,7 +19,6 @@ from .evolution_runner import (
     load_active_evolution_run,
     start_evolution_run,
 )
-from .evolve import EvolutionRecord, record_attempt
 from .gaps import (
     Gap,
     _make_fix_prompt,
@@ -116,7 +115,7 @@ def complete(
     success: bool = True,
     note: str = "",
 ) -> str:
-    """进化完成：关闭 run，写入进化档案，返回摘要。"""
+    """进化完成：关闭 run，返回摘要。进化档案由 _archive_run 自动写入。"""
     status = RunnerStatus.PASSED if success else RunnerStatus.FAILED
 
     try:
@@ -124,18 +123,6 @@ def complete(
     except (FileNotFoundError, ValueError) as e:
         return f"关闭进化 run 失败: {e}"
 
-    # 写入进化档案（积累支柱）
-    outcome = "merged" if success else "reverted"
-    record_attempt(EvolutionRecord(
-        goal=run.goal,
-        files_changed=files_changed,
-        diff_summary=note,
-        outcome=outcome,
-        git_commit_before=run.preflight.get("head", ""),
-        tags=["autonomic"],
-    ))
-
-    # 从 run 的 validation 记录中提取更多信息
     duration = _calc_duration(run)
     return (
         f"进化{'成功' if success else '失败'}: {run.run_id}\n"
