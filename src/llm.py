@@ -889,63 +889,72 @@ _SUMMARY_PROMPT = (
 
 
 def _summarize_via_llm(messages: list[dict], previous_summary: str | None = None) -> str:
-    """调用 LLM 生成结构化摘要——保留文件/命令/决策，丢弃闲聊。
-
-    previous_summary 非空时执行迭代更新而非从零摘要。
-    """
-    # ── 哈希缓存：相同内容不重复调 LLM ──
+    """调用 LLM 生成结构化摘要——保留文件/命令/决策，丢弃闲聊。"""
     ck = _summarize_cache_key(messages)
     if ck in _SUMMARIZE_CACHE:
         return _SUMMARIZE_CACHE[ck]
 
-    transcript_parts = []
+    transcript = _build_summary_transcript(messages)
+    if not transcript.strip():
+        return ""
+
+    summary = _call_summarizer_llm(transcript)
+    if summary:
+        _cache_summary(ck, summary)
+        return summary
+
+    return _fallback_transcript_extract(messages)
+
+
+def _build_summary_transcript(messages: list[dict]) -> str:
+    """构建摘要用转录：按角色格式化为紧凑文本。"""
+    parts = []
     for m in messages:
         role = m.get("role", "?")
         content = (m.get("content") or "").strip()
         if not content:
             continue
         if role == "user":
-            transcript_parts.append(f"[user] {content[:120]}")
+            parts.append(f"[user] {content[:120]}")
         elif role == "assistant":
             text = content[:200].replace("\n", " ")
             if m.get("tool_calls"):
                 names = [tc["function"]["name"] for tc in m["tool_calls"]]
                 text += f" [调用: {', '.join(names)}]"
-            transcript_parts.append(f"[assistant] {text}")
+            parts.append(f"[assistant] {text}")
         elif role == "tool":
             label = m.get("_tool_name", "tool")
-            # 预压缩工具结果：给 summarizer 的输入先语义化，免得 raw output 撑爆
-            compressed = _summarize_tool_result(label, content)
-            transcript_parts.append(f"[{label}] {compressed}")
+            parts.append(f"[{label}] {_summarize_tool_result(label, content)}")
+    return "\n".join(parts)
 
-    transcript = "\n".join(transcript_parts)
-    if not transcript.strip():
-        return ""
 
+def _call_summarizer_llm(transcript: str) -> str | None:
+    """调用 LLM 生成摘要，失败返回 None。"""
     payload = [
         {"role": "system", "content": _SUMMARY_PROMPT},
         {"role": "user", "content": f"对话片段：\n{transcript}"},
     ]
-
     try:
-        content, _tool_calls = _invoke_llm(
-            _current_backend,
-            payload,
-            on_token=lambda _t: None,  # no-op — 摘要不需要流式输出
-            session_id="",              # 归入当前会话统计
-            track_stats=True,
-            tools=[],                   # 无工具，纯文本摘要
+        content, _ = _invoke_llm(
+            _current_backend, payload,
+            on_token=lambda _t: None, session_id="",
+            track_stats=True, tools=[],
         )
-        summary = (content or "").strip()
-        if summary:
-            _SUMMARIZE_CACHE[ck] = summary
-            if len(_SUMMARIZE_CACHE) > _SUMMARIZE_CACHE_MAX:
-                _SUMMARIZE_CACHE.pop(next(iter(_SUMMARIZE_CACHE)))
-            return summary
+        return (content or "").strip() or None
     except Exception as e:
         logger.warning("LLM 摘要失败，回退文本拼接: %s", e)
+    return None
 
-    # Fallback: brief text extract
+
+def _cache_summary(key: str, summary: str) -> None:
+    """将摘要写入缓存，控制上限。"""
+    _SUMMARIZE_CACHE[key] = summary
+    if len(_SUMMARIZE_CACHE) > _SUMMARIZE_CACHE_MAX:
+        _SUMMARIZE_CACHE.pop(next(iter(_SUMMARIZE_CACHE)))
+
+
+def _fallback_transcript_extract(messages: list[dict]) -> str:
+    """摘要 LLM 失败时回退：提取 user 消息首句拼接。"""
     parts = []
     for m in messages:
         c = (m.get("content") or "").strip()

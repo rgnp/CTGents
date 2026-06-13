@@ -42,8 +42,14 @@ _DECISION_INDICATORS = [
 def _extract_tags(messages: list[dict]) -> list[str]:
     """从对话中推断标签。"""
     tags: set[str] = set()
+    _collect_tool_tags(messages, tags)
+    _collect_file_ext_tags(messages, tags)
+    _collect_misc_tags(messages, tags)
+    return sorted(tags) or ["#对话"]
 
-    # 工具使用 → 标签
+
+def _collect_tool_tags(messages: list[dict], tags: set[str]) -> None:
+    """工具调用 → 标签（#修改/#工程/#调研 等）。"""
     for m in messages:
         if m.get("role") == "assistant" and m.get("tool_calls"):
             for tc in m["tool_calls"]:
@@ -51,28 +57,29 @@ def _extract_tags(messages: list[dict]) -> list[str]:
                 if tag:
                     tags.add(tag)
 
-    # 写文件 → 按后缀加标签
-    for m in messages:
-        if m.get("role") == "tool" and m.get("_tool_name") == "write_file":
-            content = m.get("content") or ""
-            with contextlib.suppress(Exception):
-                parsed = json.loads(content)
-                path = parsed.get("path", "")
-                for ext, tag in _EXT_TAG_MAP.items():
-                    if path.endswith(ext):
-                        tags.add(tag)
 
-    # 记忆相关
+def _collect_file_ext_tags(messages: list[dict], tags: set[str]) -> None:
+    """write_file 目标路径后缀 → 标签（#代码/#文档/#配置 等）。"""
+    for m in messages:
+        if m.get("role") != "tool" or m.get("_tool_name") != "write_file":
+            continue
+        content = m.get("content") or ""
+        with contextlib.suppress(Exception):
+            parsed = json.loads(content)
+            path = parsed.get("path", "")
+            for ext, tag in _EXT_TAG_MAP.items():
+                if path.endswith(ext):
+                    tags.add(tag)
+
+
+def _collect_misc_tags(messages: list[dict], tags: set[str]) -> None:
+    """检查记忆/压缩等特殊标签。"""
     if any("remember" in (m.get("content") or "") for m in messages
            if m.get("role") == "assistant"):
         tags.add("#记忆系统")
-
-    # 压缩
     if any("compact" in (m.get("content") or "").lower() or "压缩" in (m.get("content") or "")
            for m in messages if m.get("role") == "user"):
         tags.add("#压缩")
-
-    return sorted(tags) or ["#对话"]
 
 
 def _extract_actions(messages: list[dict]) -> list[str]:
