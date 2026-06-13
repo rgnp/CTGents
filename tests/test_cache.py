@@ -9,6 +9,12 @@ pytestmark = pytest.mark.slow
 _THRESHOLD = llm._TOOL_RESULT_COMPRESS_THRESHOLD
 
 
+def setup_function():
+    """Reset compaction state between tests."""
+    llm._previous_summary = None
+    llm._ineffective_compression_count = 0
+
+
 class TestCompactContext:
     """_compact_context：滑窗压缩（超阈值驱旧，短上下文不动）。"""
 
@@ -33,7 +39,8 @@ class TestCompactContext:
 
     def test_topic_keywords_do_not_block_compaction(self, monkeypatch):
         """含"算了/换个"等口语词照常压缩——关键词换话题已删除。"""
-        monkeypatch.setattr(llm, "_make_brief_summary", lambda msgs, max_len=500: "测试摘要")
+        monkeypatch.setattr(llm, "_make_brief_summary",
+                            lambda msgs, max_len=500, previous_summary=None: "测试摘要")
         monkeypatch.setattr(llm, "_COMPACT_THRESHOLD", 0.001)
 
         big = "X" * 5000
@@ -44,7 +51,8 @@ class TestCompactContext:
 
     def test_eviction_never_orphans_tool_messages(self, monkeypatch):
         """驱逐边界对齐 user 消息开头——不切断 tool 配对。"""
-        monkeypatch.setattr(llm, "_make_brief_summary", lambda msgs, max_len=500: "测试摘要")
+        monkeypatch.setattr(llm, "_make_brief_summary",
+                            lambda msgs, max_len=500, previous_summary=None: "测试摘要")
 
         big = "Y" * 60000
         msgs: list[dict] = [{"role": "system", "content": "规则"}]
@@ -68,7 +76,8 @@ class TestCompactContext:
 
     def test_large_context_evicts_old_messages(self, monkeypatch):
         """大型上下文触发滑窗压缩：旧消息被驱替为摘要。"""
-        monkeypatch.setattr(llm, "_make_brief_summary", lambda msgs, max_len=500: "测试摘要")
+        monkeypatch.setattr(llm, "_make_brief_summary",
+                            lambda msgs, max_len=500, previous_summary=None: "测试摘要")
         monkeypatch.setattr(llm, "_COMPACT_THRESHOLD", 0.001)
 
         big = "X" * 5000
@@ -80,7 +89,7 @@ class TestCompactContext:
 
 
 class TestCompressToolResult:
-    """_compress_tool_result：head+tail 截断 + 省略标记。"""
+    """_compress_tool_result：语义摘要（v2，对齐 Hermes 工具结果压缩）。"""
 
     def test_short_result_not_compressed(self):
         assert llm._compress_tool_result("grep_code", "hello") == "hello"
@@ -92,45 +101,30 @@ class TestCompressToolResult:
         text = "x" * _THRESHOLD
         assert llm._compress_tool_result("grep_code", text) == text
 
-    def test_barely_over_boundary_not_enlarged(self):
+    def test_barely_over_boundary_semantic_summary(self):
         text = "y" * (_THRESHOLD + 1)
-        assert llm._compress_tool_result("grep_code", text) == text
-
-    def test_large_result_keeps_head_and_tail(self):
-        half = _THRESHOLD // 2
-        text = "H" * half + "m" * 3000 + "T" * half
         compressed = llm._compress_tool_result("grep_code", text)
         assert len(compressed) < len(text)
-        assert compressed.startswith("H" * half)
-        assert compressed.endswith("T" * half)
-        assert "省略" in compressed
+        assert "grep_code" in compressed
+
+    def test_large_result_semantic_summary(self):
+        text = "H" * 5000
+        compressed = llm._compress_tool_result("run_command", text)
+        assert len(compressed) < len(text)
+        assert "run_command" in compressed
 
     def test_read_file_exempt_from_compression(self):
         text = "a" * 5000
         result = llm._compress_tool_result("read_file", text)
         assert result == text
-        assert "省略" not in result
 
     def test_read_file_lines_exempt_from_compression(self):
         text = "b" * 5000
         result = llm._compress_tool_result("read_file_lines", text)
         assert result == text
-        assert "省略" not in result
 
-    def test_search_tools_plain_marker(self):
-        for tool in ("search_web", "read_page"):
-            compressed = llm._compress_tool_result(tool, "c" * 5000)
-            assert "省略" in compressed
-            assert "read_file" not in compressed
-
-    def test_generic_tool_hints_retrieval_path(self):
-        compressed = llm._compress_tool_result("other_tool", "e" * 5000)
-        assert "省略" in compressed
-        assert "read_file" in compressed
-
-    def test_compress_shows_size_info(self):
+    def test_semantic_summary_shows_size(self):
         text = "i" * 10000
         compressed = llm._compress_tool_result("generic", text)
-        omitted = 10000 - (_THRESHOLD // 2) * 2
-        assert "10000" in compressed
-        assert str(omitted) in compressed
+        compressed = llm._compress_tool_result("generic", text)
+        assert "10,000" in compressed or "10000" in compressed

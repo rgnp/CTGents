@@ -47,7 +47,7 @@ class ContextParams:
     # 工具循环硬顶：用量达此比例即停止本轮，提示开新会话
     tool_loop_threshold: float = _env_float("CTG_TOOL_LOOP_THRESHOLD", 0.95)
     # 滑窗压缩触发比例：超过即驱逐旧对话换摘要
-    compact_threshold: float = _env_float("CTG_COMPACT_THRESHOLD", 0.80)
+    compact_threshold: float = _env_float("CTG_COMPACT_THRESHOLD", 0.65)
     # 压缩后保留最近多少比例的消息
     compact_keep_ratio: float = _env_float("CTG_COMPACT_KEEP_RATIO", 0.50)
 

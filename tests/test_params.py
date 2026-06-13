@@ -20,7 +20,7 @@ def test_context_is_frozen():
 
 def test_context_defaults():
     c = params.CONTEXT
-    assert c.compact_threshold == 0.80
+    assert c.compact_threshold == 0.65
     assert c.compact_keep_ratio == 0.50
 
 

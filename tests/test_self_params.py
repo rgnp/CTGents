@@ -12,7 +12,7 @@ def test_params_scope_lists_all_domains():
     out = build_self_portrait("params")
     for domain in ("CONTEXT", "RAG", "EVOLUTION", "RUNTIME"):
         assert domain in out
-    assert "compact_threshold = 0.8" in out
+    assert "compact_threshold = 0.65" in out
     assert "compact_keep_ratio = 0.5" in out
     assert "default_top_k = 5" in out
     assert "max_retries = 3" in out

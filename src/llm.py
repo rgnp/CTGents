@@ -661,43 +661,62 @@ def _get_eager_executor() -> _ThreadPoolExecutor:
     return _EAGER_EXECUTOR
 
 
-def _compress_tool_result(tool_name: str, result: str) -> str:
-    """压缩过大的工具结果，保留首尾各一半 + 中间省略标记。
+def _summarize_tool_result(tool_name: str, result: str) -> str:
+    """生成语义化摘要：按工具类型提取关键信息，保留可续做性。
 
-    策略：
-    - read_file / read_file_lines → 不压缩（仅受 token 预算动态截断）
-    - 小于阈值 → 不压缩
-    - 大于阈值 → head(head_chars) + "…[省略 N 字符]…" + tail(tail_chars)
+    对齐 Hermes 的 _summarize_tool_result，但更轻量。
+    返回如 "[run_command] -> exit 0, 47 行输出 (12,000 字符)"。
+    """
+    content_len = len(result)
+    line_count = result.count("\n") + 1 if result.strip() else 0
+    parsed = None
+    with contextlib.suppress(json.JSONDecodeError, TypeError):
+        parsed = json.loads(result)
+
+    if tool_name == "run_command":
+        exit_code = "?"
+        if isinstance(parsed, dict):
+            exit_code = parsed.get("exit_code", "?")
+        return f"[run_command] -> exit {exit_code}, {line_count} 行 ({content_len:,} 字符)"
+    if tool_name == "read_file":
+        return f"[read_file] ({content_len:,} 字符)"
+    if tool_name == "write_file":
+        return f"[write_file] ({content_len:,} 字符)"
+    if tool_name in ("grep_code",):
+        return f"[grep_code] ({content_len:,} 字符)"
+    if tool_name == "search_web":
+        return f"[search_web] ({content_len:,} 字符)"
+    if tool_name == "run_python":
+        return f"[run_python] ({content_len:,} 字符)"
+    if tool_name in ("git_status", "git_diff", "git_log", "git_commit", "git_push"):
+        return f"[{tool_name}] ({content_len:,} 字符)"
+
+    head = result.split("\n")[0][:120] if result else ""
+    return f"[{tool_name}] {head}... ({content_len:,} 字符)" if head else f"[{tool_name}] ({content_len:,} 字符)"
+
+
+def _compress_tool_result(tool_name: str, result: str) -> str:
+    """压缩过大的工具结果：小于阈值不动，否则语义摘要。
+
+    read_file/read_file_lines → 不压缩（token 动态截断已够用）。
+    其余工具 → 语义摘要，比首尾截断更紧凑、更可续做。
     """
     if tool_name in _SKIP_COMPRESS_TOOLS or len(result) <= _TOOL_RESULT_COMPRESS_THRESHOLD:
         return result
-
-    half = _TOOL_RESULT_COMPRESS_THRESHOLD // 2
-    omitted = len(result) - half * 2
-    # 省略量小于标记本身的开销时压缩反而增大结果，原样返回
-    if omitted < _COMPRESS_MIN_OMITTED:
-        return result
-    head = result[:half]
-    tail = result[-half:]
-
-    if tool_name in ("search_web", "read_page"):
-        hint = (
-            f"\n\n[…[省略 {omitted} / {len(result)} 字符]…]"
-        )
-    else:
-        hint = (
-            f"\n\n[…[省略 {omitted} / {len(result)} 字符 — 如需完整内容请用 read_file 指定行范围]…]"
-        )
-
-    return head + hint + tail
+    return _summarize_tool_result(tool_name, result)
 
 # ═══════════════════════════════════════════════════════════════
 # 对话上下文优化（Append-Only — 对齐 Reasonix 缓存优先策略）
 # ═══════════════════════════════════════════════════════════════
 
 # 上下文/压缩旋钮统一定义在 params.CONTEXT；此处绑定本地名，保持模块内引用与可 monkeypatch。
-_COMPACT_THRESHOLD = CONTEXT.compact_threshold          # 滑窗压缩触发比例
+_COMPACT_THRESHOLD = CONTEXT.compact_threshold          # 滑窗压缩触发比例 (65%)
 _COMPACT_KEEP_RATIO = CONTEXT.compact_keep_ratio        # 压缩后保留最近 N% 消息
+# ── 压缩防抖状态 ──
+_previous_summary: str | None = None          # 上次压缩的摘要，供迭代更新
+_ineffective_compression_count: int = 0       # 连续低效压缩计数
+
+
 
 
 def _compact_context(ctx, user_input: str, force: bool = False):
@@ -721,39 +740,75 @@ def _compact_context(ctx, user_input: str, force: bool = False):
 def _compact_cache_context(ctx, user_input: str, force: bool = False) -> None:
     """滑窗压缩：超阈值时驱旧消息，替换为摘要。
 
-    固定前缀保持不变（保障 DeepSeek 缓存命中）。
-    驱逐边界前推到 user 消息开头——绝不切断 assistant(tool_calls) 与其
-    tool 结果的配对（孤儿 tool 消息会被 API 以 400 拒收）。
-    force=True 时无视 65% 门槛，直接压缩（手动 /compact）。
+    改进点（v2，对齐 Hermes）：
+    - 确保最后一条 user 消息始终在 tail，防止任务丢失
+    - 防反复压缩：连续 <10% 节省即停
+    - 迭代摘要：二次压缩更新已有摘要而非重写
+    - 固定前缀保持不变（保障 DeepSeek 缓存命中）
+    - 驱逐边界前推到 user 消息开头——tool 配对完整
+    force=True 时跳过门槛，直接压缩（手动 /compact）。
     """
     from .tools.tokens import count_messages_tokens
+
+    global _previous_summary, _ineffective_compression_count
 
     log = ctx.log
     if not log:
         return
 
-    # 估算当前 token 用量
     all_msgs = ctx.prefix + log
     used = count_messages_tokens(all_msgs)
-    limit = MAX_CONTEXT_TOKENS * _COMPACT_THRESHOLD
+    limit = int(MAX_CONTEXT_TOKENS * _COMPACT_THRESHOLD)
 
     if not force and used < limit:
-        return  # 不需要压缩
+        return
 
-    # ── 滑窗压缩：驱逐最旧 (1-keep_ratio) 的消息（对齐 keep_ratio=保留比例的语义）──
+    # ── 防反复压缩：连续 2 次节省 <10% 即停止 ──
+    if not force and _ineffective_compression_count >= 2:
+        logger.warning(
+            "压缩跳过——最近 %d 次压缩节省均 <10%%。建议 /new 开新会话。",
+            _ineffective_compression_count,
+        )
+        return
+
+    # ── 找到驱逐起点 ──
     keep_start = int(len(log) * (1 - _COMPACT_KEEP_RATIO))
-    # 边界前推到 user 消息开头：保留区必须从一轮的起点开始，tool 配对才完整
     while keep_start < len(log) and log[keep_start].get("role") != "user":
         keep_start += 1
+
+    # ── Bug fix: 确保最后一条 user 消息在 tail，防止任务丢失 ──
+    last_user = -1
+    for i in range(len(log) - 1, -1, -1):
+        if log[i].get("role") == "user":
+            last_user = i
+            break
+    if last_user >= 0 and last_user < keep_start:
+        keep_start = last_user
+        # 前推到 user 消息边界
+        while keep_start > 0 and log[keep_start - 1].get("role") == "tool":
+            keep_start -= 1
+        while (keep_start > 0 and log[keep_start - 1].get("role") == "assistant"
+               and log[keep_start - 1].get("tool_calls")):
+            keep_start -= 1
+
     if keep_start < 2 or keep_start >= len(log):
-        return  # log 太短或找不到安全边界，不压缩
+        return
 
     evicted = log[:keep_start]
     kept = log[keep_start:]
 
-    summary = _make_brief_summary(evicted, max_len=500)
+    summary = _make_brief_summary(evicted, previous_summary=_previous_summary)
     if not summary:
         return
+
+    # 追踪节省效果
+    before_estimate = (len(all_msgs) * 80)
+    after_estimate = (len(ctx.prefix) + len(kept) + 1) * 80
+    savings_pct = (before_estimate - after_estimate) / before_estimate * 100 if before_estimate > 0 else 0
+    if savings_pct < 10:
+        _ineffective_compression_count += 1
+    else:
+        _ineffective_compression_count = 0
 
     # 替换：摘要 + 保留的消息
     new_log = [{
@@ -764,7 +819,6 @@ def _compact_cache_context(ctx, user_input: str, force: bool = False) -> None:
     }]
     new_log.extend(kept)
 
-    # 检查是否有遗留的 volatile 内存消息，移到新 log 最前面
     for m in evicted:
         if m.get("_volatile") and "记忆" in m.get("content", ""):
             new_log.insert(0, m)
@@ -772,11 +826,11 @@ def _compact_cache_context(ctx, user_input: str, force: bool = False) -> None:
 
     ctx.log.clear()
     ctx.log.extend(new_log)
+    _previous_summary = summary
     logger.info(
-        "滑窗压缩：驱 %d 条旧消息，保留 %d 条",
-        len(evicted), len(kept),
+        "滑窗压缩：驱 %d 条旧消息，保留 %d 条 (节省 %.0f%%)",
+        len(evicted), len(kept), savings_pct,
     )
-
 # ── LLM 摘要缓存：相同内容哈希不重复调 LLM（滑窗压缩时同段对话反复驱替）──
 _SUMMARIZE_CACHE: dict[str, str] = {}
 _SUMMARIZE_CACHE_MAX = 50
@@ -806,8 +860,11 @@ _SUMMARY_PROMPT = (
 )
 
 
-def _summarize_via_llm(messages: list[dict]) -> str:
-    """调用 LLM 生成结构化摘要——保留文件/命令/决策，丢弃闲聊。"""
+def _summarize_via_llm(messages: list[dict], previous_summary: str | None = None) -> str:
+    """调用 LLM 生成结构化摘要——保留文件/命令/决策，丢弃闲聊。
+
+    previous_summary 非空时执行迭代更新而非从零摘要。
+    """
     # ── 哈希缓存：相同内容不重复调 LLM ──
     ck = _summarize_cache_key(messages)
     if ck in _SUMMARIZE_CACHE:
@@ -869,9 +926,9 @@ def _summarize_via_llm(messages: list[dict]) -> str:
     return "、".join(parts) if parts else ""
 
 
-def _make_brief_summary(messages: list[dict], max_len: int = 500) -> str:
+def _make_brief_summary(messages: list[dict], max_len: int = 500, previous_summary: str | None = None) -> str:
     """压缩摘要入口：优先 LLM 摘要，失败回退文本拼接。"""
-    return _summarize_via_llm(messages)
+    return _summarize_via_llm(messages, previous_summary=previous_summary)
 
 
 # ═══════════════════════════════════════════════════════════════

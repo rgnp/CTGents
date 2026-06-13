@@ -76,7 +76,7 @@ class TestDispatch:
     def test_compact_forces_below_threshold(self, monkeypatch):
         """对话远未到 65% 也能手动压缩（force=True 绕过门槛）。"""
         import src.llm as llm
-        monkeypatch.setattr(llm, "_make_brief_summary", lambda msgs, max_len=500: "摘要")
+        monkeypatch.setattr(llm, "_make_brief_summary", lambda msgs, max_len=500, previous_summary=None: "摘要")
         log = []
         for i in range(12):
             log.append({"role": "user", "content": f"问题{i} " + "x" * 50})
