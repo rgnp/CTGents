@@ -1,4 +1,5 @@
 """evolution_runner.py tests — persistent run state."""
+import logging
 import sys
 from pathlib import Path
 
@@ -96,6 +97,25 @@ class TestEvolutionRunLifecycle:
         assert stats["total_attempts"] == 1
         assert stats["reverted"] == 1
         assert stats["merged"] == 0
+
+    def test_archive_run_logs_warning_when_record_attempt_fails(self, monkeypatch, caplog):
+        """record_attempt 抛异常 → complete 不崩、logger.warning 记日志。
+
+        _archive_run 的 except Exception 是"失败不阻断"的兜底——若吞掉异常且
+        无日志，进化档案静默断裂无迹可寻（历史 bug 复发风险）。
+        """
+        caplog.set_level(logging.WARNING, logger="src.evolution_runner")
+
+        def fake_record(*args, **kwargs):
+            raise RuntimeError("simulated disk full")
+
+        monkeypatch.setattr(ev, "record_attempt", fake_record)
+
+        start = start_evolution_run("测试: 档案写入失败")
+        run = complete_evolution_run(start.run.run_id, RunnerStatus.PASSED, "test")
+        assert run.status == "passed"
+        assert er.load_active_evolution_run() is None
+        assert "进化档案写入失败" in caplog.text
 
     def test_phase_enum(self):
         assert EvolutionPhase.RESEARCH.value == "research"

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import subprocess
 import uuid
 from dataclasses import asdict, dataclass, field
@@ -12,6 +13,8 @@ from pathlib import Path
 from typing import Any
 
 from .params import EVOLUTION
+
+logger = logging.getLogger(__name__)
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 RUN_ROOT = Path.home() / ".ctgents" / "evolution"
@@ -177,8 +180,8 @@ def _archive_run(run: EvolutionRun, final_status: str, note: str) -> None:
             git_commit_before=run.preflight.get("head", ""),
             tags=["runner"],
         ))
-    except Exception:
-        pass
+    except Exception as e:
+        logger.warning("进化档案写入失败（不阻断 runner 关闭）: %s", e)
 
 
 def complete_evolution_run(run_id: str, status: RunnerStatus | str, note: str = "") -> EvolutionRun:
