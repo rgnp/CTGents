@@ -572,35 +572,35 @@ def _cmd_ambition(r: CmdResult, _ctx, args, _sid) -> None:
 
     sub = args[0].lower()
     if sub == "done" and len(args) > 1:
-        keyword = " ".join(args[1:])
-        if not AMBITIONS_FILE.exists():
-            r.message = "野心清单为空。"
-            return
-        text = AMBITIONS_FILE.read_text(encoding="utf-8")
-        # 找到含关键词的标题段，标记为完成
-        lines = text.split("\n")
-        in_block = False
-        block_start = -1
-        new_lines = []
-        for i, line in enumerate(lines):
-            if line.startswith("## ") and keyword.lower() in line.lower():
-                in_block = True
-                block_start = i
-            elif line.startswith("## ") and in_block:
-                # 块结束，标记完成并还原
-                new_lines.append(line.replace("## ", "## ~~") + "~~ ✅ 已完成")
-            elif in_block:
-                continue  # 跳过状态行
-            else:
-                new_lines.append(line)
-        # 处理最后一个块
-        if in_block:
-            new_lines.append(lines[block_start].replace("## ", "## ~~") + "~~ ✅ 已完成")
-
-        AMBITIONS_FILE.write_text("\n".join(new_lines), encoding="utf-8")
-        r.message = f"已标记 '{keyword}' 为完成。"
+        r.message = _mark_ambition_done(" ".join(args[1:]), AMBITIONS_FILE)
     else:
         r.message = "用法: /ambition 查看清单，/ambition done <关键词> 标记完成"
+
+
+def _mark_ambition_done(keyword: str, file_path) -> str:
+    """在野心清单中标记含关键词的标题段为完成。"""
+    if not file_path.exists():
+        return "野心清单为空。"
+    text = file_path.read_text(encoding="utf-8")
+    lines = text.split("\n")
+    in_block = False
+    block_start = -1
+    new_lines = []
+    for i, line in enumerate(lines):
+        if line.startswith("## ") and keyword.lower() in line.lower():
+            in_block = True
+            block_start = i
+        elif line.startswith("## ") and in_block:
+            new_lines.append(line.replace("## ", "## ~~") + "~~ ✅ 已完成")
+            in_block = False
+        elif in_block:
+            continue
+        else:
+            new_lines.append(line)
+    if in_block:
+        new_lines.append(lines[block_start].replace("## ", "## ~~") + "~~ ✅ 已完成")
+    file_path.write_text("\n".join(new_lines), encoding="utf-8")
+    return f"已标记 '{keyword}' 为完成。"
 
 
 
