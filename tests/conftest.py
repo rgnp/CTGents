@@ -6,6 +6,24 @@ from pathlib import Path
 import pytest
 
 
+@pytest.fixture(autouse=True)
+def _isolate_task_state(tmp_path, monkeypatch):
+    """把长任务状态(current.md/ambitions)隔离到临时空文件，并重置会话级一次性缓存。
+
+    否则回合驱动测试会读到开发/agent 实时的 tasks/current.md：一旦那里留了未完成
+    步骤([ ]/[o])，has_unfinished() 即为真 → 自动续做多跑一轮 → 脚本化 mock 迭代器
+    StopIteration。即"套件成败取决于实时任务状态"的设计性 flaky。需要任务的测试自行
+    monkeypatch CURRENT_TASK_FILE 覆盖（覆盖在 test body 中发生，晚于本 autouse，胜出）。
+    """
+    import src.tasks as _tasks
+    monkeypatch.setattr(_tasks, "CURRENT_TASK_FILE", tmp_path / "_no_current.md")
+    monkeypatch.setattr(_tasks, "AMBITIONS_FILE", tmp_path / "_no_ambitions.md")
+    # _gaps_reported=True：抑制测试期触发真实 detect_all_gaps(慢+读真实代码库+不确定)。
+    # _task_suggested=False：让建任务建议可触发。二者均 monkeypatch，teardown 自动还原。
+    monkeypatch.setattr(_tasks, "_gaps_reported", True)
+    monkeypatch.setattr(_tasks, "_task_suggested", False)
+
+
 @pytest.fixture
 def tmp_project(tmp_path: Path) -> Path:
     """创建一个模拟项目目录，包含基本文件结构。"""
