@@ -103,7 +103,7 @@ def _make_prefix_msgs() -> list[dict]:
 
 
 def _append_volatile_context(ctx: CacheContext) -> None:
-    """注入 volatile 上下文：记忆 + 未完成长任务 + 会话钉板（均缓存安全，挂在 log 尾）。"""
+    """注入 volatile 上下文：记忆 + 未完成长任务 + 会话钉板 + 自主心跳（均缓存安全，挂在 log 尾）。"""
     mem_ctx = _make_memory_context()
     if mem_ctx:
         ctx.log.append(mem_ctx)
@@ -115,6 +115,14 @@ def _append_volatile_context(ctx: CacheContext) -> None:
     pinboard = render_tail()
     if pinboard:
         ctx.log.append({"role": "system", "content": pinboard, "_volatile": True})
+    # ── 自主心跳：在每轮开始时检测可改进方向（安静注入，不抢用户注意力）──
+    try:
+        from .autonomic import make_context_message
+        auto_msg = make_context_message()
+        if auto_msg:
+            ctx.log.append(auto_msg)
+    except Exception:
+        pass
 
 
 def _inject_completion_audit(ctx: CacheContext) -> None:

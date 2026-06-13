@@ -358,6 +358,16 @@ def _cmd_task(r: CmdResult, _ctx, args, _sid) -> None:
 # 热加载 /reload
 # ═══════════════════════════════════════════════════════════════
 
+
+@builtin("/pulse", description="主动进化：检测可改进方向（自主心跳）",
+         usage="/pulse — 扫描性能/静态/覆盖率三重信号，列出优先改进方向")
+def _cmd_pulse(r: CmdResult, _ctx, _args, _sid) -> None:
+    from .gaps import detect_all_gaps, format_gap_report
+    report = detect_all_gaps()
+    r.message = format_gap_report(report)
+    r.save = True
+
+
 @builtin("/reload", description="热加载代码改动（指令+工具），无需重启")
 def _cmd_reload(r: CmdResult, _ctx, _args, _sid) -> None:
     r.message = "reload 由 main.py 拦截处理，此 handler 仅供 /help 注册。"
@@ -617,6 +627,9 @@ _INTENT_ROUTES: list[tuple[str, str, str]] = [
     ("处理这些", "/fix", ""), ("看看第一个", "/fix 1", ""),
     ("处理 #", "/fix", ""), ("修 #", "/fix", ""),
     ("修这个", "/fix", ""), ("修第", "/fix", ""),
+    # 自主心跳
+    ("心跳", "/pulse", ""), ("自主心跳", "/pulse", ""),
+    ("检测方向", "/pulse", ""), ("看看有什么问题", "/pulse", ""),
     # 教训
     ("记教训", "/lesson save", ""), ("记下教训", "/lesson save", ""),
     ("存教训", "/lesson save", ""), ("提取教训", "/lesson", ""),
