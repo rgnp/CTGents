@@ -96,13 +96,22 @@ def _extract_anchor(text: str) -> str:
 
 
 def get_task_progress_line() -> str:
-    """解析 current.md 步骤，返回一行进度，如 "📋 (2/5) ✅ S1 ✅ S2 🔄 S3 ⬜ S4"。
+    """解析 current.md 步骤，返回一行进度，如 "📋 (2/5) ✅ S1 ✅ S2 🔄 S3 ⬜ S4"。"""
+    steps = _parse_task_steps()
+    if not steps:
+        return ""
+    done = sum(1 for s, _ in steps if s == "✅")
+    total = len(steps)
+    labels = [f"{s} {lbl[:30]}" for s, lbl in steps]
+    progress = f"📋 ({done}/{total}) " + " ".join(labels)
+    return _trim_progress(progress, labels, done, total)
 
-    无任务或无法解析返回空串。
-    """
+
+def _parse_task_steps() -> list[tuple[str, str]]:
+    """解析 current.md 步骤行，返回 (图标, 文本) 列表。"""
     text = read_current()
     if not text:
-        return ""
+        return []
     steps: list[tuple[str, str]] = []
     for line in text.splitlines():
         stripped = line.strip()
@@ -114,17 +123,17 @@ def get_task_progress_line() -> str:
             steps.append(("⬜", stripped[5:].strip()))
         elif stripped.startswith("- [r]"):
             steps.append(("🔁", stripped[5:].strip()))
-    if not steps:
-        return ""
-    done = sum(1 for s, _ in steps if s == "✅")
-    total = len(steps)
-    labels = [f"{s} {lbl[:30]}" for s, lbl in steps]
-    progress = f"📋 ({done}/{total}) " + " ".join(labels)
-    if len(progress) > 200:
-        progress = f"📋 ({done}/{total}) " + " ".join(labels[:4])
-        if len(labels) > 4:
-            progress += f" …(+{len(labels) - 4})"
-    return progress
+    return steps
+
+
+def _trim_progress(progress: str, labels: list, done: int, total: int) -> str:
+    """超过 200 字符时截断进度线，保留前 4 步 + 省略标记。"""
+    if len(progress) <= 200:
+        return progress
+    short = f"📋 ({done}/{total}) " + " ".join(labels[:4])
+    if len(labels) > 4:
+        short += f" …(+{len(labels) - 4})"
+    return short
 
 
 def read_current() -> str:
