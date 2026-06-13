@@ -525,6 +525,26 @@ def _collect_eager_results(
             pre_results[idx] = result
 
 
+def _try_llm_call(
+    backend: "LLMBackend",
+    messages: list[dict],
+    on_token: TokenCallback,
+    tools: list[dict] | None,
+    on_tool_ready: Callable | None,
+    attempt: int,
+    max_retries: int,
+) -> tuple[str | None, list[dict] | None]:
+    """执行一次 LLM 调用：首次流式，后续降级非流式。"""
+    if attempt == 1:
+        return backend.chat_stream(
+            messages, on_token, tools, on_tool_ready=on_tool_ready,
+        )
+    logger.warning(
+        "流式失败，降级为非流式重试 (%d/%d)...", attempt, max_retries,
+    )
+    return backend.chat_non_stream(messages, on_token, tools)
+
+
 def _invoke_llm_eager(
     backend: LLMBackend,
     messages: list[dict],
@@ -570,15 +590,10 @@ def _invoke_llm_eager(
 
     for attempt in range(1, MAX_RETRIES + 1):
         try:
-            if attempt == 1:
-                content, tool_calls = backend.chat_stream(
-                    messages, on_token, tools, on_tool_ready=on_tool_ready,
-                )
-            else:
-                logger.warning(
-                    "流式失败，降级为非流式重试 (%d/%d)...", attempt, MAX_RETRIES,
-                )
-                content, tool_calls = backend.chat_non_stream(messages, on_token, tools)
+            content, tool_calls = _try_llm_call(
+                backend, messages, on_token, tools, on_tool_ready,
+                attempt, MAX_RETRIES,
+            )
 
             # ── 收集 eager 结果 ──
             _collect_eager_results(pending, pre_results, lock)
