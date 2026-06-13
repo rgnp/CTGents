@@ -389,7 +389,7 @@ def _reload_dispatch():
 # ── 主入口 ──
 
 def _finalize_session(ctx: CacheContext, session_id: str | None) -> list[str]:
-    """会话收尾：有回复才落盘 → 会话后反思 → durable 钉板转存。返回待打印行。
+    """会话收尾：有回复才落盘 → 会话后反思 → L1 摘要入知识库 → durable 钉板转存。
 
     反思(tracker.reflect_on_session,被动进化分析层的唯一写入口)在此接线——
     曾挂在 load_session 的 return 之后(不可达)，整层分析管线静默死亡，
@@ -406,6 +406,15 @@ def _finalize_session(ctx: CacheContext, session_id: str | None) -> list[str]:
                 lines.append("已写入会话反思（异常发现将在下次启动注入）。")
         except Exception as e:
             logger.warning("会话反思失败（不阻塞退出）: %s", e)
+    # ── L1 会话摘要：自动写入 knowledge/sessions/，rag_index_research 可索引 ──
+    if any(m["role"] == "assistant" for m in ctx.all):
+        try:
+            from .session_summary import write_session_summary
+            filename = write_session_summary(ctx.all, session_id)
+            if filename:
+                lines.append(f"已写入会话摘要: knowledge/sessions/{filename}")
+        except Exception as e:
+            logger.warning("会话摘要失败（不阻塞退出）: %s", e)
     # ── 机械记忆收割：从对话日志自动提取失败模式，不靠 LLM 自觉 ──
     try:
         from .lesson import extract_lessons, save_lessons
