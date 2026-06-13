@@ -86,38 +86,49 @@ def _extract_actions(messages: list[dict]) -> list[str]:
     """提取主要动作：commit 消息 + 写文件目标。"""
     actions: list[str] = []
     seen: set[str] = set()
-
-    for m in messages:
-        c = (m.get("content") or "").strip()
-        if not c:
-            continue
-
-        # git commit messages
-        if m.get("role") == "tool" and m.get("_tool_name") == "git_commit":
-            with contextlib.suppress(Exception):
-                parsed = json.loads(c)
-                msg = parsed.get("message") or parsed.get("result", "")
-                if msg:
-                    lines = msg.split("\n")
-                    act = lines[0].strip().rstrip(".")
-                    if act and act not in seen:
-                        actions.append(act)
-                        seen.add(act)
-
-        # write_file targets
-        if m.get("role") == "tool" and m.get("_tool_name") == "write_file":
-            with contextlib.suppress(Exception):
-                parsed = json.loads(c)
-                path = parsed.get("path", "")
-                short = _shorten_path(path)
-                if short and short not in seen:
-                    actions.append(f"写 {short}")
-                    seen.add(short)
-
+    _collect_commit_actions(messages, actions, seen)
+    _collect_write_actions(messages, actions, seen)
     if len(actions) > 5:
         actions = actions[:5]
         actions.append("…")
     return actions
+
+
+def _collect_commit_actions(messages: list[dict],
+                            actions: list[str], seen: set[str]) -> None:
+    """从 git_commit 工具结果提取 commit message 首行。"""
+    for m in messages:
+        if m.get("role") != "tool" or m.get("_tool_name") != "git_commit":
+            continue
+        c = (m.get("content") or "").strip()
+        if not c:
+            continue
+        with contextlib.suppress(Exception):
+            parsed = json.loads(c)
+            msg = parsed.get("message") or parsed.get("result", "")
+            if msg:
+                act = msg.split("\n")[0].strip().rstrip(".")
+                if act and act not in seen:
+                    actions.append(act)
+                    seen.add(act)
+
+
+def _collect_write_actions(messages: list[dict],
+                           actions: list[str], seen: set[str]) -> None:
+    """从 write_file 工具结果提取文件路径简称。"""
+    for m in messages:
+        if m.get("role") != "tool" or m.get("_tool_name") != "write_file":
+            continue
+        c = (m.get("content") or "").strip()
+        if not c:
+            continue
+        with contextlib.suppress(Exception):
+            parsed = json.loads(c)
+            path = parsed.get("path", "")
+            short = _shorten_path(path)
+            if short and short not in seen:
+                actions.append(f"写 {short}")
+                seen.add(short)
 
 
 def _extract_decisions(messages: list[dict]) -> list[str]:

@@ -1021,9 +1021,8 @@ def _execute_tool_batch(approved: list[tuple]) -> list[str]:
     非 SAFE 工具 → 等待前一批完成后单独执行
     确保 [read(A), run_cmd(改A), read(A)] 中第二个 read 看到改后的 A。
     """
-    from concurrent.futures import ThreadPoolExecutor, as_completed
-
     n = len(approved)
+
     results: list[str] = [""] * n
 
     # 先处理有预置结果（跳过）的工具
@@ -1042,40 +1041,45 @@ def _execute_tool_batch(approved: list[tuple]) -> list[str]:
             continue
 
         if approved[i][1] not in _PARALLEL_SAFE:
-            # 非 SAFE：串行执行
-            tc = approved[i][3]
-            results[i] = _tracked_execute_tool(tc)
+            results[i] = _tracked_execute_tool(approved[i][3])
             total_serial += 1
             i += 1
         else:
-            # 收集连续 SAFE 工具成一批
-            batch: list[int] = []
-            while i < n:
-                if approved[i][4] is not None:
-                    i += 1
-                    continue
-                if approved[i][1] in _PARALLEL_SAFE:
-                    batch.append(i)
-                    i += 1
-                else:
-                    break
-
-            if batch:
-                names = [approved[j][1] for j in batch]
-                print(f"  ⚡ [SAFE] 并行执行 {len(batch)} 个工具: {', '.join(names)}")
-                with ThreadPoolExecutor(max_workers=min(len(batch), 8)) as pool:
-                    fut_map: dict = {}
-                    for j in batch:
-                        tc = approved[j][3]
-                        fut = pool.submit(_tracked_execute_tool, tc)
-                        fut_map[fut] = j
-                    for fut in as_completed(fut_map):
-                        idx = fut_map[fut]
-                        results[idx] = fut.result()
-                total_parallel += len(batch)
+            batch_size = _execute_parallel_batch(approved, i, n, results)
+            total_parallel += batch_size
+            i += batch_size
 
     _update_safe_stats(total_parallel, total_serial)
     return results
+
+
+def _execute_parallel_batch(approved: list[tuple], start: int, n: int,
+                            results: list[str]) -> int:
+    """收集从 start 开始的连续 SAFE 工具并并行执行。返回执行数。"""
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+    batch: list[int] = []
+    i = start
+    while i < n:
+        if approved[i][4] is not None:
+            i += 1
+            continue
+        if approved[i][1] in _PARALLEL_SAFE:
+            batch.append(i)
+            i += 1
+        else:
+            break
+    if not batch:
+        return 0
+    names = [approved[j][1] for j in batch]
+    print(f"  ⚡ [SAFE] 并行执行 {len(batch)} 个工具: {', '.join(names)}")
+    with ThreadPoolExecutor(max_workers=min(len(batch), 8)) as pool:
+        fut_map: dict = {}
+        for j in batch:
+            fut = pool.submit(_tracked_execute_tool, approved[j][3])
+            fut_map[fut] = j
+        for fut in as_completed(fut_map):
+            results[fut_map[fut]] = fut.result()
+    return len(batch)
 
 
 # ═══════════════════════════════════════════════════════════════
