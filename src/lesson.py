@@ -361,44 +361,46 @@ def _split_frontmatter(text: str) -> tuple[dict[str, str], str]:
 
 def match_lessons_for_action(action_desc: str, max_results: int = 3) -> list[str]:
     """返回与当前操作最相关的教训提醒文本（Jaccard 相似度）。"""
-    import re
     lessons = _load_strategy_memories()
     if not lessons:
         return []
 
-    def _tok(s: str) -> set[str]:
-        t = s.lower()
-        toks = set(re.findall(r"[a-z0-9]{2,}", t))
-        for run in re.findall(r"[一-鿿]+", t):
-            toks.update(run[i:i + 2] for i in range(len(run) - 1)) if len(run) > 1 else toks.add(run)
-        return toks
-
-    q_tokens = _tok(action_desc)
+    q_tokens = _tokenize_for_lesson(action_desc)
     if not q_tokens:
         return []
 
     scored: list[tuple[float, str]] = []
     for le in lessons:
-        l_tokens = _tok(le["content"])
+        l_tokens = _tokenize_for_lesson(le["content"])
         if not l_tokens:
             continue
         jac = len(q_tokens & l_tokens) / len(q_tokens | l_tokens)
         if jac < 0.02:
             continue
-        # 取第一条非标题、非空的实际内容行作为摘要
-        first_line = ""
-        for raw_line in le["content"].split("\n"):
-            stripped = raw_line.strip()
-            if not stripped or stripped.startswith("#") or stripped.startswith("##"):
-                continue
-            first_line = stripped[:120]
-            break
-        if not first_line:
-            first_line = le["content"][:120]
-        scored.append((jac, first_line))
+        scored.append((jac, _first_lesson_line(le["content"])))
 
     scored.sort(key=lambda x: x[0], reverse=True)
     return [s for _, s in scored[:max_results]]
+
+
+def _tokenize_for_lesson(s: str) -> set[str]:
+    """Tokenize 文本用于教训匹配：英文单词 + 中文二元组。"""
+    import re
+    t = s.lower()
+    toks = set(re.findall(r"[a-z0-9]{2,}", t))
+    for run in re.findall(r"[一-鿿]+", t):
+        toks.update(run[i:i + 2] for i in range(len(run) - 1)) if len(run) > 1 else toks.add(run)
+    return toks
+
+
+def _first_lesson_line(content: str) -> str:
+    """取教训正文第一条非标题、非空的实际内容行作为摘要。"""
+    for raw_line in content.split("\n"):
+        stripped = raw_line.strip()
+        if not stripped or stripped.startswith("#") or stripped.startswith("##"):
+            continue
+        return stripped[:120]
+    return content[:120]
 
 
 def inject_lesson_context(log: list[dict], tool_name: str, args: dict) -> None:

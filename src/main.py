@@ -325,8 +325,15 @@ _PREREAD_MAX_CHARS = 3000  # 单文件最多读取字符
 
 def _preread_files(user_input: str, ctx) -> list[dict]:
     """扫描用户输入中的文件路径，预读到上下文。返回预读的 tool 消息列表。"""
-    from .tools.file import _read_cached, _resolve
+    paths = _collect_preread_paths(user_input)
+    if not paths:
+        return []
+    return _build_preread_messages(paths)
 
+
+def _collect_preread_paths(user_input: str) -> list:
+    """从用户输入正则匹配文件路径，解析为存在的 Path 对象列表。"""
+    from .tools.file import _resolve
     paths = set()
     for m in _FILE_PATH_RE.finditer(user_input):
         raw = m.group(0).strip().rstrip(".,;:!?\"'")
@@ -340,12 +347,14 @@ def _preread_files(user_input: str, ctx) -> list[dict]:
             continue
         if len(paths) >= _PREREAD_MAX:
             break
+    return sorted(paths)[:_PREREAD_MAX]
 
-    if not paths:
-        return []
 
+def _build_preread_messages(paths: list) -> list[dict]:
+    """读取路径列表中的文件内容，返回预读的 tool 消息列表。"""
+    from .tools.file import _read_cached
     pre_msgs = []
-    for p in sorted(paths)[:_PREREAD_MAX]:
+    for p in paths:
         content = _read_cached(p)
         if content is None:
             continue
@@ -360,7 +369,6 @@ def _preread_files(user_input: str, ctx) -> list[dict]:
             "_tool_name": "read_file",
         })
         print(f"  📖 预读: {p}")
-
     return pre_msgs
 
 
