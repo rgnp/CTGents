@@ -1294,23 +1294,29 @@ def _handle_tool_results(
 
 
 def _refresh_volatile_signals(ctx: CacheContext) -> None:
-    """刷新 ctx.log 中的 volatile 消息：记忆索引 + 钉板。
+    """刷新 ctx.log 中的 volatile 消息：记忆索引 + 钉板。"""
+    _refresh_memory_signal(ctx)
+    _refresh_pinboard_signal(ctx)
 
-    strip-then-append 避免跨轮累积——这是缓存安全的关键，挂尾消息每轮重算，
-    前缀不动保障 DeepSeek KV 命中。
-    """
+
+def _refresh_memory_signal(ctx: CacheContext) -> None:
+    """记忆索引变更后更新 ctx.log 中的记忆上下文。"""
     from .tools.memory import clear_dirty, is_dirty
     from .tools.memory import get_context as _get_mem_ctx
-    if is_dirty():
-        old_idx = next((i for i, m in enumerate(ctx.log)
-                        if m.get("role") == "system" and "你拥有以下记忆" in m.get("content", "")), -1)
-        new_ctx = _get_mem_ctx()
-        if new_ctx and old_idx >= 0:
-            ctx.log[old_idx] = {"role": "system", "content": new_ctx, "_volatile": True}
-        elif new_ctx and old_idx < 0:
-            ctx.log.append({"role": "system", "content": new_ctx, "_volatile": True})
-        clear_dirty()
+    if not is_dirty():
+        return
+    old_idx = next((i for i, m in enumerate(ctx.log)
+                    if m.get("role") == "system" and "你拥有以下记忆" in m.get("content", "")), -1)
+    new_ctx = _get_mem_ctx()
+    if new_ctx and old_idx >= 0:
+        ctx.log[old_idx] = {"role": "system", "content": new_ctx, "_volatile": True}
+    elif new_ctx and old_idx < 0:
+        ctx.log.append({"role": "system", "content": new_ctx, "_volatile": True})
+    clear_dirty()
 
+
+def _refresh_pinboard_signal(ctx: CacheContext) -> None:
+    """钉板变更后刷新 ctx.log 中的钉板消息。"""
     from .session_pins import is_pinboard_msg, render_tail
     pin_idx = next((i for i, m in enumerate(ctx.log) if is_pinboard_msg(m)), -1)
     pin_content = render_tail()
