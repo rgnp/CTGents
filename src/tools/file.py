@@ -388,6 +388,79 @@ def _validate_py(filepath: Path, backup_path: Path | None) -> str | None:
         )
 
 
+_PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
+
+
+def _restore_from_backup(filepath: Path, backup_path: Path | None, why: str) -> str:
+    """安全带回滚：把核心文件还原到改前备份（无备份=新建文件，提示手删）。"""
+    if backup_path and backup_path.exists():
+        shutil.copy2(backup_path, filepath)
+        _invalidate_pyc(filepath)
+        tail = "，已自动回滚到改前版本"
+    else:
+        tail = "（无备份可回滚——新建文件，请手动删除）"
+    return f"⛔ 核心文件安全带拦截{tail}:\n{why}"
+
+
+def _module_name(filepath: Path) -> str | None:
+    """src/tools/__init__.py → src.tools；src/main.py → src.main。非项目内 .py 返回 None。"""
+    try:
+        rel = filepath.resolve().relative_to(_PROJECT_ROOT)
+    except (ValueError, OSError):
+        return None
+    if rel.suffix != ".py":
+        return None
+    parts = list(rel.with_suffix("").parts)
+    if parts and parts[-1] == "__init__":
+        parts = parts[:-1]
+    return ".".join(parts) if parts else None
+
+
+def _core_import_smoke(filepath: Path, backup_path: Path | None) -> str | None:
+    """核心文件安全带：改后跑 import 冒烟。
+
+    AST 过≠能 import（坏 import / 模块级 NameError / 工具注册表崩）。子进程里真实
+    import 被改模块 + 核心链 + 建工具表，挂了从备份回滚——agent 能改核心文件，但改坏当场弹回。
+    """
+    import subprocess
+    import sys
+
+    _invalidate_pyc(filepath)  # 确保子进程读新代码、不吃旧 pyc
+    probe = "import src.main; from src.tools import get_tools; get_tools()"
+    mod = _module_name(filepath)
+    if mod:
+        probe = f"import {mod}; " + probe
+    try:
+        r = subprocess.run(
+            [sys.executable, "-c", probe],
+            cwd=str(_PROJECT_ROOT), capture_output=True,
+            text=True, timeout=60, encoding="utf-8", errors="replace",
+        )
+    except (subprocess.TimeoutExpired, OSError) as e:
+        return _restore_from_backup(filepath, backup_path, f"import 冒烟异常: {e}")
+    if r.returncode != 0:
+        detail = (r.stderr or r.stdout or "").strip()[-700:]
+        return _restore_from_backup(filepath, backup_path, f"import 冒烟失败:\n{detail}")
+    return None
+
+
+def _post_write_check(filepath: Path, backup_path: Path | None) -> str | None:
+    """改后校验：所有 .py 走 AST（自带回滚）；核心文件额外走 import 冒烟（自带回滚）。
+
+    返回错误消息（已回滚）或 None（通过，且已清字节码缓存）。
+    """
+    from ..guard import is_core
+    err = _validate_py(filepath, backup_path)
+    if err:
+        return err
+    if is_core(filepath):
+        err = _core_import_smoke(filepath, backup_path)
+        if err:
+            return err
+    _invalidate_pyc(filepath)
+    return None
+
+
 def _invalidate_pyc(filepath: Path) -> None:
     """删除 .py 文件对应的 __pycache__ 中的字节码缓存。
 
@@ -494,19 +567,18 @@ def write_file(path: str, content: str) -> str:
     """
     filepath = _resolve(path)
     _ensure_in_workspace(filepath)
-    from ..guard import is_protected
-    if is_protected(filepath):
-        return f"⛔ 受保护文件，禁止修改: {path}"
+    from ..guard import is_immutable
+    if is_immutable(filepath):
+        return f"⛔ 不可变安全核，禁止修改: {path}"
     backup = _backup(filepath) if filepath.exists() else None
     try:
         filepath.parent.mkdir(parents=True, exist_ok=True)
         filepath.write_text(content, encoding="utf-8")
     except OSError as e:
         return f"写入失败: {e}"
-    err = _validate_py(filepath, backup)
+    err = _post_write_check(filepath, backup)
     if err:
         return err
-    _invalidate_pyc(filepath)
     return f"已写入: {filepath}（{len(content)} 字符）"
 
 
@@ -519,9 +591,9 @@ def edit_file_lines(path: str, action: str, start_line: int,
     filepath = _resolve(path)
     _ensure_in_workspace(filepath)
     _assert_file(filepath)
-    from ..guard import is_protected
-    if is_protected(filepath):
-        return f"⛔ 受保护文件，禁止修改: {path}\n该文件是系统自愈模块，修改它可能导致系统无法自动恢复。"
+    from ..guard import is_immutable
+    if is_immutable(filepath):
+        return f"⛔ 不可变安全核，禁止修改: {path}\n该文件强制系统安全（测试门/审计/分级表本身），改了等于让防护失效。"
 
     # 读取原文件
     try:
@@ -560,10 +632,9 @@ def edit_file_lines(path: str, action: str, start_line: int,
     # ── 写回（先备份，.py 写后语法校验，失败自动回滚）──
     backup = _backup(filepath)  # 文件必存在（已 _assert_file）
     filepath.write_text("\n".join(result), encoding="utf-8")
-    err = _validate_py(filepath, backup)
+    err = _post_write_check(filepath, backup)
     if err:
         return err
-    _invalidate_pyc(filepath)
 
     old_count = (e - s + 1) if action in ("replace", "delete") else 0
     new_count = len(new_content_lines)
@@ -670,9 +741,11 @@ def delete_file(path: str) -> str:
     """删除文件。删除前会告知用户。不可恢复。"""
     filepath = _resolve(path)
     _ensure_in_workspace(filepath)
-    from ..guard import is_protected
-    if is_protected(filepath):
-        return f"⛔ 受保护文件，禁止删除: {path}"
+    from ..guard import is_core, is_immutable
+    if is_immutable(filepath):
+        return f"⛔ 不可变安全核，禁止删除: {path}"
+    if is_core(filepath):
+        return f"⛔ 核心业务文件可改但不可删（删了会断 import 链）: {path}"
     if not filepath.exists():
         return f"文件不存在: {path}"
     if not filepath.is_file():

@@ -97,13 +97,15 @@ SYSTEM_MAP = {
         },
     },
     "guard": {
-        "name": "自我保护系统",
-        "files": "src/guard.py",
-        "what": "is_protected() 保护关键文件不被修改",
-        "why": "agent 可修改自身代码，约束是靠 is_protected() 硬保护关键文件",
+        "name": "自我修改分级",
+        "files": "src/guard.py（分级表）+ src/tools/file.py（安全带）",
+        "what": "三层按炸毁半径分难度：不可变安全核(改不了——pre-commit/gate_audit/guard 本身) "
+                "/ 核心业务(可改，但改后 import 冒烟，挂了自动回滚) / 其余(自由，测试门兜底)",
+        "why": "自进化 agent 要能改所有文件——但强制安全的机制必须不可改(否则安全=摆设)；"
+               "核心业务改坏当场弹回；叶子自由。难度=更强验证+保证可撤销，不是墙",
         "tools": [],
         "connections": {
-            "tools/file": "write_file/edit_file_lines 前检查 is_protected()",
+            "tools/file": "write/edit/delete 前查 is_immutable(硬拦)/is_core(走安全带 _post_write_check)",
         },
     },
     "evolution": {
@@ -239,13 +241,14 @@ def _architecture_section() -> str:
         "1. 缓存优先 — DeepSeek 前缀缓存按字节匹配，前缀不变则全命中。",
         "   因此前缀保持稳定，固定单一 Pro 模型（无 flash/无切换），工具定义序列化一致。",
         "2. 渐进披露 — 不是所有信息都塞上下文。自省用 self 工具，搜索用 RAG。",
-        "3. 测试门禁 — agent 理论上能改任何代码，靠 is_protected() 硬保护 guard.py + 覆盖率门槛控制。",
+        "3. 自我修改分级 — agent 能改所有文件，按炸毁半径分难度：不可变安全核(改不了) / "
+        "核心业务(改后 import 冒烟，挂了回滚) / 其余(自由)。真正的兜底是 pre-commit 测试门。",
         "4. 自洽 — 写完代码自动更新 RAG 索引，不需要人工记得。",
         "",
         "### 为什么是这个结构",
         "main.py 是外壳（I/O 循环 + 启动初始化），llm.py 是大脑（模型调用 + 工具批处理），",
         "tools/ 是手（工具操作文件/网络/代码/git），cache_context.py 是记忆（三段式上下文），",
-        "guard.py 是免疫系统（is_protected 保护关键文件）。"
+        "guard.py 是免疫系统（三层分级：不可变安全核 / 核心业务走安全带 / 其余自由）。"
         "\n"
         "进化/记忆/RAG 是上层能力——它们通过工具暴露给 LLM，LLM 自主决定何时调用。",
         "",

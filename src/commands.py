@@ -383,7 +383,7 @@ def _cmd_self(r: CmdResult, _ctx, _args, _sid) -> None:
     parts.append("  config.py         — 配置加载（session 目录、模型配置）")
     parts.append("  cache_context.py  — 三段式上下文 CacheContext（prefix/log/scratch）")
     parts.append("  session.py        — 会话持久化（保存/加载/列表）")
-    parts.append("  guard.py          — 自我保护：is_protected() 保护关键文件")
+    parts.append("  guard.py          — 自我修改分级：不可变核/核心业务(安全带)/自由")
     parts.append("  evolution_runner.py — 自进化运行器：run/state/patch/验证回写")
     parts.append("  tools/")
     parts.append("    __init__.py     — 工具注册表、execute_tool() 调度、热加载")
