@@ -808,20 +808,26 @@ def _find_compaction_boundary(log: list[dict]) -> int:
     keep_start = int(len(log) * (1 - _COMPACT_KEEP_RATIO))
     while keep_start < len(log) and log[keep_start].get("role") != "user":
         keep_start += 1
-    # 确保最后一条 user 消息在保留侧
+    return _fix_last_user_boundary(log, keep_start)
+
+
+def _fix_last_user_boundary(log: list[dict], keep_start: int) -> int:
+    """如果最后一条 user 在驱逐区，把边界前推到它的 tool/assistant 配对起点。"""
     last_user = -1
     for i in range(len(log) - 1, -1, -1):
         if log[i].get("role") == "user":
             last_user = i
             break
-    if last_user >= 0 and last_user < keep_start:
-        keep_start = last_user
-        while keep_start > 0 and log[keep_start - 1].get("role") == "tool":
-            keep_start -= 1
-        while (keep_start > 0 and log[keep_start - 1].get("role") == "assistant"
-               and log[keep_start - 1].get("tool_calls")):
-            keep_start -= 1
-    return keep_start
+    if last_user < 0 or last_user >= keep_start:
+        return keep_start
+    # 前推到 user 消息的 tool/assistant 配对起点
+    start = last_user
+    while start > 0 and log[start - 1].get("role") == "tool":
+        start -= 1
+    while (start > 0 and log[start - 1].get("role") == "assistant"
+           and log[start - 1].get("tool_calls")):
+        start -= 1
+    return start
 
 
 def _track_compaction_effectiveness(all_msgs: list[dict],
