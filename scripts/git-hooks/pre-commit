@@ -63,14 +63,17 @@ trap restore_worktree EXIT
 # （改 llm/main/cache_context 等→快测绿→提交+推送→核心其实坏了没人知道）。
 # 清单复用 src/guard.py（单一权威，不在此重复维护）。stash 后工作树=暂存快照，
 # 此处 import 的是将要提交的 guard.py。检测失败(import 挂/异常)=保守跑全量(fail-closed)。
+# 注意：脚本顶部 set -e —— 检测脚本故意用非零退出码表态(2=触及核心)，必须用
+# `|| core_rc=$?` 捕获，否则 set -e 会当场中止整个钩子(record_gate_pass 跑不到、
+# 所有碰核心文件的提交被静默拒绝)。
+core_rc=0
 printf '%s\n' "$staged_py" | $PY -c "
 import sys
 sys.path.insert(0, '.')
 from src.guard import is_core, is_immutable
 hits = [p for p in (l.strip() for l in sys.stdin) if p and (is_core(p) or is_immutable(p))]
 sys.exit(2 if hits else 0)
-"
-core_rc=$?
+" || core_rc=$?
 if [ "$core_rc" = "0" ]; then
     RUN_FULL=0  # 暂存无核心文件 → 快速门
 else
