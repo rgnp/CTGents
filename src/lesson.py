@@ -21,6 +21,7 @@ from __future__ import annotations
 import contextlib
 import json
 from dataclasses import dataclass, field
+from pathlib import Path
 
 
 @dataclass
@@ -174,7 +175,7 @@ def _detect_signature_drift(log: list[dict]) -> list[Lesson]:
 
 
 def _detect_repeated_file_edit(log: list[dict]) -> list[Lesson]:
-    """同文件被反复编辑 ≥3 次。"""
+    """同文件被反复编辑 ≥3 次——合并为一个 lesson，后续按 fingerprint 合并。"""
     tools = _tool_results(log)
     arg_map = _build_tool_args_map(log)
 
@@ -185,24 +186,27 @@ def _detect_repeated_file_edit(log: list[dict]) -> list[Lesson]:
             if path:
                 edit_counts[path] = edit_counts.get(path, 0) + 1
 
-    lessons: list[Lesson] = []
-    for path, count in edit_counts.items():
-        if count >= 3:
-            safe = path.replace("/", "-").replace(".", "-")
-            lessons.append(Lesson(
-                name=f"lesson-repeated-edit-{safe}",
-                fingerprint="repeated_edit",
-                severity="medium",
-                files_involved=[path],
-                content=(
-                    f"## 模式\n"
-                    f"文件 `{path}` 被编辑了 {count} 次——反复改同一个文件。\n\n"
-                    f"## 预防\n"
-                    f"下次打开这个文件前，先用 `read_file` 完整读一遍，"
-                    f"想清楚所有要改的地方，`write_file` 一次写完。\n"
-                ),
-            ))
-    return lessons
+    hot_files = [(p, c) for p, c in edit_counts.items() if c >= 3]
+    if not hot_files:
+        return []
+
+    parts = [f"- `{p}` — {c} 次" for p, c in sorted(hot_files)]
+    paths = [p for p, _ in hot_files]
+    return [Lesson(
+        name="lesson-repeated-edits",
+        fingerprint="repeated_edit",
+        severity="medium",
+        files_involved=paths,
+        content=(
+            "## 模式\n"
+            "以下文件被反复编辑 ≥3 次：\n"
+            + "\n".join(parts) +
+            "\n\n## 预防\n"
+            "1. 编辑任何文件前，先用 `read_file` 完整读一遍\n"
+            "2. 想清楚所有要改的地方，用 `write_file` 一次写完\n"
+            "3. 不要用 `edit_file_lines` 做多行/多处编辑——行号漂移是最高频失败原因\n"
+        ),
+    )]
 
 
 def _detect_tool_arg_error(log: list[dict]) -> list[Lesson]:
@@ -411,10 +415,85 @@ def inject_lesson_context(log: list[dict], tool_name: str, args: dict) -> None:
     log.append({"role": "system", "content": "\n".join(lines), "_volatile": True})
 
 
+_LESSON_MAX_FILES = 5  # 合并时最多保留的文件名数量
+
+def _find_lesson_by_fingerprint(fp: str) -> Path | None:
+    """在 memory/ 中查找同 fingerprint 的已有教训文件（必须带 severity）。
+
+    与 memory.py._find_by_fingerprint 相反——本函数只匹配有 severity 的文件。
+    """
+    from .config import MEMORY_DIR
+    d = Path(MEMORY_DIR)
+    if not d.is_dir():
+        return None
+    for f in sorted(d.glob("*.md")):
+        if f.name == "MEMORY.md":
+            continue
+        try:
+            meta, _ = _split_frontmatter(f.read_text(encoding="utf-8"))
+            if meta.get("severity") and meta.get("fingerprint") == fp:
+                return f
+        except Exception:
+            continue
+    return None
+
+
+def _merge_lesson(existing_path: Path, le: Lesson, now: str) -> None:
+    """合并教训到已有文件：递增计数、去重追加文件列表、限制文件数上限。"""
+    meta, body = _split_frontmatter(existing_path.read_text(encoding="utf-8"))
+    times = int(meta.get("times_encountered", 1)) + 1
+
+    # 去重追加文件路径
+    old_files: set[str] = set()
+    for line in body.split("\n"):
+        stripped = line.strip()
+        if stripped.startswith("- `") and "`" in stripped[3:]:
+            fname = stripped.split("`")[1]
+            old_files.add(fname)
+    merged_files = sorted(old_files | set(le.files_involved))
+
+    # 文件数较多时截断保留前 N + 省略标记
+    file_lines: list[str] = []
+    shown = merged_files[:_LESSON_MAX_FILES]
+    for p in shown:
+        file_lines.append(f"- `{p}` — 反复编辑")
+    if len(merged_files) > _LESSON_MAX_FILES:
+        file_lines.append(f"- …（共 {len(merged_files)} 个文件，已省略 {len(merged_files) - _LESSON_MAX_FILES} 个）")
+
+    # 重建正文：文件列表 + 预防，不堆积旧数据
+    compact = (
+        f"## 模式\n"
+        f"以下文件被反复编辑 ≥3 次（累计 {times} 次遭遇）：\n"
+        + "\n".join(file_lines) +
+        "\n\n## 预防\n"
+        "1. 编辑任何文件前，先用 `read_file` 完整读一遍\n"
+        "2. 想清楚所有要改的地方，用 `write_file` 一次写完\n"
+        "3. 不要用 `edit_file_lines` 做多行/多处编辑——行号漂移是最高频失败原因\n"
+    )
+
+    desc = f"同文件反复编辑（{times}次，{len(merged_files)}文件）"
+    text = (
+        f"---\n"
+        f"name: {meta.get('name', le.name)}\n"
+        f"description: {desc}\n"
+        f"metadata:\n"
+        f"  type: strategy\n"
+        f"  fingerprint: {meta.get('fingerprint', le.fingerprint)}\n"
+        f"  severity: {meta.get('severity', le.severity)}\n"
+        f"  times_encountered: {times}\n"
+        f"  last_encountered: {now}\n"
+        f"---\n\n"
+        f"{compact}\n"
+    )
+    existing_path.write_text(text, encoding="utf-8")
+
+
 def save_lessons(lessons: list[Lesson]) -> int:
-    """将教训存入 memory/，作为 type=strategy 记忆。返回写入数。"""
+    """将教训存入 memory/，作为 type=strategy 记忆。返回写入数。
+
+    同 fingerprint 自动合并到已有文件，不散成 N 条。
+    """
     from datetime import UTC, datetime
-    from pathlib import Path
 
     from .config import MEMORY_DIR
     from .tools.memory import _rebuild_index as _rebuild
@@ -427,11 +506,19 @@ def save_lessons(lessons: list[Lesson]) -> int:
     saved = 0
 
     for le in lessons:
-        existing = d / f"{le.name}.md"
+        # 先按 fingerprint 找已有文件（合并）
+        existing = _find_lesson_by_fingerprint(le.fingerprint)
+        if existing:
+            _merge_lesson(existing, le, now)
+            saved += 1
+            continue
+
+        # 再按 name 找（向后兼容旧文件）
+        name_existing = d / f"{le.name}.md"
         times = 1
-        if existing.exists():
+        if name_existing.exists():
             try:
-                meta, _ = _split_frontmatter(existing.read_text(encoding="utf-8"))
+                meta, _ = _split_frontmatter(name_existing.read_text(encoding="utf-8"))
                 times = int(meta.get("times_encountered", "1")) + 1
             except Exception:
                 pass
