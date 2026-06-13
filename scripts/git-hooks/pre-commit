@@ -120,5 +120,9 @@ else
 fi
 
 record_gate_pass
-echo "[pre-commit] ✅ 门禁通过（快速）"
+if [ "$RUN_FULL" = "1" ]; then
+    echo "[pre-commit] ✅ 门禁通过（完整，含慢测）"
+else
+    echo "[pre-commit] ✅ 门禁通过（快速）"
+fi
 exit 0
