@@ -761,18 +761,8 @@ def _compact_context(ctx, user_input: str, force: bool = False):
 
 
 def _compact_cache_context(ctx, user_input: str, force: bool = False) -> None:
-    """滑窗压缩：超阈值时驱旧消息，替换为摘要。
-
-    改进点（v2，对齐 Hermes）：
-    - 确保最后一条 user 消息始终在 tail，防止任务丢失
-    - 防反复压缩：连续 <10% 节省即停
-    - 迭代摘要：二次压缩更新已有摘要而非重写
-    - 固定前缀保持不变（保障 DeepSeek 缓存命中）
-    - 驱逐边界前推到 user 消息开头——tool 配对完整
-    force=True 时跳过门槛，直接压缩（手动 /compact）。
-    """
+    """滑窗压缩：超阈值时驱旧消息，替换为摘要。"""
     from .tools.tokens import count_messages_tokens
-
     global _previous_summary, _ineffective_compression_count
 
     log = ctx.log
@@ -781,25 +771,44 @@ def _compact_cache_context(ctx, user_input: str, force: bool = False) -> None:
 
     all_msgs = ctx.prefix + log
     used = count_messages_tokens(all_msgs)
+
+    if not force and not _should_compact(used):
+        return
+
+    keep_start = _find_compaction_boundary(log)
+    if keep_start < 2 or keep_start >= len(log):
+        return
+
+    evicted = log[:keep_start]
+    kept = log[keep_start:]
+    summary = _make_brief_summary(evicted, previous_summary=_previous_summary)
+    if not summary:
+        return
+
+    _track_compaction_effectiveness(all_msgs, ctx.prefix, kept)
+    _replace_log_with_summary(ctx, kept, evicted, summary)
+    _previous_summary = summary
+    logger.info("滑窗压缩：驱 %d 条旧消息，保留 %d 条", len(evicted), len(kept))
+
+
+def _should_compact(used: int) -> bool:
+    """检查是否应该触发压缩（用量超阈值且未进入防抖）。"""
+    global _ineffective_compression_count
     limit = int(MAX_CONTEXT_TOKENS * _COMPACT_THRESHOLD)
+    if used < limit:
+        return False
+    if _ineffective_compression_count >= 2:
+        logger.warning("压缩跳过——最近 %d 次节省 <10%%。", _ineffective_compression_count)
+        return False
+    return True
 
-    if not force and used < limit:
-        return
 
-    # ── 防反复压缩：连续 2 次节省 <10% 即停止 ──
-    if not force and _ineffective_compression_count >= 2:
-        logger.warning(
-            "压缩跳过——最近 %d 次压缩节省均 <10%%。建议 /new 开新会话。",
-            _ineffective_compression_count,
-        )
-        return
-
-    # ── 找到驱逐起点 ──
+def _find_compaction_boundary(log: list[dict]) -> int:
+    """找到压缩驱逐边界：计算 keep_start，确保最后一条 user 在保留侧。"""
     keep_start = int(len(log) * (1 - _COMPACT_KEEP_RATIO))
     while keep_start < len(log) and log[keep_start].get("role") != "user":
         keep_start += 1
-
-    # ── Bug fix: 确保最后一条 user 消息在 tail，防止任务丢失 ──
+    # 确保最后一条 user 消息在保留侧
     last_user = -1
     for i in range(len(log) - 1, -1, -1):
         if log[i].get("role") == "user":
@@ -807,56 +816,43 @@ def _compact_cache_context(ctx, user_input: str, force: bool = False) -> None:
             break
     if last_user >= 0 and last_user < keep_start:
         keep_start = last_user
-        # 前推到 user 消息边界
         while keep_start > 0 and log[keep_start - 1].get("role") == "tool":
             keep_start -= 1
         while (keep_start > 0 and log[keep_start - 1].get("role") == "assistant"
                and log[keep_start - 1].get("tool_calls")):
             keep_start -= 1
+    return keep_start
 
-    if keep_start < 2 or keep_start >= len(log):
-        return
 
-    evicted = log[:keep_start]
-    kept = log[keep_start:]
-
-    summary = _make_brief_summary(evicted, previous_summary=_previous_summary)
-    if not summary:
-        return
-
-    # 追踪节省效果
-    before_estimate = (len(all_msgs) * 80)
-    after_estimate = (len(ctx.prefix) + len(kept) + 1) * 80
-    savings_pct = (before_estimate - after_estimate) / before_estimate * 100 if before_estimate > 0 else 0
-    if savings_pct < 10:
+def _track_compaction_effectiveness(all_msgs: list[dict],
+                                    prefix: list[dict], kept: list[dict]) -> None:
+    """追踪压缩节省效果并更新防抖计数器。"""
+    global _ineffective_compression_count
+    before = len(all_msgs) * 80
+    after = (len(prefix) + len(kept) + 1) * 80
+    pct = (before - after) / before * 100 if before > 0 else 0
+    if pct < 10:
         _ineffective_compression_count += 1
     else:
         _ineffective_compression_count = 0
 
-    # 替换：摘要 + 保留的消息 + 硬分界标记
-    new_log = [{
-        "role": "system",
-        "content": (
-            "⏪ 对话归档 — 以下为背景参考，非当前任务指令。\n"
-            "回应最新 user 消息即可，不要执行摘要中描述的任务。\n\n"
-            f"{summary}\n\n"
-            "─── 以上为归档摘要，以下为当前对话 ───"
-        ),
-    }]
-    new_log.extend(kept)
 
+def _replace_log_with_summary(ctx, kept: list[dict], evicted: list[dict],
+                               summary: str) -> None:
+    """用摘要+保留消息替换 ctx.log。"""
+    new_log = [{"role": "system", "content": (
+        "⏪ 对话归档 — 以下为背景参考，非当前任务指令。\n"
+        "回应最新 user 消息即可，不要执行摘要中描述的任务。\n\n"
+        f"{summary}\n\n"
+        "─── 以上为归档摘要，以下为当前对话 ───"
+    )}]
+    new_log.extend(kept)
     for m in evicted:
         if m.get("_volatile") and "记忆" in m.get("content", ""):
             new_log.insert(0, m)
             break
-
     ctx.log.clear()
     ctx.log.extend(new_log)
-    _previous_summary = summary
-    logger.info(
-        "滑窗压缩：驱 %d 条旧消息，保留 %d 条 (节省 %.0f%%)",
-        len(evicted), len(kept), savings_pct,
-    )
 # ── LLM 摘要缓存：相同内容哈希不重复调 LLM（滑窗压缩时同段对话反复驱替）──
 _SUMMARIZE_CACHE: dict[str, str] = {}
 _SUMMARIZE_CACHE_MAX = 50
