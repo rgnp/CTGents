@@ -139,7 +139,7 @@ def test_format_report_with_gaps():
         gaps=[Gap(source="performance", gap_type="slow", severity="medium", detail="test tool",
                    affected_files=["src/t.py"],
                    suggestion="sug", confidence=0.8)],
-        sources_scanned=3,
+        sources_scanned=2,
     )
     output = format_gap_report(report)
     assert "主动进化" in output
@@ -149,7 +149,7 @@ def test_format_report_with_gaps():
 def test_format_report_with_failures():
     report = GapReport(
         gaps=[Gap(source="t", gap_type="t", severity="medium", detail="d")],
-        sources_scanned=3, sources_failed=1, failures=["coverage: timeout"],
+        sources_scanned=2, sources_failed=1, failures=["static: timeout"],
     )
     assert "信号源失败" in format_gap_report(report)
 
@@ -216,4 +216,4 @@ def test_detect_all_gaps_does_not_crash(monkeypatch):
     monkeypatch.setattr(g, "_detect_static_gaps", lambda: [_CANNED_STATIC])
     report = detect_all_gaps(top_n=3)
     assert isinstance(report, GapReport)
-    assert report.sources_scanned == 3
+    assert report.sources_scanned == 2  # performance + static（覆盖率信号已移除）

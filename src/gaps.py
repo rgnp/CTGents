@@ -180,56 +180,10 @@ def _detect_static_gaps() -> list[Gap]:
     return _deduplicate(gaps)[:_PER_SOURCE_MAX]
 
 
-def _detect_coverage_gaps() -> list[Gap]:
-    cov_file = PROJECT_ROOT / ".coverage"
-    if not cov_file.exists():
-        return []
-    try:
-        import subprocess
-        result = subprocess.run(
-            ["coverage", "report", "--format=markdown"],
-            capture_output=True, text=True, timeout=15, cwd=str(PROJECT_ROOT),
-        )
-    except (subprocess.TimeoutExpired, FileNotFoundError, OSError):
-        return []
-    gaps: list[Gap] = []
-    for line in result.stdout.splitlines():
-        g = _parse_coverage_line(line)
-        if g:
-            gaps.append(g)
-    gaps.sort(key=lambda g: 0 if g.severity == "high" else 1)
-    return _deduplicate(gaps)[:_PER_SOURCE_MAX]
-
-
-def _parse_coverage_line(line: str) -> Gap | None:
-    """解析 coverage report 单行，返回 Gap 或 None（跳过/无意义行）。"""
-    parts = line.split()
-    if len(parts) < 4:
-        return None
-    name = parts[0]
-    if not name.startswith("src/"):
-        return None
-    try:
-        stmts = int(parts[1])
-        missed = int(parts[2])
-        cov_pct = int(parts[3].rstrip("%"))
-    except (ValueError, IndexError):
-        return None
-    if stmts < 5:
-        return None
-    if cov_pct < 50:
-        severity = "high"
-    elif cov_pct < 80:
-        severity = "medium"
-    else:
-        return None
-    return Gap(
-        source="coverage", gap_type="low_coverage", severity=severity,
-        detail=f"{name}: {cov_pct}% ({missed}/{stmts} uncovered)",
-        affected_files=[name],
-        suggestion=f"Add tests for {name}, at least critical paths.",
-        confidence=0.95, actionable=True,
-    )
+# 覆盖率 gap 信号已移除（2026-06-13）：项目已论证否决"覆盖率=指标"（连门禁一起拆）。
+# 它只会把 agent 推向按 % 刷/排序（Goodhart：覆盖率测执行不测验证），还要常驻跑
+# coverage report → 制造 thrash + 数据易陈旧。"哪条核心路径裸奔"该在真要动它时一次性
+# 查（pytest --cov=那块），不做常驻驱动信号。
 
 
 _SEVERITY_WEIGHT = {"crit": 4, "high": 3, "medium": 2, "low": 1}
@@ -270,7 +224,6 @@ def detect_all_gaps(top_n: int = 5) -> GapReport:
     detectors: list[tuple[str, Callable[[], list[Gap]]]] = [
         ("performance", _detect_performance_gaps),
         ("static", _detect_static_gaps),
-        ("coverage", _detect_coverage_gaps),
     ]
     for name, detector in detectors:
         report.sources_scanned += 1
@@ -293,7 +246,7 @@ def _static_suggestion(category: str) -> str:
         "style": "Extract responsibilities; use dataclass for many params.",
     }.get(category, "Review and fix.")
 
-_SOURCE_LABELS = {"performance": "性能", "static": "静态分析", "coverage": "覆盖率"}
+_SOURCE_LABELS = {"performance": "性能", "static": "静态分析"}
 _SEV_ICONS = {"crit": "!!", "high": "!!", "medium": "! ", "low": "~ "}
 
 

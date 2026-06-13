@@ -375,7 +375,7 @@ def _cmd_task(r: CmdResult, _ctx, args, _sid) -> None:
 
 
 @builtin("/pulse", description="主动进化：检测可改进方向（自主心跳）",
-         usage="/pulse — 扫描性能/静态/覆盖率三重信号，列出优先改进方向")
+         usage="/pulse — 扫描性能/静态双信号，列出优先改进方向")
 def _cmd_pulse(r: CmdResult, _ctx, _args, _sid) -> None:
     from .gaps import detect_all_gaps, format_gap_report
     report = detect_all_gaps()

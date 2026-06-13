@@ -39,7 +39,6 @@ class EvolutionRecord:
     git_commit_after: str | None = None
     lessons_learned: str = ""
     tags: list[str] = field(default_factory=list)
-    coverage_impact: dict = field(default_factory=dict)
     duration_total_ms: float = 0.0
 
 
