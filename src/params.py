@@ -107,11 +107,12 @@ class RuntimeParams:
     max_exec_timeout: int = _env_int("CTG_MAX_EXEC_TIMEOUT", 5)
     # 单轮工具循环最大 API 请求数（成本熔断：失控循环唯一的钱闸）
     max_requests_per_turn: int = _env_int("CTG_MAX_REQUESTS_PER_TURN", 60)
-    # 长任务未完成（current.md 仍有 [ ]/[o]）时 LLM 空手收尾 → 自动续做的最大连续次数。
-    # 每次调工具有进展即重置，仅在"反复空转不干活"时耗尽 → 交还用户（防卡死）。
-    task_auto_continue_max: int = _env_int("CTG_TASK_AUTO_CONTINUE_MAX", 3)
     # 一轮请求数达此值却没有 current.md 任务 → 提示 agent 建任务（事实触发，判断留 agent）。
     task_suggest_min_requests: int = _env_int("CTG_TASK_SUGGEST_MIN_REQUESTS", 6)
+    # 长任务自主续跑：agent 推进 current.md 后，REPL 最多自主驱动多少步（防失控；
+    # 每步内仍受 max_requests_per_turn 熔断）。停由 agent 判断（停止推进/标 [!]）触发，
+    # 这只是兜底上限。
+    task_continue_budget: int = _env_int("CTG_TASK_CONTINUE_BUDGET", 10)
     # 单条工具结果允许占用的上下文比例上限
     tool_result_budget: float = _env_float("CTG_TOOL_RESULT_BUDGET", 0.15)
     # 工具结果超过此字符数即压缩（read_file 等除外，见 SKIP_COMPRESS_TOOLS）

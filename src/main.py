@@ -568,6 +568,8 @@ def main() -> None:
                 continue
 
             try:
+                from .tasks import read_current as _read_current
+                _task_before = _read_current()
                 on_token, has_output = _make_display()
                 sid = [session_id]
                 _start_esc_listener()
@@ -582,6 +584,25 @@ def main() -> None:
                 session_id = sid[0]
                 if has_output():
                     print()
+                # ── 长任务自主续跑：agent 这轮自己推进了 current.md → 接着驱动下一步 ──
+                # 续跑条件是 agent 自己的推进，不是任务存在；停由它判断（停止推进/标 [!]/全 [x]）。
+                from .task_loop import made_task_progress, run_task_continuation
+                if made_task_progress(_task_before, _read_current()):
+                    def _task_drive(c, text, sid=sid):
+                        ot, ho = _make_display()
+                        process_turn(
+                            c, text, ot, _on_tool,
+                            on_progress=lambda: sid.__setitem__(0, save_session(c.all, sid[0])),
+                            session_id=sid[0] or "",
+                        )
+                        if ho():
+                            print()
+                    _start_esc_listener()
+                    try:
+                        run_task_continuation(ctx, _task_drive, on_status=print)
+                    finally:
+                        _stop_esc_listener()
+                    session_id = sid[0]
             except BaseException as e:
                 # ── KeyboardInterrupt：用户主动中断 ──
                 if isinstance(e, KeyboardInterrupt):

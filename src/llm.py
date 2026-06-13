@@ -632,8 +632,6 @@ _TOOL_RESULT_COMPRESS_THRESHOLD = RUNTIME.tool_result_compress_threshold
 _COMPRESS_MIN_OMITTED = 120
 # 单轮请求数熔断——真值在 params.RUNTIME
 _MAX_REQUESTS_PER_TURN = RUNTIME.max_requests_per_turn
-# 长任务未完成时空手收尾的自动续做上限——真值在 params.RUNTIME
-_TASK_AUTO_CONTINUE_MAX = RUNTIME.task_auto_continue_max
 # 干了不少活却没建任务 → 提示建任务的请求数阈值——真值在 params.RUNTIME
 _TASK_SUGGEST_MIN_REQUESTS = RUNTIME.task_suggest_min_requests
 # eager 工具执行线程池（LLM 流式期间预启动 SAFE 工具，持久复用）
@@ -1351,9 +1349,7 @@ def run_conversation(
             f"请确认传入了 CacheContext 而非 list[dict]。"
         )
     # ── 每轮刷新 volatile 上下文（strip-then-append，缓存安全挂尾） ──
-    # _task_ctx：任务/记忆上下文，每轮重算。_task_continue：上轮残留的续做提示，
-    # 仅在当轮循环内有效，新回合开头清掉（生产者在下方 else 分支）。
-    ctx.log[:] = [m for m in ctx.log if not m.get("_task_ctx") and not m.get("_task_continue")]
+    ctx.log[:] = [m for m in ctx.log if not m.get("_task_ctx")]
     from .tasks import make_task_context_message
     task_ctx = make_task_context_message()
     if task_ctx:
@@ -1378,8 +1374,6 @@ def run_conversation(
     logger.info("路由: '%s...' → %s", user_input[:30], backend.info.name)
 
     requests_made = 0
-    # ── 任务续做：current.md 还有活步骤但 LLM 空手收尾 → 续回循环（连续空转计数）──
-    _auto_continue_count = 0
     # ── stormBreaker：同轮连续同一错误 → 打破死亡螺旋 ──
     _storm_sig: str | None = None   # 上一轮失败签名
     _storm_count = 0                # 同一签名连续次数
@@ -1413,7 +1407,6 @@ def run_conversation(
             clear_interrupt()
             return "\n\n[⏹️ 已中断]"
         if tool_calls:
-            _auto_continue_count = 0  # 有进展（调了工具）→ 重置续做计数
             ctx.log.append({
                 "role": "assistant",
                 "content": content,
@@ -1566,27 +1559,10 @@ def run_conversation(
                 raise
         else:
             ctx.log.append({"role": "assistant", "content": content or ""})
-            # ── 任务续做：LLM 想空手收尾，但 current.md 还有活步骤（[ ]/[o]）──
-            # 事实给牙（文件里还有没勾的步骤=可机械判定），不靠 prose 劝模型别停。
-            # [r]/[!]（阻塞）不算活步骤 → agent 标了就能正常停（逃生口）。
-            from .tasks import has_unfinished
-            if has_unfinished() and _auto_continue_count < _TASK_AUTO_CONTINUE_MAX:
-                _auto_continue_count += 1
-                # 去旧再追加：本轮只留一条续做提示（strip 必有生产者，二者同处）
-                ctx.log[:] = [m for m in ctx.log if not m.get("_task_continue")]
-                ctx.log.append({
-                    "role": "system",
-                    "content": (
-                        "[任务续做] tasks/current.md 仍有未完成步骤（[ ] / [o]）——任务没结束。"
-                        "请直接从断点继续做下一步，不要在这里停下等我说话。"
-                        "若某步真被外部阻塞，把它标成 [r]/[!] 并说明；"
-                        "若其实已全做完，把对应步骤改成 [x] 并归档 current.md。"
-                    ),
-                    "_volatile": True,
-                    "_task_continue": True,
-                })
-                logger.info("任务续做：current.md 未完成，自动续做第 %d 次", _auto_continue_count)
-                continue
+            # 长任务的"接着做"不在这里硬续（旧补丁靠 has_unfinished 注入"不要停"=
+            # 与对话回合打架、逼出自问自答）。改由 main 的 REPL 在"agent 这轮真推进了
+            # current.md"时自主驱动下一步（task_loop.run_task_continuation）——续跑条件
+            # 是 agent 自己的推进、不是任务存在，停由它的判断（停止推进/标 [!]）决定。
             # ── 建任务建议：干了不少活却没 current.md 任务 → 提示建任务（一次/会话）──
             # 事实触发（请求数+无任务），判断留 agent（带 opt-out），不机械分类长任务。
             from .tasks import maybe_suggest_task_nudge

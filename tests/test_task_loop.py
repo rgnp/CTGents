@@ -85,7 +85,7 @@ def test_continuation_stops_on_blocker_without_driving(monkeypatch, tmp_path):
 
 
 def test_continuation_stops_when_turn_makes_no_progress(monkeypatch, tmp_path):
-    """agent 这步没改 current.md（写了段话/问了问题）→ 停下交还，不硬推。"""
+    """这一步 agent 没改 current.md（写了段话/问了问题）→ 停下交还，不硬推。"""
     _set_current(monkeypatch, tmp_path, _BASE)
     drives = []
     status = []
@@ -95,7 +95,7 @@ def test_continuation_stops_when_turn_makes_no_progress(monkeypatch, tmp_path):
 
 
 def test_continuation_budget_caps_runaway(monkeypatch, tmp_path):
-    """agent 一直推进但永不完成 → 预算兜底封顶。"""
+    """预算兜底：agent 一直推进但永不完成时封顶。"""
     task = _set_current(monkeypatch, tmp_path, "# 目标锚点\nX\n\n- [ ] S\n")
     n = [0]
 
