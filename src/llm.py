@@ -1181,52 +1181,58 @@ def _check_storm_breaker(
     storm_sig: str | None,
     storm_count: int,
 ) -> tuple[str | None, int]:
-    """检测同轮连续同一错误 → 打破死亡螺旋。
+    """检测同轮连续同一错误 → 打破死亡螺旋。"""
+    cur_sig = _build_failure_signature(approved)
+    if cur_sig is None:
+        return None, 0
+    storm_sig, storm_count = _track_storm(cur_sig, storm_sig, storm_count)
+    if storm_count >= 3 and approved:
+        _inject_loop_guard(approved, storm_count)
+    return storm_sig, storm_count
 
-    连续 3 次全失败且错误签名相同 → 在最后一条结果注入 loop guard。
-    """
-    all_failed = True
+
+def _build_failure_signature(approved: list[tuple]) -> str | None:
+    """如果所有工具结果都包含 error，返回签名；否则返回 None。"""
     sig_parts: list[str] = []
     for _item in approved:
         tool_name = _item[1]
-        result = _item[4]
-        has_err = False
-        err_line = ""
-        try:
-            parsed = json.loads(result)
-            if isinstance(parsed, dict) and "error" in parsed:
-                has_err = True
-                err_line = str(parsed["error"]).split("\n")[0][:80]
-        except (json.JSONDecodeError, Exception):
-            pass
-        if not has_err:
-            all_failed = False
-            break
+        err_line = _extract_error_line(_item[4])
+        if err_line is None:
+            return None
         sig_parts.append(f"{tool_name}:{err_line}")
+    return "|".join(sig_parts) if sig_parts else None
 
-    if not all_failed or not sig_parts:
-        return None, 0
 
-    cur_sig = "|".join(sig_parts)
+def _extract_error_line(result: str) -> str | None:
+    """从工具结果中提取错误信息首行，无错误返回 None。"""
+    try:
+        parsed = json.loads(result)
+        if isinstance(parsed, dict) and "error" in parsed:
+            return str(parsed["error"]).split("\n")[0][:80]
+    except (json.JSONDecodeError, Exception):
+        pass
+    return None
+
+
+def _track_storm(cur_sig: str, storm_sig: str | None, storm_count: int) -> tuple[str | None, int]:
+    """追踪连续错误签名：相同则递增，不同则重置。"""
     if cur_sig == storm_sig:
-        storm_count += 1
-    else:
-        storm_sig = cur_sig
-        storm_count = 1
+        return storm_sig, storm_count + 1
+    return cur_sig, 1
 
-    if storm_count >= 3 and approved:
-        last = approved[-1]
-        warn = (
-            f"\n\n[loop guard] '{last[1]}' 已连续失败 {storm_count} 次"
-            f"且错误相同。重复发送——即使换了措辞——也不会有帮助。换方法："
-            f"如果参数被截断，拆成多个小调用；"
-            f"否则修正参数、换工具、或在最终回复中说明障碍。"
-        )
-        last_result = last[4] + warn
-        approved[-1] = (last[0], last[1], last[2], last[3], last_result)
-        logger.warning("stormBreaker: %s 连续失败 %d 次，已注入 loop guard", last[1], storm_count)
 
-    return storm_sig, storm_count
+def _inject_loop_guard(approved: list[tuple], storm_count: int) -> None:
+    """在最后一条 approved 结果中注入 loop guard 警告。"""
+    last = approved[-1]
+    warn = (
+        f"\n\n[loop guard] '{last[1]}' 已连续失败 {storm_count} 次"
+        f"且错误相同。重复发送——即使换了措辞——也不会有帮助。换方法："
+        f"如果参数被截断，拆成多个小调用；"
+        f"否则修正参数、换工具、或在最终回复中说明障碍。"
+    )
+    last_result = last[4] + warn
+    approved[-1] = (last[0], last[1], last[2], last[3], last_result)
+    logger.warning("stormBreaker: %s 连续失败 %d 次，已注入 loop guard", last[1], storm_count)
 
 
 def _handle_tool_results(
