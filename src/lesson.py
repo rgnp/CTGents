@@ -211,35 +211,13 @@ def _detect_repeated_file_edit(log: list[dict]) -> list[Lesson]:
 
 def _detect_tool_arg_error(log: list[dict]) -> list[Lesson]:
     """工具返回 error → 后续同工具成功。"""
-    # 收集每类工具的 failed/success 调用
-    failures: dict[str, list[str]] = {}  # name → [result_snippets]
-    successes_per_tool: dict[str, int] = {}
-
-    for m in log:
-        if m.get("role") != "assistant":
-            continue
-        for tc in m.get("tool_calls") or []:
-            tname = tc["function"]["name"]
-            result = _tool_result_for_id(log, tc["id"])
-            if not result:
-                continue
-            content = result.get("content", "")
-            has_error = False
-            try:
-                parsed = json.loads(content)
-                if isinstance(parsed, dict) and "error" in parsed:
-                    has_error = True
-            except json.JSONDecodeError:
-                if "error" in content.lower() or "失败" in content:
-                    has_error = True
-            if has_error:
-                failures.setdefault(tname, []).append(content[:200])
-            else:
-                successes_per_tool[tname] = successes_per_tool.get(tname, 0) + 1
+    tool_errors: dict[str, list[str]] = {}
+    tool_ok: dict[str, int] = {}
+    _collect_tool_errors(log, tool_errors, tool_ok)
 
     lessons: list[Lesson] = []
-    for tname, errors in failures.items():
-        if len(errors) >= 1 and successes_per_tool.get(tname, 0) >= 1:
+    for tname, errors in tool_errors.items():
+        if errors and tool_ok.get(tname, 0) >= 1:
             lessons.append(Lesson(
                 name=f"lesson-tool-arg-{tname}",
                 fingerprint="tool_arg_error",
@@ -254,6 +232,36 @@ def _detect_tool_arg_error(log: list[dict]) -> list[Lesson]:
                 ),
             ))
     return lessons
+
+
+def _collect_tool_errors(log: list[dict],
+                         failures: dict[str, list[str]],
+                         successes: dict[str, int]) -> None:
+    """遍历 log 中的 tool_calls，将结果分类到 failures/successes 字典中。"""
+    for m in log:
+        if m.get("role") != "assistant":
+            continue
+        for tc in m.get("tool_calls") or []:
+            tname = tc["function"]["name"]
+            result = _tool_result_for_id(log, tc["id"])
+            if not result:
+                continue
+            content = result.get("content", "")
+            if _has_error(content):
+                failures.setdefault(tname, []).append(content[:200])
+            else:
+                successes[tname] = successes.get(tname, 0) + 1
+
+
+def _has_error(content: str) -> bool:
+    """判断工具返回内容是否包含错误标记。"""
+    try:
+        parsed = json.loads(content)
+        if isinstance(parsed, dict) and "error" in parsed:
+            return True
+    except json.JSONDecodeError:
+        pass
+    return "error" in content.lower() or "失败" in content
 
 
 def _detect_precommit_rejection(log: list[dict]) -> list[Lesson]:
