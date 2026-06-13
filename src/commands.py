@@ -241,11 +241,12 @@ def _cmd_context(r: CmdResult, ctx, _args, _sid) -> None:
         "── 前缀（始终命中）──",
     ]
 
-    # 前缀内容
-    for i, m in enumerate(ctx.prefix, 1):
+    # 前缀内容（按 _make_prefix_msgs 顺序：日期, AGENTS.md, 运行时机制索引）
+    _prefix_labels = ["日期", "AGENTS.md", "运行时机制索引"]
+    for i, m in enumerate(ctx.prefix):
         content = m.get("content", "")
-        label = "AGENTS.md" if i == 1 else "运行时机制索引"
-        lines.append(f"  [{i}] {label:<16} {len(content):,} 字符")
+        label = _prefix_labels[i] if i < len(_prefix_labels) else "前缀"
+        lines.append(f"  [{i + 1}] {label:<16} {len(content):,} 字符")
     lines.append(f"  哈希: {ctx.prefix_hash}")
     roles: dict[str, int] = {}
     for m in log_msgs:
@@ -262,27 +263,35 @@ def _cmd_context(r: CmdResult, ctx, _args, _sid) -> None:
     lines.append("")
     lines.append("── 尾部注入（每轮在末尾 → 必然 miss）──")
 
+    from .session_pins import PINBOARD_MARKER
     _tail_tags: list[tuple[str, str]] = [
         ("主动进化 · 方向发现", "方向发现"),
         ("未完成的长任务", "长任务续做"),
         ("被动进化发现", "被动反思"),
         ("你拥有以下记忆", "记忆索引"),
-        ("pin-", "钉板"),
+        (PINBOARD_MARKER, "钉板"),
         ("[提醒] 检索", "提醒检索"),
         ("⏪ 对话归档", "压缩归档"),
     ]
 
+    # 去重扫描：方向发现+长期目标+长任务+被动诊断被 make_task_context_message 合成
+    # 同一条消息，多个标签会命中它——只对首次命中报完整长度，其余标"与上同条"，
+    # 否则同一条 2000+ 字符消息被重复计数列好几遍（虚高失真）。
+    seen_ids: set[int] = set()
     for tag, label in _tail_tags:
         found = None
         for m in log_msgs:
             if m.get("role") == "system" and tag in (m.get("content") or ""):
                 found = m
                 break
-        if found:
+        if not found:
+            lines.append(f"  [ ] {label:<10}      —")
+        elif id(found) in seen_ids:
+            lines.append(f"  [✓] {label:<10}   （与上同条）")
+        else:
+            seen_ids.add(id(found))
             chars = len(found.get("content", ""))
             lines.append(f"  [✓] {label:<10} {chars:>7,} 字符")
-        else:
-            lines.append(f"  [ ] {label:<10}      —")
 
     # API 缓存
     from .llm import get_cache_stats
