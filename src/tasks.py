@@ -21,6 +21,7 @@ ARCHIVE_DIR = TASKS_DIR / "archive"
 _UNFINISHED_MARKERS = ("[ ]", "[o]", "[O]")  # 活跃未完成（has_unfinished 判活用）
 _BLOCKED_MARKERS = ("[r]", "[R]", "[!]")     # 阻塞/需重试（不触发续做注入，但不算全完成）
 _ALL_NOT_DONE = _UNFINISHED_MARKERS + _BLOCKED_MARKERS  # 全完成判定用
+_DONE_MARKERS = ("[x]", "[X]")               # 已完成步骤（is_all_done 要求至少一个）
 _SLUG_FALLBACK = "task"
 _ANCHOR_HEADING = "# 目标锚点"
 # 方向发现缓存：同会话只跑一次（~5s），不进每轮循环
@@ -154,14 +155,16 @@ def has_unfinished() -> bool:
 
 
 def is_all_done() -> bool:
-    """current.md 存在、非空、所有步骤都已完成（全是 [x]）。
+    """current.md 存在、且是一个所有步骤都完成（全 [x]）的任务。
 
-    有 [ ]/[o]/[r]/[!] 任一即返回 False。
+    有 [ ]/[o]/[r]/[!] 任一即 False；**还要求至少一个 [x]**——否则像
+    "（无进行中的任务）"这种无步骤的占位文本会被误判成"全完成"而触发多余归档。
     """
     text = read_current()
     if not text:
         return False
-    return not any(m in text for m in _ALL_NOT_DONE)
+    has_done = any(m in text for m in _DONE_MARKERS)
+    return has_done and not any(m in text for m in _ALL_NOT_DONE)
 
 
 def make_task_context_message() -> dict | None:

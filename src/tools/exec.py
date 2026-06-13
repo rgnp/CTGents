@@ -283,6 +283,16 @@ def _check_git_hook_bypass(parts: list[str]) -> str:
     return ""
 
 
+def _is_test_command(parts: list[str]) -> bool:
+    """命令是否在跑 pytest——用于抬高超时地板。
+
+    快速套件 ~40s、全量 ~150s 都 > run_command 默认 30s/run_async 默认 120s，
+    不抬地板则跑测试必超时被杀，逼 agent 转 async+反复 poll（烧回合/缓存）。
+    覆盖 'pytest ...'、'python -m pytest'、'py -m pytest' 等。
+    """
+    return any("pytest" in p for p in parts)
+
+
 def _truncate_output(output: str, max_len: int = MAX_OUTPUT_LENGTH) -> str:
     if len(output) <= max_len:
         return output
@@ -360,6 +370,8 @@ def run_command(command: str, timeout: int = 30, workdir: str | None = None) -> 
 
     if cmd_parts and Path(cmd_parts[0]).stem.lower() == "git" and "commit" in cmd_parts:
         timeout = max(timeout, RUNTIME.git_commit_timeout_floor)
+    if _is_test_command(cmd_parts):
+        timeout = max(timeout, RUNTIME.test_timeout_floor)
 
     try:
         result = subprocess.run(
@@ -393,6 +405,11 @@ def run_async(command: str, timeout: int = 120, workdir: str | None = None) -> s
     is_blocked, reason = _is_blocked(command)
     if is_blocked:
         return f"⛔ 命令被拦截: {reason}"
+    cmd_parts = _split_command(command)
+    if isinstance(cmd_parts, str):
+        return cmd_parts
+    if _is_test_command(cmd_parts):
+        timeout = max(timeout, RUNTIME.test_timeout_floor)
     try:
         job_id = _start_job(command, timeout, workdir)
     except ValueError as e:

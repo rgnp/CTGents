@@ -87,6 +87,14 @@ class TestIsAllDone:
         _isolate_tasks[0].write_text(_UNFINISHED, encoding="utf-8")
         assert tasks.is_all_done() is False
 
+    def test_false_on_no_step_placeholder(self, _isolate_tasks):
+        """非空但无步骤标记的占位文本不该被当成"全完成"而触发多余归档（要求至少一个 [x]）。
+
+        例：归档后 agent 写的"（无进行中的任务）"。
+        """
+        _isolate_tasks[0].write_text("（无进行中的任务）", encoding="utf-8")
+        assert tasks.is_all_done() is False
+
     def test_false_when_mixed_x_and_todo(self, _isolate_tasks):
         _isolate_tasks[0].write_text(
             "# 测试\n\n# 目标锚点\n测。\n\n- [x] Done\n- [ ] Not done\n",

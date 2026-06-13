@@ -94,6 +94,48 @@ class TestGitCommitTimeoutFloor:
         assert seen["timeout"] == 10
 
 
+class TestTestTimeoutFloor:
+    """pytest 命令超时地板：慢测试不被默认 timeout 杀掉，免去 async+反复 poll。"""
+
+    def _captured_timeout(self, monkeypatch, command, timeout):
+        seen: dict = {}
+
+        def fake_run(*_a, **kwargs):
+            seen["timeout"] = kwargs.get("timeout")
+            raise FileNotFoundError
+
+        monkeypatch.setattr(exec_mod.subprocess, "run", fake_run)
+        run_command(command, timeout=timeout)
+        return seen["timeout"]
+
+    def test_pytest_timeout_raised(self, monkeypatch):
+        assert self._captured_timeout(monkeypatch, "pytest -q", 30) == \
+            exec_mod.RUNTIME.test_timeout_floor
+
+    def test_python_m_pytest_raised(self, monkeypatch):
+        assert self._captured_timeout(monkeypatch, "python -m pytest tests/", 30) == \
+            exec_mod.RUNTIME.test_timeout_floor
+
+    def test_explicit_higher_timeout_kept(self, monkeypatch):
+        """显式给了更大的 timeout 不被地板压低（max 语义）。"""
+        big = exec_mod.RUNTIME.test_timeout_floor + 100
+        assert self._captured_timeout(monkeypatch, "pytest -q", big) == big
+
+    def test_non_test_command_untouched(self, monkeypatch):
+        assert self._captured_timeout(monkeypatch, "echo hi", 10) == 10
+
+    def test_run_async_pytest_floored(self, monkeypatch):
+        seen: dict = {}
+
+        def fake_start(_command, timeout, _workdir):
+            seen["timeout"] = timeout
+            return "job-test"
+
+        monkeypatch.setattr(exec_mod, "_start_job", fake_start)
+        exec_mod.run_async("pytest -q", timeout=30)
+        assert seen["timeout"] == exec_mod.RUNTIME.test_timeout_floor
+
+
 # ═══════════════════════════════════════
 # 异步 job 测试
 # ═══════════════════════════════════════

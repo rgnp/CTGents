@@ -124,6 +124,10 @@ class RuntimeParams:
     # git commit 超时地板（秒）：质量门全量 pytest 需 ~40s+，timeout 给小了
     # 正道必死，会把 agent 推向绕门——commit 命令的 timeout 自动抬到此值
     git_commit_timeout_floor: int = _env_int("CTG_GIT_COMMIT_TIMEOUT_FLOOR", 300)
+    # 测试命令（pytest）超时地板（秒）：快速套件 ~40s、全量 ~150s 都 > run_command
+    # 默认 30s/run_async 默认 120s → 跑测试必超时被杀，逼 agent 去 async+反复 poll。
+    # 同步 pytest 命令的 timeout 自动抬到此值，让它一轮跑完拿结果，不超时不轮询。
+    test_timeout_floor: int = _env_int("CTG_TEST_TIMEOUT_FLOOR", 240)
 
 
 RUNTIME = RuntimeParams()
