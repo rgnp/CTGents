@@ -15,6 +15,26 @@ _CONTEXT_BODY_CHARS = 300
 _TOKEN_ASCII = re.compile(r"[a-z0-9]+")
 _TOKEN_CJK = re.compile(r"[一-鿿]+")
 
+# ── 回忆双向扩词：中↔英互搜 ——
+# 搜"用户"时自动加"user" token，避免中文查询无法命中英文记忆（反之亦然）。
+# 只覆盖领域内高频词，不加通用词典——维护成本可控，不拖累检索精度。
+_TRANSLITERATE: dict[str, list[str]] = {
+    "用户": ["user"], "偏好": ["preference", "prefers"], "画像": ["profile"],
+    "习惯": ["habit", "pattern"], "记忆": ["memory"],
+    "策略": ["strategy"], "知识": ["knowledge"],
+    "能力": ["capacity", "capability"],
+    "搜索": ["search", "retrieval"], "压缩": ["compact", "compression"],
+    "对话": ["session", "conversation"], "任务": ["task"],
+    "代码": ["code"], "测试": ["test"],
+    "总结": ["summary"],
+    "user": ["用户"], "preference": ["偏好"], "profile": ["画像"],
+    "memory": ["记忆"], "strategy": ["策略"], "knowledge": ["知识"],
+    "capacity": ["能力"], "capability": ["能力"],
+    "session": ["对话"], "task": ["任务"],
+    "compact": ["压缩"], "search": ["搜索"],
+    "habit": ["习惯"], "pattern": ["习惯"],
+}
+
 # ── 记忆索引缓存（避免每次请求重复读文件） ──
 _context_cache: str | None = None
 _context_dirty: bool = True
@@ -392,7 +412,12 @@ def _recall(query: str) -> str:
     归档里,只索引 memory 会让它们对检索成"只写不读的坟场"(agent 曾因此重造已有机制)。
     """
     q_lower = query.lower().strip()
-    q_tokens = _tokenize(query)
+    # 双向扩词：中↔英互搜
+    expanded = q_lower
+    for cn, en_list in _TRANSLITERATE.items():
+        if cn in q_lower:
+            expanded += " " + " ".join(en_list)
+    q_tokens = _tokenize(expanded)
     scored: list[tuple[float, str, str, str, str]] = []  # (score, updated, name, type, snippet)
     _scan_into(_dir(), q_tokens, q_lower, "", True, scored)
     archive = Path(ARCHIVE_DIR)
