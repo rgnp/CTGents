@@ -508,6 +508,23 @@ def _invoke_llm(
     raise RuntimeError("unreachable")
 
 
+def _collect_eager_results(
+    pending: list[tuple[int, "Future[str]", str, dict]],
+    pre_results: dict[int, str],
+    lock: threading.Lock,
+) -> None:
+    """收集 eager 预执行工具的轮询结果，含 Tavily 自愈。"""
+    for idx, fut, name, args in pending:
+        result = fut.result(timeout=30)
+        if name == "search_web" and _is_quota_error(result):
+            healed = _tavily_self_heal()
+            if healed:
+                retry_tc = SimpleNamespace(function=SimpleNamespace(name=name, arguments=json.dumps(args)))
+                result = _tracked_execute_tool(retry_tc)
+        with lock:
+            pre_results[idx] = result
+
+
 def _invoke_llm_eager(
     backend: LLMBackend,
     messages: list[dict],
@@ -564,16 +581,7 @@ def _invoke_llm_eager(
                 content, tool_calls = backend.chat_non_stream(messages, on_token, tools)
 
             # ── 收集 eager 结果 ──
-            for idx, fut, name, args in pending:
-                result = fut.result(timeout=30)
-                # Tavily quota 自愈：检测结果字符串中的配额错误并重试
-                if name == "search_web" and _is_quota_error(result):
-                    healed = _tavily_self_heal()
-                    if healed:
-                        retry_tc = SimpleNamespace(function=SimpleNamespace(name=name, arguments=json.dumps(args)))
-                        result = _tracked_execute_tool(retry_tc)
-                with lock:
-                    pre_results[idx] = result
+            _collect_eager_results(pending, pre_results, lock)
 
             if track_stats:
                 _update_cache_stats(model_key, messages, session_id)
