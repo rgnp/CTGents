@@ -432,6 +432,16 @@ def _finalize_session(ctx: CacheContext, session_id: str | None) -> list[str]:
             lines.append(f"已自动收割 {n} 条记忆。")
     except Exception as e:
         logger.warning("记忆收割失败（不阻塞退出）: %s", e)
+    # ── 用户理解收割：LLM 提炼"这次学到关于用户的什么"，沉淀进每轮注入的 user 档案 ──
+    # 与上面的失败模式收割对称（那个机械、这个语义）；隔离调用不碰前缀缓存。
+    if any(m["role"] == "assistant" for m in ctx.all):
+        try:
+            from .user_model import harvest_and_save
+            note = harvest_and_save(ctx.all)
+            if note:
+                lines.append(note)
+        except Exception as e:
+            logger.warning("用户理解收割失败（不阻塞退出）: %s", e)
     # 把 durable 钉板转存进记忆（会话内不漂 → 新会话可 recall）
     from .session_pins import promote_durable
     promoted = promote_durable()

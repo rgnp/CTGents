@@ -179,3 +179,22 @@ class OutcomeParams:
 
 
 OUTCOME = OutcomeParams()
+
+
+@dataclass(frozen=True)
+class UserModelParams:
+    """用户理解档案收割旋钮（收割 prompt 等结构性细节留 user_model.py）。"""
+
+    # 总开关：会话结束是否做"懂你"收割（关掉则零额外 LLM 调用）
+    enabled: bool = _env_bool("CTG_USER_MODEL_ENABLED", True)
+    # 少于这么多条用户消息的会话不收割（避免给琐碎会话花一次调用）
+    min_user_messages: int = _env_int("CTG_USER_MODEL_MIN_USER_MSGS", 3)
+    # 档案正文目标长度（字）——prompt 软约束，超出由清洗硬截
+    max_profile_chars: int = _env_int("CTG_USER_MODEL_MAX_PROFILE_CHARS", 1500)
+    # 喂给收割调用的对话精华预算（字符，取尾部近因）
+    digest_char_budget: int = _env_int("CTG_USER_MODEL_DIGEST_BUDGET", 6000)
+    # 收割调用网络失败重试次数
+    harvest_retries: int = _env_int("CTG_USER_MODEL_HARVEST_RETRIES", 2)
+
+
+USER_MODEL = UserModelParams()
