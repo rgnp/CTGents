@@ -218,8 +218,8 @@ def make_task_context_message() -> dict | None:
                 "↳ 每完成一个步骤，对照上方锚点检查当前方向：做的事还在解决这个问题吗？"
             )
 
-    # ── 被动进化反思（含代码感知诊断）──
-    from .diagnostics import diagnose_anomalies
+    # ── 被动进化反思：去重 → format_diagnostics 统一格式化 ──
+    from .diagnostics import format_diagnostics
     from .tracker import get_latest_reflections as _get_reflections
     reflections = _get_reflections(limit=3)
     if reflections:
@@ -231,22 +231,8 @@ def make_task_context_message() -> dict | None:
                 if key not in seen:
                     seen.add(key)
                     anomalies.append(a)
-
         if anomalies:
-            diagnostics = diagnose_anomalies(anomalies)
-            lines = ["🔍 被动进化发现了以下值得关注的问题："]
-            for a, d in zip(anomalies, diagnostics, strict=True):
-                icon = {"crit": "🔴", "warn": "🟡"}.get(a.get("severity", ""), "⚪")
-                lines.append(f"  {icon} [{d.anomaly_type}] {d.anomaly_detail}")
-                if d.root_pattern != "unknown" or d.suggested_action:
-                    lines.append(f"     → 诊断: {d.likely_cause}")
-                    if d.suggested_action:
-                        lines.append(f"     → 建议: {d.suggested_action}")
-            lines.append(
-                "如果需要修复，可以说 '处理这些' 或 '看看第一个'。"
-                "我会用 /evolve 机制分析、修改、测试、提交。"
-            )
-            parts.append("\n".join(lines))
+            parts.append(format_diagnostics(anomalies))
 
     if not parts:
         return None
