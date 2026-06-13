@@ -113,8 +113,11 @@ def mock_memory_msg(idx: int = 0):
 results: list[dict] = []
 
 
-def test(name: str, fn):
-    """运行一个测试并记录结果。"""
+def _run_check(name: str, fn):
+    """运行一个检查并记录结果（独立脚本模式用）。
+
+    不叫 test*——否则 pytest 会把它当测试函数收集，再因找不到 name/fn fixture 报错。
+    """
     try:
         fn()
         results.append({"name": name, "status": "PASS"})
@@ -417,38 +420,42 @@ def test_cache_efficiency():
 
 
 # ═══════════════════════════════════════════════════════════════
-# 运行所有测试
+# 独立脚本模式：python tests/test_prefix_cache.py 跑全部并出报告。
+# 必须在 __main__ 守卫内——否则 pytest import 本文件时就会跑全部测试，
+# 任一失败的 sys.exit(1) 会直接掐死整个 pytest 会话（pytest 自己会跑上面的
+# test_* 函数，不需要这段）。
 # ═══════════════════════════════════════════════════════════════
 
-TESTS = [
-    ("空会话 prefix 稳定", test_empty_startup),
-    ("多轮对话前缀不退化", test_conversation_growth),
-    ("log system 放末尾", test_log_system_at_end),
-    ("压缩后前缀不变", test_compaction_prefix),
-    ("记忆变更不扰动前缀", test_memory_update),
-    ("保存/加载无冗余", test_save_load_cycle),
-    ("跨会话哈希一致", test_cross_session_hash),
-    ("工具调用后前缀不变", test_tool_cycle),
-    ("缓存效率分析", test_cache_efficiency),
-]
+if __name__ == "__main__":
+    TESTS = [
+        ("空会话 prefix 稳定", test_empty_startup),
+        ("多轮对话前缀不退化", test_conversation_growth),
+        ("log system 放末尾", test_log_system_at_end),
+        ("压缩后前缀不变", test_compaction_prefix),
+        ("记忆变更不扰动前缀", test_memory_update),
+        ("保存/加载无冗余", test_save_load_cycle),
+        ("跨会话哈希一致", test_cross_session_hash),
+        ("工具调用后前缀不变", test_tool_cycle),
+        ("缓存效率分析", test_cache_efficiency),
+    ]
 
-for name, fn in TESTS:
-    test(name, fn)
+    for name, fn in TESTS:
+        _run_check(name, fn)
 
-# ── 报告 ──
-print("\n" + "═" * 60)
-print(f"  前缀缓存测试结果: {sum(1 for r in results if r['status']=='PASS')}/{len(results)} 通过")
-print("═" * 60)
+    # ── 报告 ──
+    print("\n" + "═" * 60)
+    print(f"  前缀缓存测试结果: {sum(1 for r in results if r['status']=='PASS')}/{len(results)} 通过")
+    print("═" * 60)
 
-for r in results:
-    status = "✅" if r["status"] == "PASS" else "❌"
-    print(f"  {status} {r['name']}")
-    if r["status"] != "PASS":
-        print(f"     → {r['error']}")
+    for r in results:
+        status = "✅" if r["status"] == "PASS" else "❌"
+        print(f"  {status} {r['name']}")
+        if r["status"] != "PASS":
+            print(f"     → {r['error']}")
 
-failed = [r for r in results if r["status"] != "PASS"]
-if failed:
-    print(f"\n⚠️  {len(failed)} 项未通过，需要修复。")
-    sys.exit(1)
-else:
-    print("\n✅ 全部通过")
+    failed = [r for r in results if r["status"] != "PASS"]
+    if failed:
+        print(f"\n⚠️  {len(failed)} 项未通过，需要修复。")
+        sys.exit(1)
+    else:
+        print("\n✅ 全部通过")
