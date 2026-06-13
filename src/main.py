@@ -115,7 +115,6 @@ def _append_volatile_context(ctx: CacheContext) -> None:
     pinboard = render_tail()
     if pinboard:
         ctx.log.append({"role": "system", "content": pinboard, "_volatile": True})
-        pass
 
 
 def _inject_completion_audit(ctx: CacheContext) -> None:

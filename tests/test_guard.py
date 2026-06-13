@@ -72,20 +72,27 @@ def test_resolution_error_returns_false():
 
 
 @pytest.mark.slow  # 起子进程跑 import 冒烟（~数秒），移出快速门
-def test_core_edit_smoke_reverts_broken_change():
-    """核心安全带端到端：给 commands.py 插一个必崩 import → 冒烟失败 → 自动回滚复原。"""
-    from src.tools.file import edit_file_lines
-    target = _SRC / "commands.py"
-    before = target.read_text(encoding="utf-8")
-    last_line = len(before.rstrip("\n").split("\n"))
+def test_core_edit_smoke_reverts_broken_change(monkeypatch):
+    """核心安全带：核心文件被改出必崩 import → 冒烟失败 → 从备份自动回滚复原。
+
+    用专用一次性模块 src/_smoke_probe.py（注入 CORE_FILES），直接测 _post_write_check。
+    绝不原地改共享的 commands.py——后者被改坏会与 agent 并发跑测试相撞、中断即留坏源
+    （这正是本测试旧版埋的雷：见 conftest 任务隔离 / 记忆 error-correction-hierarchy）。
+    """
+    import src.guard as guard
+    from src.tools.file import _post_write_check
+    probe = _SRC / "_smoke_probe.py"
+    backup = _SRC / "_smoke_probe.bak"
+    monkeypatch.setattr(guard, "CORE_FILES", frozenset({str(probe.resolve())}))
     try:
-        # 追加到末尾：AST 合法（绕过语法校验层），但 import 必失败 → 该被冒烟层拦下
-        result = edit_file_lines(
-            str(target), "insert", last_line,
-            new_lines="import this_module_truly_does_not_exist_xyz123",
-        )
-        assert "安全带" in result or "冒烟" in result, f"应被冒烟安全带拦下，实际: {result[:200]}"
-        assert target.read_text(encoding="utf-8") == before, "核心文件应已回滚到改前内容"
+        backup.write_text("X = 1\n", encoding="utf-8")        # 改前快照（合法可 import）
+        probe.write_text(                                     # 改后：AST 合法但 import 必崩
+            "import this_module_truly_does_not_exist_xyz123\n", encoding="utf-8")
+        result = _post_write_check(probe, backup)
+        assert result is not None and ("安全带" in result or "冒烟" in result), (
+            f"应被冒烟安全带拦下，实际: {result}")
+        assert probe.read_text(encoding="utf-8") == "X = 1\n", "核心文件应已从备份回滚"
     finally:
-        if target.read_text(encoding="utf-8") != before:
-            target.write_text(before, encoding="utf-8")
+        probe.unlink(missing_ok=True)
+        backup.unlink(missing_ok=True)
+        (_SRC / "__pycache__" / "_smoke_probe.cpython-312.pyc").unlink(missing_ok=True)
