@@ -688,38 +688,34 @@ def _get_eager_executor() -> _ThreadPoolExecutor:
     return _EAGER_EXECUTOR
 
 
+# 工具语义摘要：只需显示名称+字符数的工具
+_SIMPLE_SUMMARY_TOOLS = frozenset({
+    "read_file", "write_file", "grep_code", "search_web", "run_python",
+    "git_status", "git_diff", "git_log", "git_commit", "git_push",
+})
 def _summarize_tool_result(tool_name: str, result: str) -> str:
-    """生成语义化摘要：按工具类型提取关键信息，保留可续做性。
-
-    对齐 Hermes 的 _summarize_tool_result，但更轻量。
-    返回如 "[run_command] -> exit 0, 47 行输出 (12,000 字符)"。
-    """
+    """生成语义化摘要：按工具类型提取关键信息，保留可续做性。"""
     content_len = len(result)
     line_count = result.count("\n") + 1 if result.strip() else 0
-    parsed = None
-    with contextlib.suppress(json.JSONDecodeError, TypeError):
-        parsed = json.loads(result)
 
+    # 有特殊摘要逻辑的工具
     if tool_name == "run_command":
-        exit_code = "?"
-        if isinstance(parsed, dict):
-            exit_code = parsed.get("exit_code", "?")
-        return f"[run_command] -> exit {exit_code}, {line_count} 行 ({content_len:,} 字符)"
-    if tool_name == "read_file":
-        return f"[read_file] ({content_len:,} 字符)"
-    if tool_name == "write_file":
-        return f"[write_file] ({content_len:,} 字符)"
-    if tool_name in ("grep_code",):
-        return f"[grep_code] ({content_len:,} 字符)"
-    if tool_name == "search_web":
-        return f"[search_web] ({content_len:,} 字符)"
-    if tool_name == "run_python":
-        return f"[run_python] ({content_len:,} 字符)"
-    if tool_name in ("git_status", "git_diff", "git_log", "git_commit", "git_push"):
+        return _summarize_run_command(result, line_count, content_len)
+    if tool_name in _SIMPLE_SUMMARY_TOOLS:
         return f"[{tool_name}] ({content_len:,} 字符)"
 
     head = result.split("\n")[0][:120] if result else ""
     return f"[{tool_name}] {head}... ({content_len:,} 字符)" if head else f"[{tool_name}] ({content_len:,} 字符)"
+
+
+def _summarize_run_command(result: str, line_count: int, content_len: int) -> str:
+    """Summarize run_command 结果：解析 JSON 提取 exit_code。"""
+    exit_code = "?"
+    with contextlib.suppress(json.JSONDecodeError, TypeError):
+        parsed = json.loads(result)
+        if isinstance(parsed, dict):
+            exit_code = parsed.get("exit_code", "?")
+    return f"[run_command] -> exit {exit_code}, {line_count} 行 ({content_len:,} 字符)"
 
 
 def _compress_tool_result(tool_name: str, result: str) -> str:
