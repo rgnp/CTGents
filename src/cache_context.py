@@ -114,10 +114,10 @@ class CacheContext:
         """构建发给 LLM API 的消息列表。
 
         策略（保障 DeepSeek 前缀缓存）：
-          1. 不可变 prefix 系统消息排在 payload 最前面 → 缓存命中核心区
+          1. 不可变 prefix 系统消息排在 payload 最前面
           2. prefix 全部发送（_volatile 仅影响持久化过滤，不影响 API）
-          3. log 中非 system 消息按追加顺序排中间 → 前缀持续命中
-          4. log 中 system 消息（记忆/安全模式/摘要）放末尾 → 不影响缓存前缀
+          3. log 中非 system 消息按追加顺序排中间
+          4. log 中 system 消息放末尾，不影响缓存前缀
         Args:
             validate: 是否校验 prefix 完整性，默认 True。
 
@@ -127,40 +127,46 @@ class CacheContext:
         Raises:
             PrefixIntegrityError: validate=True 且 prefix 被意外修改。
         """
-        # 1. 校验 prefix 完整性
         if validate:
-            current = _compute_msg_hash(self.prefix)
-            if current != self._prefix_hash:
-                raise PrefixIntegrityError(
-                    f"前缀哈希不匹配！预期 {self._prefix_hash}，实际 {current}。"
-                    f"不可变 prefix 被意外修改。"
-                )
+            self._validate_prefix()
         api: list[dict] = []
 
-        # 2. immutable prefix — 全部发送（_volatile 仅影响持久化，不影响 API 发送）
+        # immutable prefix
         for m in self.prefix:
             api.append({"role": "system", "content": m.get("content", "")})
 
-        # 3. log 中的非 system 消息（user/assistant/tool）—— 紧跟 prefix，享受缓存
-        for m in self.log:
-            if m.get("role") == "system":
-                continue
-            clean: dict = {"role": m["role"]}
-            if "content" in m:
-                clean["content"] = m.get("content")
-            if m.get("tool_calls"):
-                clean["tool_calls"] = m["tool_calls"]
-            if m.get("tool_call_id"):
-                clean["tool_call_id"] = m["tool_call_id"]
-            api.append(clean)
-
-        # 4. log 中的 system 消息（记忆/安全模式/摘要等）—— 放末尾，不影响对话缓存
+        # log 中的非 system 消息
         for m in self.log:
             if m.get("role") != "system":
-                continue
-            api.append({"role": "system", "content": m.get("content", "")})
+                api.append(self._clean_log_msg(m))
+
+        # log 中的 system 消息放末尾
+        for m in self.log:
+            if m.get("role") == "system":
+                api.append({"role": "system", "content": m.get("content", "")})
 
         return api
+
+    def _validate_prefix(self) -> None:
+        """校验前缀完整性。不匹配则抛 PrefixIntegrityError。"""
+        current = _compute_msg_hash(self.prefix)
+        if current != self._prefix_hash:
+            raise PrefixIntegrityError(
+                f"前缀哈希不匹配！预期 {self._prefix_hash}，实际 {current}。"
+                f"不可变 prefix 被意外修改。"
+            )
+
+    @staticmethod
+    def _clean_log_msg(m: dict) -> dict:
+        """清洗 log 中的一条非 system 消息，只保留 API 需要的字段。"""
+        clean: dict = {"role": m["role"]}
+        if "content" in m:
+            clean["content"] = m.get("content")
+        if m.get("tool_calls"):
+            clean["tool_calls"] = m["tool_calls"]
+        if m.get("tool_call_id"):
+            clean["tool_call_id"] = m["tool_call_id"]
+        return clean
 
     def clear_log(self) -> None:
         """清空 log，保持 prefix 不变。"""
