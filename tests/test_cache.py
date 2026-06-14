@@ -128,3 +128,38 @@ class TestCompressToolResult:
         compressed = llm._compress_tool_result("generic", text)
         compressed = llm._compress_tool_result("generic", text)
         assert "10,000" in compressed or "10000" in compressed
+
+    # ── 信号保留（本次改动核心）：不再把内容整个换 stub ──
+
+    def test_run_command_keeps_head_and_tail_signal(self):
+        """run_command 大输出：开头的失败行 + 结尾的汇总行都必须活下来。"""
+        noise = "\n".join(f"tests/test_x.py::case_{i} PASSED" for i in range(400))
+        text = (
+            "退出码: 1\n"
+            "FAILED tests/test_critical.py::test_boom - AssertionError: 关键失败\n"
+            + noise
+            + "\n=== 1 failed, 400 passed in 12.3s ==="
+        )
+        assert len(text) > _THRESHOLD
+        out = llm._compress_tool_result("run_command", text)
+        assert len(out) < len(text)
+        assert "FAILED tests/test_critical.py::test_boom" in out  # 头部失败行
+        assert "1 failed, 400 passed" in out                       # 尾部汇总
+        assert "退出码: 1" in out                                  # 退出码
+
+    def test_grep_keeps_matches_not_just_count(self):
+        """Grep 大结果：首尾命中的 path:line 必须保留，不是只剩字符数。"""
+        hits = "\n".join(f"src/mod_{i}.py:{i}: def handler_{i}()" for i in range(300))
+        assert len(hits) > _THRESHOLD
+        out = llm._compress_tool_result("grep_code", hits)
+        assert len(out) < len(hits)
+        assert "src/mod_0.py:0: def handler_0()" in out      # 首条命中
+        assert "src/mod_299.py:299: def handler_299()" in out  # 末条命中
+
+    def test_write_file_large_is_stubbed(self):
+        """write_file 大输出=回显已写入内容=噪声，stub 即可（不必保留）。"""
+        text = "x" * 5000
+        out = llm._compress_tool_result("write_file", text)
+        assert len(out) < 100
+        assert "write_file" in out
+        assert "x" * 50 not in out  # 内容确实没保留

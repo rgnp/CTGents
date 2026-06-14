@@ -686,34 +686,49 @@ def _get_eager_executor() -> _ThreadPoolExecutor:
     return _EAGER_EXECUTOR
 
 
-# 工具语义摘要：只需显示名称+字符数的工具
-_SIMPLE_SUMMARY_TOOLS = frozenset({
-    "read_file", "write_file", "grep_code", "search_web", "run_python",
-    "git_status", "git_diff", "git_log", "git_commit", "git_push",
-})
+# 大结果里"内容即噪声"的工具：超阈值的大输出 = 把已知输入回显（write_file 回显
+# 刚写入的文件、edit/delete 回执），换成 stub 不丢信号。其余工具的大输出含信号
+# （测试失败行/grep 命中/汇总/退出码），用头尾保留而非整段丢弃。
+_STUB_WHEN_LARGE = frozenset({"write_file", "edit_file_lines", "delete_file"})
+
+# 头尾保留预算（字符）：尾部多留——pytest 汇总/退出码/最终报错都在尾部。
+_KEEP_HEAD_CHARS = 1000
+_KEEP_TAIL_CHARS = 1200
+
+
 def _summarize_tool_result(tool_name: str, result: str) -> str:
-    """生成语义化摘要：按工具类型提取关键信息，保留可续做性。"""
-    content_len = len(result)
-    line_count = result.count("\n") + 1 if result.strip() else 0
+    """压缩过大工具结果，但保留信号（不再把内容整个换成 stub）。
 
-    # 有特殊摘要逻辑的工具
-    if tool_name == "run_command":
-        return _summarize_run_command(result, line_count, content_len)
-    if tool_name in _SIMPLE_SUMMARY_TOOLS:
-        return f"[{tool_name}] ({content_len:,} 字符)"
-
-    head = result.split("\n")[0][:120] if result else ""
-    return f"[{tool_name}] {head}... ({content_len:,} 字符)" if head else f"[{tool_name}] ({content_len:,} 字符)"
+    旧版对非 read 工具一律换成 `[tool] (N 字符)`，把测试失败/grep 命中全扔了——
+    agent 看不到失败就重跑 → 更多请求更多 token，反成缓存负担。改为头尾保留：
+    失败行多在前、汇总/退出码在尾，两端都不丢，中段才省。read_file 仍由
+    SKIP_COMPRESS 豁免（在 _compress_tool_result 提前返回，不进这里）。
+    """
+    if tool_name in _STUB_WHEN_LARGE:
+        return f"[{tool_name}] 完成（输出 {len(result):,} 字符已省略，内容即已写入的输入）"
+    return _head_tail_keep(result, tool_name)
 
 
-def _summarize_run_command(result: str, line_count: int, content_len: int) -> str:
-    """Summarize run_command 结果：解析 JSON 提取 exit_code。"""
-    exit_code = "?"
-    with contextlib.suppress(json.JSONDecodeError, TypeError):
-        parsed = json.loads(result)
-        if isinstance(parsed, dict):
-            exit_code = parsed.get("exit_code", "?")
-    return f"[run_command] -> exit {exit_code}, {line_count} 行 ({content_len:,} 字符)"
+def _head_tail_keep(text: str, tool_name: str) -> str:
+    """保留头部 + 尾部、省中段，并尽量贴行边界。比首尾截断更稳：尾部信号不丢。"""
+    total = len(text)
+    if total <= _KEEP_HEAD_CHARS + _KEEP_TAIL_CHARS:
+        return text
+    head = text[:_KEEP_HEAD_CHARS]
+    nl = head.rfind("\n")
+    if nl > 0:
+        head = head[:nl]
+    tail = text[-_KEEP_TAIL_CHARS:]
+    nl = tail.find("\n")
+    if nl >= 0:
+        tail = tail[nl + 1:]
+    omitted = total - len(head) - len(tail)
+    return (
+        f"{head}\n\n"
+        f"…（[{tool_name}] 共 {total:,} 字符，省略中段 {omitted:,} 字符；"
+        f"失败行/汇总/退出码通常在尾部，已保留）…\n\n"
+        f"{tail}"
+    )
 
 
 def _compress_tool_result(tool_name: str, result: str) -> str:
