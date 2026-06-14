@@ -183,6 +183,53 @@ def process_turn(
     return reply
 
 
+def run_agent_turn(ctx: CacheContext, user_input: str,
+                   session_id: str | None) -> str | None:
+    """主干：一次 agent 驱动。所有入口都走这里，保证不管从哪进、循环都是同一圈。
+
+    对话分支(process_turn：思考牙→预读→run_conversation→完成/引用审计) →
+    若本轮推进了 current.md 则升级到任务分支(run_task_continuation 自主续跑)。
+
+    曾经 /retry 和中断"指导"直接调 run_conversation、绕过 process_turn 的审计与任务
+    续跑——同一 agent 从不同入口跑的不是同一个循环。收敛到此函数后各入口一致、闭合。
+    """
+    from .task_loop import made_task_progress, run_task_continuation
+    from .tasks import read_current as _read_current
+
+    task_before = _read_current()
+    sid = [session_id]
+    on_token, has_output = _make_display()
+    _start_esc_listener()
+    try:
+        process_turn(
+            ctx, user_input, on_token, _on_tool,
+            on_progress=lambda: sid.__setitem__(0, save_session(ctx.all, sid[0])),
+            session_id=sid[0] or "",
+        )
+    finally:
+        _stop_esc_listener()
+    if has_output():
+        print()
+
+    # 对话分支推进了 current.md → 升级到任务分支
+    if made_task_progress(task_before, _read_current()):
+        def _task_drive(c, text):
+            ot, ho = _make_display()
+            process_turn(
+                c, text, ot, _on_tool,
+                on_progress=lambda: sid.__setitem__(0, save_session(c.all, sid[0])),
+                session_id=sid[0] or "",
+            )
+            if ho():
+                print()
+        _start_esc_listener()
+        try:
+            run_task_continuation(ctx, _task_drive, on_status=print)
+        finally:
+            _stop_esc_listener()
+    return sid[0]
+
+
 def _handle_goal(ctx: CacheContext, goal_text: str, session_id: str | None) -> str | None:
     """驱动一次任务闭环(/goal): worker 走真实 process_turn 管线, 评分隔离在 outcome。"""
     from .outcome import parse_goal, run_outcome
@@ -506,56 +553,11 @@ def main() -> None:
                 if r.retry:
                     last_user = ctx.last_user_content() or ""
                     if last_user:
-                        on_token, has_output = _make_display()
-                        sid = [session_id]
-                        _start_esc_listener()
-                        try:
-                            run_conversation(
-                                ctx, last_user, on_token, _on_tool,
-                                on_progress=lambda sid=sid: sid.__setitem__(0, save_session(ctx.all, sid[0])),
-                                session_id=session_id,
-                            )
-                        finally:
-                            _stop_esc_listener()
-                        session_id = sid[0]
-                        if has_output():
-                            print()
+                        session_id = run_agent_turn(ctx, last_user, session_id)
                 continue
 
             try:
-                from .tasks import read_current as _read_current
-                _task_before = _read_current()
-                on_token, has_output = _make_display()
-                sid = [session_id]
-                _start_esc_listener()
-                try:
-                    process_turn(
-                        ctx, user_input, on_token, _on_tool,
-                        on_progress=lambda sid=sid: sid.__setitem__(0, save_session(ctx.all, sid[0])),
-                        session_id=session_id,
-                    )
-                finally:
-                    _stop_esc_listener()
-                session_id = sid[0]
-                if has_output():
-                    print()
-                from .task_loop import made_task_progress, run_task_continuation
-                if made_task_progress(_task_before, _read_current()):
-                    def _task_drive(c, text, sid=sid):
-                        ot, ho = _make_display()
-                        process_turn(
-                            c, text, ot, _on_tool,
-                            on_progress=lambda: sid.__setitem__(0, save_session(c.all, sid[0])),
-                            session_id=sid[0] or "",
-                        )
-                        if ho():
-                            print()
-                    _start_esc_listener()
-                    try:
-                        run_task_continuation(ctx, _task_drive, on_status=print)
-                    finally:
-                        _stop_esc_listener()
-                    session_id = sid[0]
+                session_id = run_agent_turn(ctx, user_input, session_id)
             except BaseException as e:
                 if isinstance(e, KeyboardInterrupt):
                     _stop_esc_listener()
@@ -565,20 +567,7 @@ def main() -> None:
                     except (EOFError, KeyboardInterrupt):
                         guide = ""
                     if guide:
-                        on_token, has_output = _make_display()
-                        sid = [session_id]
-                        _start_esc_listener()
-                        try:
-                            run_conversation(
-                                ctx, guide, on_token, _on_tool,
-                                on_progress=lambda sid=sid: sid.__setitem__(0, save_session(ctx.all, sid[0])),
-                                session_id=session_id,
-                            )
-                        finally:
-                            _stop_esc_listener()
-                        session_id = sid[0]
-                        if has_output():
-                            print()
+                        session_id = run_agent_turn(ctx, guide, session_id)
                     continue
 
                 if isinstance(e, SystemExit) and e.code == 0:

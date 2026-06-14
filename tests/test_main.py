@@ -99,3 +99,42 @@ def test_finalize_session_reflect_failure_not_blocking(monkeypatch):
     lines = main._finalize_session(ctx, None)
     assert any("会话已保存" in ln for ln in lines)
     assert any("退出" in ln for ln in lines)
+
+
+# ── 主干 run_agent_turn：对话分支 → 按 current.md 推进升级任务分支 ──
+
+
+def _stub_backbone(monkeypatch, calls, *, progressed):
+    """把 run_agent_turn 的外部依赖全 stub 掉，只留控制流可观察。"""
+    import src.task_loop as task_loop
+    import src.tasks as tasks
+    monkeypatch.setattr(main, "process_turn",
+                        lambda *a, **k: calls.append("process_turn") or "")
+    monkeypatch.setattr(main, "_make_display",
+                        lambda: ((lambda _t: None), (lambda: False)))
+    monkeypatch.setattr(main, "_start_esc_listener", lambda: None)
+    monkeypatch.setattr(main, "_stop_esc_listener", lambda: None)
+    monkeypatch.setattr(main, "save_session", lambda *a: "sid")
+    monkeypatch.setattr(tasks, "read_current", lambda: "x")
+    monkeypatch.setattr(task_loop, "made_task_progress", lambda _b, _a: progressed)
+    monkeypatch.setattr(task_loop, "run_task_continuation",
+                        lambda *a, **k: calls.append("task_continuation"))
+
+
+def test_run_agent_turn_chat_branch_only(monkeypatch):
+    """没推进 current.md → 只走对话分支，不升级任务分支。"""
+    from src.cache_context import CacheContext
+    calls: list[str] = []
+    _stub_backbone(monkeypatch, calls, progressed=False)
+    main.run_agent_turn(CacheContext(), "聊一句", "sid0")
+    assert calls == ["process_turn"]
+
+
+def test_run_agent_turn_escalates_to_task_branch(monkeypatch):
+    """推进了 current.md → 对话分支之后升级到任务分支(run_task_continuation)。"""
+    from src.cache_context import CacheContext
+    calls: list[str] = []
+    _stub_backbone(monkeypatch, calls, progressed=True)
+    main.run_agent_turn(CacheContext(), "做个任务", "sid0")
+    assert calls[0] == "process_turn"          # 先对话分支
+    assert "task_continuation" in calls        # 再升级任务分支
