@@ -212,5 +212,43 @@ class TestJobExecute:
         out = exec_mod.execute("poll", {"job_id": job_id})
         assert "y" in out, f"got: {out!r}"
 
+
+class TestPollLongPoll:
+    """long-poll：poll 内部阻塞等到完成或等够预算，避免 agent ~1s 一次忙等长任务。
+
+    回归：取消 poll 去重后，poll 立即返回"运行中"→ agent 紧贴着反复 poll（每次=一整个
+    LLM 往返、烧前缀缓存）。改成内部阻塞后，运行中的作业等够预算才返回、完成则立即返回。
+    """
+
+    def test_running_job_waits_bounded(self, monkeypatch):
+        """运行中的作业：等约 poll_wait_seconds 才返回（不立即返回、也不傻等到作业结束）。"""
+        from types import SimpleNamespace
+        exec_mod._jobs.clear()
+        monkeypatch.setattr(exec_mod, "RUNTIME", SimpleNamespace(poll_wait_seconds=0.3))
+        job_id = exec_mod._start_job(
+            "python -c \"__import__('time').sleep(30)\"", timeout=120, workdir=None)
+        try:
+            t0 = time.time()
+            out = exec_mod.poll_job(job_id)
+            dur = time.time() - t0
+            assert "仍在运行" in out, f"got: {out!r}"
+            assert 0.25 <= dur <= 5.0, f"应等约 0.3s（非立即、非傻等 30s），实际 {dur:.2f}s"
+        finally:
+            exec_mod._kill_all_jobs()
+
+    def test_finished_job_returns_immediately(self, monkeypatch):
+        """已完成的作业：立即返回结果，不傻等满预算。"""
+        from types import SimpleNamespace
+        exec_mod._jobs.clear()
+        monkeypatch.setattr(exec_mod, "RUNTIME", SimpleNamespace(poll_wait_seconds=30))
+        job_id = exec_mod._start_job(
+            "python -c \"print('fin')\"", timeout=60, workdir=None)
+        time.sleep(0.8)  # 让它先跑完
+        t0 = time.time()
+        out = exec_mod.poll_job(job_id)
+        dur = time.time() - t0
+        assert "fin" in out, f"got: {out!r}"
+        assert dur < 5.0, f"作业已完成应立即返回，不应傻等满 30s 预算，实际 {dur:.2f}s"
+
     def test_unknown_tool_returns_none(self):
         assert exec_mod.execute("nonexistent", {}) is None

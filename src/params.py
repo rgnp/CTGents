@@ -128,6 +128,10 @@ class RuntimeParams:
     # 默认 30s/run_async 默认 120s → 跑测试必超时被杀，逼 agent 去 async+反复 poll。
     # 同步 pytest 命令的 timeout 自动抬到此值，让它一轮跑完拿结果，不超时不轮询。
     test_timeout_floor: int = _env_int("CTG_TEST_TIMEOUT_FLOOR", 240)
+    # poll 长轮询等待预算（秒）：poll 内部阻塞等到作业完成或等够此值才返回。取消 poll
+    # 去重后，poll 立即返回"运行中"会让 agent ~1s 一次忙等长任务——每次 poll = 一整个
+    # LLM 往返、重发上下文烧前缀缓存。内部阻塞把上百次往返塌成十来次；不超过作业剩余超时。
+    poll_wait_seconds: int = _env_int("CTG_POLL_WAIT_SECONDS", 15)
 
 
 RUNTIME = RuntimeParams()

@@ -115,16 +115,25 @@ def _poll_job(job_id: str) -> str:
     timeout = job["timeout"]
     elapsed = time.time() - job["created_at"]
 
-    if elapsed > timeout:
+    def _expire() -> str:
         with contextlib.suppress(OSError):
             proc.kill()
         with _jobs_lock:
             _jobs.pop(job_id, None)
         return f"⏱️ job {job_id} 超时（>{timeout}s）: {job['command']}"
 
+    if elapsed > timeout:
+        return _expire()
+
+    # long-poll：内部阻塞等到作业完成或等够预算才返回，避免 agent ~1s 一次忙等长任务
+    # （每次 poll = 一整个 LLM 往返）。等待不超过作业剩余超时；锁已释放，长阻塞不占锁。
+    wait = min(RUNTIME.poll_wait_seconds, max(timeout - elapsed, 0))
     try:
-        proc.wait(timeout=0)
+        proc.wait(timeout=wait)
     except subprocess.TimeoutExpired:
+        elapsed = time.time() - job["created_at"]
+        if elapsed > timeout:
+            return _expire()
         return f"🔄 job {job_id}: 仍在运行（{elapsed:.0f}s / {timeout}s）: {job['command']}"
 
     stdout_bytes, stderr_bytes = proc.communicate()
