@@ -13,7 +13,7 @@ from ..config import get_tavily_client
 
 tavily = get_tavily_client()
 
-# ── TTL 缓存 ──
+# -- TTL 缓存 --
 _CACHE_TTL_SEARCH = 300    # 搜索结果 5 分钟有效
 _CACHE_TTL_PAGE = 600      # 网页成功内容 10 分钟有效
 _CACHE_TTL_ERROR = 30      # 网络/超时等临时错误 30 秒有效（快速重试）
@@ -183,10 +183,11 @@ def search_web(query: str) -> str:
         return cached
 
     from tavily import UsageLimitExceededError
+    from tavily.errors import ForbiddenError
 
     try:
         result = _tavily_search_with_timeout(query)
-    except UsageLimitExceededError:
+    except (UsageLimitExceededError, ForbiddenError):
         result = _try_self_heal(query)
         if result is None:
             return "Tavily API 配额耗尽，所有 key 均已不可用。"
@@ -207,8 +208,8 @@ def search_web(query: str) -> str:
 def _try_self_heal(query: str):
     """自愈：重读 .env → 重建 tavily 客户端 → 用所有 key 重试一次。
 
-    当 Tavily 报 quota exceeded 时调用。如果磁盘 .env 被另一会话加过新 key，
-    这里会捡起来——agent 不需要重启或人工 reload。
+    当 Tavily 报 quota exceeded / forbidden 时调用。如果磁盘 .env 被另一会话
+    加过新 key，这里会捡起来——agent 不需要重启或人工 reload。
 
     返回 search result dict，失败返回 None。
     """
@@ -218,6 +219,7 @@ def _try_self_heal(query: str):
 
     from dotenv import load_dotenv
     from tavily import InvalidAPIKeyError, UsageLimitExceededError
+    from tavily.errors import ForbiddenError as _ForbiddenError
 
     from ..config import MultiKeyTavilyClient
 
@@ -230,7 +232,7 @@ def _try_self_heal(query: str):
     tavily = MultiKeyTavilyClient(keys)
     try:
         return _tavily_search_with_timeout(query)
-    except (UsageLimitExceededError, InvalidAPIKeyError, TimeoutError):
+    except (UsageLimitExceededError, _ForbiddenError, InvalidAPIKeyError, TimeoutError):
         return None
 
 

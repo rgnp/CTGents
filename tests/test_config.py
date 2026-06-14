@@ -2,6 +2,7 @@
 
 import pytest
 from tavily import InvalidAPIKeyError, UsageLimitExceededError
+from tavily.errors import ForbiddenError
 
 from src.config import MultiKeyTavilyClient
 
@@ -55,7 +56,6 @@ class TestMultiKeyTavilyClient:
 
         # Mock _promote_current_key：保留状态变更，跳过 .env 磁盘写入
         def mock_promote():
-            # 手动做内存状态变更（避免写 .env）
             promoted_key = client._api_keys[client._idx]
             client._api_keys = [promoted_key] + [
                 k for i, k in enumerate(client._api_keys) if i != client._idx
@@ -113,3 +113,33 @@ class TestMultiKeyTavilyClient:
         assert result["results"][0]["title"] == "from good key"
         assert client._idx == 0
         assert client._api_keys == ["good-key", "bad-key"]
+
+    def test_rotate_on_forbidden(self, monkeypatch):
+        """ForbiddenError (HTTP 432 额度耗尽) 也应触发轮换 → promote 持久化。"""
+        client = MultiKeyTavilyClient(["exhausted", "working"])
+
+        c0 = client._client
+        monkeypatch.setattr(c0, "search", _raise(ForbiddenError("plan limit")))
+
+        client._rotate()
+        c1 = client._client
+        monkeypatch.setattr(
+            c1, "search",
+            lambda *a, **kw: {"results": [{"title": "from working"}]},
+        )
+        client._idx = 0
+
+        # Mock _promote_current_key: skip .env write
+        def mock_promote():
+            promoted_key = client._api_keys[client._idx]
+            client._api_keys = [promoted_key] + [
+                k for i, k in enumerate(client._api_keys) if i != client._idx
+            ]
+            client._idx = 0
+            client._clients = {}
+        monkeypatch.setattr(client, "_promote_current_key", mock_promote)
+
+        result = client.search("test")
+        assert result["results"][0]["title"] == "from working"
+        assert client._idx == 0
+        assert client._api_keys == ["working", "exhausted"]

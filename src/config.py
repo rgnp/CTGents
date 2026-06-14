@@ -5,6 +5,7 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 from tavily import InvalidAPIKeyError, TavilyClient, UsageLimitExceededError
+from tavily.errors import ForbiddenError
 
 from .params import CONTEXT, EVOLUTION, RUNTIME
 
@@ -18,11 +19,11 @@ def _require_env(key: str) -> str:
     return value
 
 
-# ── API 密钥 ──
+# -- API 密钥 --
 DEEPSEEK_API_KEY: str = _require_env("DEEPSEEK_API_KEY")
 DEEPSEEK_BASE_URL: str = os.getenv("DEEPSEEK_BASE_URL", "https://api.deepseek.com")
 
-# ── 模型配置（始终 Pro：固定单模型才能养肥 DeepSeek 前缀缓存）──
+# -- 模型配置（始终 Pro：固定单模型才能养肥 DeepSeek 前缀缓存）--
 # Pro: 强推理/长代码（3元/M入, 6元/M出），64K 给大型重构留空间
 MODEL_PRO: str = os.getenv("MODEL_PRO", "deepseek-v4-pro")
 PRO_MAX_TOKENS: int = int(os.getenv("PRO_MAX_TOKENS", "65536"))
@@ -38,7 +39,7 @@ if not TAVILY_API_KEYS:
 # Semantic Scholar（可选）：scan_conf 查顶会论文用；缺省为空，工具会降级提示
 S2_API_KEY: str = os.getenv("S2_API_KEY", "")
 
-# ── 行为旋钮（真值在 params.py 按域分组；此处仅绑定本地名保持 import 兼容）──
+# -- 行为旋钮（真值在 params.py 按域分组；此处仅绑定本地名保持 import 兼容）--
 TOOL_LOOP_THRESHOLD: float = CONTEXT.tool_loop_threshold
 MAX_CONTEXT_TOKENS: int = CONTEXT.max_context_tokens
 EVOLVE_REQUIRE_CLEAN: bool = EVOLUTION.require_clean  # 仍由 EVOLVE_REQUIRE_CLEAN env 覆盖
@@ -49,7 +50,7 @@ TOOL_RESULT_BUDGET: float = RUNTIME.tool_result_budget
 TOKEN_PER_CHAR_CJK: float = RUNTIME.token_per_char_cjk
 TOKEN_PER_CHAR_OTHER: float = RUNTIME.token_per_char_other
 
-# ── 路径 ──
+# -- 路径 --
 SESSION_DIR: str = str(Path(__file__).parent.parent / "sessions")
 MEMORY_DIR: str = str(Path(__file__).parent.parent / "memory")
 # 任务归档:架构教训多写在这里。recall 也索引它，否则它对检索是"只写不读的坟场"。
@@ -57,10 +58,11 @@ ARCHIVE_DIR: str = str(Path(__file__).parent.parent / "tasks" / "archive")
 
 
 class MultiKeyTavilyClient:
-    """TavilyClient wrapper：多 API key 自动轮换。
+    """TavilyClient wrapper: multi API key auto-rotation.
 
-    遇 UsageLimitExceededError 或 InvalidAPIKeyError 时自动切下一个 key 重试；
-    所有 key 耗尽后再抛出异常。其余方法透明代理到当前 key 的 TavilyClient。
+    Automatically rotates to next key on UsageLimitExceededError,
+    ForbiddenError, or InvalidAPIKeyError. Raises after all keys exhausted.
+    Other methods transparently delegate to current TavilyClient.
     """
 
     def __init__(self, api_keys: list[str]) -> None:
@@ -77,16 +79,17 @@ class MultiKeyTavilyClient:
         return self._clients[self._idx]
 
     def _rotate(self) -> bool:
-        """切换到下一个 key。成功返回 True，无更多 key 返回 False。"""
+        """Switch to next key. Returns True on success, False if no more keys."""
         if self._idx + 1 >= len(self._api_keys):
             return False
         self._idx += 1
         return True
 
     def _promote_current_key(self) -> None:
-        """将当前可用 key 排到 .env 的 TAVILY_API_KEYS 最前面，持久化。
+        """Persist current working key as first in .env TAVILY_API_KEYS.
 
-        跨会话/自愈重建后自然从可用 key 开始，不再每次撞已耗尽的 key 0。
+        Ensures cross-session / self-heal rebuilds start from a known-good key
+        instead of hitting already-exhausted key 0 every time.
         """
         if self._idx == 0:
             return
@@ -95,7 +98,7 @@ class MultiKeyTavilyClient:
         self._api_keys = new_keys
         self._idx = 0
         self._clients = {}
-        # 写回 .env 文件
+        # Write back to .env file
         env_path = Path(__file__).resolve().parent.parent / ".env"
         lines = env_path.read_text(encoding="utf-8").splitlines(keepends=True)
         new_lines: list[str] = []
@@ -105,7 +108,7 @@ class MultiKeyTavilyClient:
             else:
                 new_lines.append(line)
         env_path.write_text("".join(new_lines), encoding="utf-8")
-        # 同步 os.environ，同一进程内 load_dotenv(override=True) 也能拿最新值
+        # Sync os.environ so same-process load_dotenv(override=True) picks it up
         os.environ["TAVILY_API_KEYS"] = ",".join(new_keys)
 
     def search(self, *args: object, **kwargs: object) -> dict:
@@ -116,7 +119,7 @@ class MultiKeyTavilyClient:
                 if rotated:
                     self._promote_current_key()
                 return result
-            except (UsageLimitExceededError, InvalidAPIKeyError):
+            except (UsageLimitExceededError, ForbiddenError, InvalidAPIKeyError):
                 if not self._rotate():
                     raise
                 rotated = True
