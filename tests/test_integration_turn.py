@@ -167,6 +167,22 @@ def test_thinking_stance_rides_tail_once(monkeypatch):
     assert "线索" in tail, "思考提醒必须出现在尾部系统块"
 
 
+def test_evidence_stance_rides_tail_once(monkeypatch):
+    """每轮恒挂一句"信心要匹配证据/没看够别下定论"在 log 尾，多轮不累积。
+
+    治"条件不全还满分自信下结论"。同思考牙：前缀散文翻不动根深蒂固默认，必须挂尾
+    靠 recency；strip-then-append 失灵则逐轮累积撑爆尾部。
+    """
+    ctx = _prefix_ctx()
+    _mock_llm(monkeypatch, ("好", []), ("好", []))
+    _drive_turn(ctx, "随便说点")
+    _drive_turn(ctx, "再说点")
+    assert sum(1 for m in ctx.log if m.get("_evidence_stance")) == 1
+    api = ctx.send()
+    tail = "\n".join(m.get("content") or "" for m in api if m["role"] == "system")
+    assert "证据" in tail, "证据提醒必须出现在尾部系统块"
+
+
 # ── 任务闭环:worker 走真实管线,评分隔离,差距回灌 ─────────────
 
 def test_goal_loop_full_pipeline(monkeypatch):

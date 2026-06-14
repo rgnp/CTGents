@@ -149,6 +149,27 @@ def _inject_thinking_stance(ctx: CacheContext) -> None:
     )
 
 
+_EVIDENCE_NUDGE = (
+    "[提醒] 下结论前先核证据够不够：这个判断依赖哪些条件？我这一轮真读/grep/搜过，"
+    "还是凭印象？条件不全就先补（read/grep/search）；补不全就把信心收住、明说还差什么——"
+    "别拿不全的输入给满分结论。"
+)
+
+
+def _inject_evidence_stance(ctx: CacheContext) -> None:
+    """每轮在 log 尾挂一句"信心要匹配证据"的常驻提醒：没看够别下定论。
+
+    治 ④可信 最大的一类——条件不全却满分自信下结论（不是编造，是"没看就断言"）。
+    与 _inject_thinking_stance 互补：那条管"检索≠答案"，这条管"证据不全≠可下结论"。
+    挂尾靠 recency 扭默认；不设门（强制"先调查"=已删的 auto-plan，过度触发）。
+    """
+    ctx.log[:] = [m for m in ctx.log if not m.get("_evidence_stance")]
+    ctx.log.append(
+        {"role": "system", "content": _EVIDENCE_NUDGE,
+         "_volatile": True, "_evidence_stance": True}
+    )
+
+
 def process_turn(
     ctx: CacheContext,
     user_input: str,
@@ -165,6 +186,8 @@ def process_turn(
     """
     # 思考牙：检索命中是线索不是答案
     _inject_thinking_stance(ctx)
+    # 证据牙：信心要匹配证据，没看够别下定论
+    _inject_evidence_stance(ctx)
     # 预读优化：用户提到了文件路径，先读入上下文
     pre_msgs = _preread_files(user_input, ctx)
     if pre_msgs:

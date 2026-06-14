@@ -150,6 +150,7 @@ tasks/            任务追踪（current.md + archive/）
 
 以下在 `main.py` 中挂载，确实在跑：
 - `_inject_thinking_stance`：每轮挂尾"检索是线索不是答案"
+- `_inject_evidence_stance`：每轮挂尾"信心要匹配证据，没看够别下定论"
 - `_inject_completion_audit`：扫上一轮 log，改动晚于绿测则挂尾提示
 - `_inject_citation_audit`：扫最终回复，引用未取证文件则挂尾提示
 - `_append_volatile_context`：注入记忆索引 + 未完成长任务 + 会话钉板
