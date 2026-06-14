@@ -76,7 +76,7 @@ tasks/            任务追踪（current.md + archive/）
 
 | # | 禁止 |
 |---|------|
-| P5 | **修改 `guard.py`** — 已机械保护（write_file 被 `is_protected()` 拦截），但有脚本绕过路径，你不得利用 |
+| P5 | **修改不可变安全核**（guard/tool_guard/gate_audit/pre-commit）— write_file 经 `is_immutable()` 拦截；run_command 写有侧门，你不得利用绕过 |
 | P6 | 新建文档文件除非用户要求 |
 | P7 | 在根目录新建非标准文件（C14 拦截 .py/.json/.txt/.log，其他后缀仍靠你） |
 | P8 | 回复用 emoji |
@@ -118,7 +118,7 @@ tasks/            任务追踪（current.md + archive/）
 - **存前检查** — 已在 AGENTS.md 里？不存
 - **旧了就删** — 引用了已删除的文件/命令？删
 - **不抄 AGENTS.md** — 记忆不是行为准则的副本
-- **注意**：会话关闭时 `_finalize_session` 会机械调用 `extract_lessons` + `save_lessons` 自动收割策略记忆。你仍然应该在对话中主动存用户偏好/知识/重要上下文——机械收割只覆盖失败模式，不覆盖你的主动判断。
+- **注意**：会话关闭时 `_finalize_session` 机械收割两类——`extract_lessons`+`save_lessons`(失败模式) 和 `user_model.harvest_and_save`(对用户的理解→`user-profile`)。用户偏好已自动收割，不必手动存；但知识缺口/重要项目上下文这类机械收割不覆盖的，仍主动 `remember`。
 
 ### 会话钉板（`pin`/`unpin`）
 治长会话内漂移。"绝不能忘"的决定用 `pin` 钉一句话，决定失效用 `unpin`。
@@ -134,10 +134,9 @@ tasks/            任务追踪（current.md + archive/）
 | 拦截层 | 文件 | 保障的规则 |
 |---|---|---|
 | 工具边界 | `tool_guard.py` → `check()` | **C3** 文件修改限 cwd, **C10** 读后写, **C14** 文件放对目录 + src/tools/ 禁新建 .py, **P1** 禁 `git add -A`, **P2** 禁 force-push 到 main/master |
-| 文件层 | `file.py` → `is_protected()` | **P5** 禁止修改 guard/tool_guard/coverage_gate/main/validate/commands/AGENTS.md/pre-commit 等 9 个受保护文件 |
-| 覆盖率门禁 | `coverage_gate.py` → `can_modify()` | 改 .py 文件前检查 tier 0/1/2/3 覆盖率阈值；未测试文件拒绝修改 |
+| 文件层 | `file.py` → `is_immutable()` / `is_core()`（见 `guard.py`） | **不可变核**（guard/tool_guard/gate_audit/pre-commit 共 4 个）拒写；**核心业务**（main/commands/validate/cache_context/llm/evolve/evolution_runner/tools.__init__）可写但走 import 冒烟安全带，挂了自动回滚 |
 | 提交闸 | `scripts/git-hooks/pre-commit` | **C1** 裸 except (ruff), **C2** 密钥格式扫描, **C6** 类型注解 (ruff), **C7** 函数行数 (ruff), **C13** lint 零错误 + 全量 pytest |
-| 管线硬节点 | `_finalize_session` | **C17** 会话关闭时自动 `extract_lessons` + `save_lessons` → 机械记忆收割 |
+| 管线硬节点 | `_finalize_session` | **C17** 会话关闭机械收割：`extract_lessons`+`save_lessons`(失败模式) + `user_model.harvest_and_save`(用户理解→user-profile) |
 | 管线硬节点 | `search_web` → `_try_self_heal` | Tavily quota 耗尽自动重读 .env + 重建 MultiKeyTavilyClient → 跨会话修复自动加载 |
 | 事后审计 | `_inject_completion_audit` | 代码改动晚于最后绿测 → 挂尾提示 |
 | 事后审计 | `_inject_citation_audit` | 引用未取证文件的 `path:line` → 挂尾提示 |
