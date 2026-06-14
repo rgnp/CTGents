@@ -87,6 +87,10 @@ def start_evolution_run(goal: str, root: Path | None = None) -> EvolutionRunStar
     """
     project_root = (root or PROJECT_ROOT).resolve()
 
+    # 失败侧接线：仍挂着的旧 active run = 它从没提交成功（提交会经 git.py 关闭并清 active）。
+    # 不归档就会被本次覆盖 active.json 而静默蒸发。先把它归档，否则放弃的尝试永不入档案。
+    _close_stale_active_run()
+
     # 干净基线闸（默认关）：脏树上拒绝启动，避免提交时把先前 WIP 一锅端
     from .config import EVOLVE_REQUIRE_CLEAN
     if EVOLVE_REQUIRE_CLEAN:
@@ -197,6 +201,27 @@ def complete_evolution_run(run_id: str, status: RunnerStatus | str, note: str = 
     if _read_active_run_id() == run_id:
         ACTIVE_RUN_FILE.unlink(missing_ok=True)
     return run
+
+
+def _close_stale_active_run() -> None:
+    """启动新 run 前关闭仍挂着的旧 active run（未提交=未完成），归档为 partial。
+
+    失败类（同 reflect-after-return 那类"声明了没接线"）：complete_evolution_run 只在
+    git_commit 成功时被以 PASSED 调用，FAILED/STOPPED **全项目无人触发** → 放弃/失败的
+    run 永远 ACTIVE、被下次 /evolve 覆盖 active.json 而静默蒸发。后果：进化档案只录成功、
+    success_rate 恒 ~100% 是假数、find_similar 学不到失败。这里把"被新 run 顶掉的旧 run"
+    归档为 partial（连同它记录的失败 validation），补上失败侧那只眼。
+    """
+    stale = load_active_evolution_run()
+    if stale is None:
+        return
+    try:
+        complete_evolution_run(
+            stale.run_id, RunnerStatus.STOPPED,
+            note="superseded by new evolution run (never committed)",
+        )
+    except Exception as e:
+        logger.warning("关闭旧 active run 失败（不阻断新 run 启动）: %s", e)
 
 
 def load_evolution_run(run_id: str) -> EvolutionRun:
