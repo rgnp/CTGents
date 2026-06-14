@@ -466,6 +466,13 @@ def _finalize_session(ctx: CacheContext, session_id: str | None) -> list[str]:
                 lines.append(note)
         except Exception as e:
             logger.warning("用户理解收割失败: %s", e)
+        try:
+            from .project_model import harvest_and_save as _harvest_project
+            note = _harvest_project(ctx.all)
+            if note:
+                lines.append(note)
+        except Exception as e:
+            logger.warning("项目知识收割失败: %s", e)
     from .session_pins import promote_durable
     promoted = promote_durable()
     if promoted:

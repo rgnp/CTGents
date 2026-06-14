@@ -202,3 +202,22 @@ class UserModelParams:
 
 
 USER_MODEL = UserModelParams()
+
+
+@dataclass(frozen=True)
+class ProjectKnowledgeParams:
+    """项目/领域知识收割旋钮（收割 prompt 等结构性细节留 project_model.py）。
+
+    与 UserModelParams 对称：user_model 收"懂你这个人"，本组收"懂你这摊活"——
+    durable 的项目/领域事实（数据集/约定/造过的工具/领域门道/项目约束）。
+    type=knowledge → 摘要注入 + recall 取详情（不全文注入，防长知识烧前缀缓存）。
+    """
+
+    enabled: bool = _env_bool("CTG_PROJECT_KNOWLEDGE_ENABLED", True)
+    min_user_messages: int = _env_int("CTG_PROJECT_KNOWLEDGE_MIN_USER_MSGS", 3)
+    max_body_chars: int = _env_int("CTG_PROJECT_KNOWLEDGE_MAX_BODY_CHARS", 1800)
+    digest_char_budget: int = _env_int("CTG_PROJECT_KNOWLEDGE_DIGEST_BUDGET", 7000)
+    harvest_retries: int = _env_int("CTG_PROJECT_KNOWLEDGE_HARVEST_RETRIES", 2)
+
+
+PROJECT_KNOWLEDGE = ProjectKnowledgeParams()
