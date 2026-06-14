@@ -22,6 +22,7 @@ _CACHE_MAX_SIZE = 200      # 最大条目数
 _PAGE_MAX_CHARS = 8000     # 页面内容最大字符数（超出截断）
 _PAGE_MAX_HTML_BYTES = 300_000  # 下载 HTML 最大字节数（超出截断，避免 trafilatura 解析巨型页面）
 _FETCH_TIMEOUT = 8           # HTTP 请求超时秒数（8s 足够，15s 过宽松）
+_TAVILY_TIMEOUT = 10         # Tavily API 调用超时秒数
 
 _web_cache: dict[str, dict[str, Any]] = {}
 _cache_hits: int = 0
@@ -148,8 +149,35 @@ def format_search_results(response: dict, query: str) -> str:
     return "\n".join(lines)
 
 
+def _tavily_search_with_timeout(query: str) -> dict:
+    """带超时的 Tavily 搜索调用。"""
+    import threading
+
+    result_container: dict | None = None
+    error_container: Exception | None = None
+
+    def _run():
+        nonlocal result_container, error_container
+        try:
+            result_container = tavily.search(query, max_results=5)
+        except Exception as e:
+            error_container = e
+
+    t = threading.Thread(target=_run, daemon=True)
+    t.start()
+    t.join(timeout=_TAVILY_TIMEOUT)
+
+    if t.is_alive():
+        raise TimeoutError(f"Tavily 搜索超时（{_TAVILY_TIMEOUT}s）")
+    if error_container is not None:
+        raise error_container
+    if result_container is None:
+        raise RuntimeError("Tavily 搜索未返回结果")
+    return result_container
+
+
 def search_web(query: str) -> str:
-    """搜索互联网并返回格式化结果（带缓存 + quota 耗尽自愈切 key）。"""
+    """搜索互联网并返回格式化结果（带缓存 + 超时 + quota 自愈）。"""
     cached = _cache_get("search_web", {"query": query}, _CACHE_TTL_SEARCH)
     if cached is not None:
         return cached
@@ -157,13 +185,16 @@ def search_web(query: str) -> str:
     from tavily import UsageLimitExceededError
 
     try:
-        result = tavily.search(query, max_results=5)
+        result = _tavily_search_with_timeout(query)
     except UsageLimitExceededError:
         result = _try_self_heal(query)
         if result is None:
             return "Tavily API 配额耗尽，所有 key 均已不可用。"
+    except TimeoutError:
+        return f"搜索超时（{_TAVILY_TIMEOUT}s），请稍后重试或用更具体的关键词。"
+    except Exception as e:
+        return f"搜索失败: {type(e).__name__}: {e}"
 
-    formatted = format_search_results(result, query)
     formatted = format_search_results(result, query)
     formatted += (
         "\n💡 有价值的发现？用 write_file 保存到 knowledge/search/<主题>.md，"
@@ -171,6 +202,7 @@ def search_web(query: str) -> str:
     )
     _cache_set("search_web", {"query": query}, formatted)
     return formatted
+
 
 def _try_self_heal(query: str):
     """自愈：重读 .env → 重建 tavily 客户端 → 用所有 key 重试一次。
@@ -197,9 +229,10 @@ def _try_self_heal(query: str):
         return None
     tavily = MultiKeyTavilyClient(keys)
     try:
-        return tavily.search(query, max_results=5)
-    except (UsageLimitExceededError, InvalidAPIKeyError):
+        return _tavily_search_with_timeout(query)
+    except (UsageLimitExceededError, InvalidAPIKeyError, TimeoutError):
         return None
+
 
 def _fetch_url_with_timeout(url: str) -> tuple[str | None, int | None]:
     """用 urllib 下载网页，带超时控制。
@@ -225,7 +258,6 @@ def _fetch_url_with_timeout(url: str) -> tuple[str | None, int | None]:
         with urllib.request.urlopen(req, timeout=_FETCH_TIMEOUT) as resp:
             status = resp.status
             content_type = resp.headers.get("Content-Type", "")
-            # 跳过明显的非 HTML 二进制（但允许空 Content-Type）
             skip_ct = {
                 "application/pdf", "application/zip", "application/octet-stream",
                 "application/gzip", "application/x-tar",
@@ -272,81 +304,44 @@ def _error_message(url: str, status: int | None) -> str:
 
 
 def _rewrite_url(url: str) -> str:
-    """将 JS 渲染网站的 URL 重写为可读取的静态/原始版本。
-
-    许多现代网站（GitHub、知乎、arxiv HTML 版）使用 JavaScript 渲染正文，
-    直接下载 HTML 源码只有空壳和 JS 包，提取不到有效内容。
-    此函数将这些 URL 映射到纯文本/静态版本。
-    """
-    # GitHub blob → raw.githubusercontent.com（直接返回纯文本）
+    """将 JS 渲染网站的 URL 重写为可读取的静态版本。"""
     m = re.match(r'https?://github\.com/([^/]+/[^/]+)/blob/(.+?)(\?.*)?$', url)
     if m:
-        raw_url = f'https://raw.githubusercontent.com/{m.group(1)}/{m.group(2)}'
-        return raw_url
-
-    # arxiv HTML 版（JS渲染）→ abstract 页面（静态HTML）
+        return f'https://raw.githubusercontent.com/{m.group(1)}/{m.group(2)}'
     m = re.match(r'https?://arxiv\.org/html/(\d+\.\d+(?:v\d+)?)', url)
     if m:
         return f'https://arxiv.org/abs/{m.group(1)}'
-
     return url
-def read_page(url: str) -> str:
-    """抓取并提取网页正文（带缓存 + 超时 + 截断）。
 
-    缓存策略：
-    - 成功内容：10 分钟
-    - 404/410：10 分钟（永久性错误，不重试）
-    - 网络/超时：30 秒（临时故障，快速重试窗口）
-    - 其他 HTTP 错误：30 秒
-    """
+
+def read_page(url: str) -> str:
+    """抓取并提取网页正文（带缓存 + 超时 + 截断）。"""
     cached = _cache_get_any("read_page", {"url": url})
     if cached is not None:
         return cached
-
-    # ── URL 重写：JS 渲染网站 → 可读取的静态版本 ──
     rewritten = _rewrite_url(url)
-    target = rewritten
-
-    result, status = _do_read_page(target)
-
-    # 根据结果类型决定缓存 TTL
+    result, status = _do_read_page(rewritten)
     if status is not None and status in (404, 410):
-        # 永久性错误：长缓存
         _cache_set("read_page", {"url": url}, result, ttl_override=_CACHE_TTL_NOT_FOUND)
     elif status is None and ("无法访问" in result or "超时" in result):
-        # 网络/超时错误：短缓存
         _cache_set("read_page", {"url": url}, result, ttl_override=_CACHE_TTL_ERROR)
     else:
-        # 成功或未知错误：正常 TTL
         _cache_set("read_page", {"url": url}, result)
     return result
+
+
 def _do_read_page(url: str) -> tuple[str, int | None]:
-    """实际执行网页抓取和提取（无缓存逻辑，缓存由 read_page 处理）。
-
-    Returns:
-        (result_text, status_code_or_None)
-        status_code 为 HTTP 状态码，网络错误时为 None
-    """
-    # 带超时下载
+    """实际执行网页抓取和提取。"""
     html, status = _fetch_url_with_timeout(url)
-
-    # 下载失败
     if html is None:
         return _error_message(url, status), status
-
-    # 提取正文
     text = trafilatura.extract(html, include_links=False, include_images=False, include_tables=False)
     if not text:
         return f"{url} 未能提取到有效正文内容。", status
-
-    # 截断过长内容
     if len(text) > _PAGE_MAX_CHARS:
         text = text[:_PAGE_MAX_CHARS] + (
-            f"\n\n[已压缩：原始结果 {len(text)} 字符，"
-            f"仅显示前 {_PAGE_MAX_CHARS} 字符。"
-            "如需完整内容，可重新搜索或阅读页面]"
+            f"\n\n[已压缩：原始结果 {len(text)} 字符，仅显示前 {_PAGE_MAX_CHARS} 字符。]"
         )
-
     return text, status
 
 

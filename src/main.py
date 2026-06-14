@@ -74,13 +74,7 @@ def _make_agents_message() -> dict:
 
 
 def _make_mechanisms_message() -> dict:
-    """自动派生「每轮注入的运行时机制」索引，放进缓存前缀——给 agent 环境级自我认知，
-    不再对自身架构失忆/编造（曾否认 completion_audit 存在、重造已有机制）。
-
-    内省本模块向 log 注入的非工具机制（_inject_* / _append_volatile_context），取名
-    + docstring 首行 → 随代码自动增删，不像手维护的 SYSTEM_MAP 会悄悄烂。只在代码变时
-    才变 → 进前缀对缓存命中无损（不像挂尾的记忆索引每轮重算）。
-    """
+    """自动派生「每轮注入的运行时机制」索引，放进缓存前缀——给 agent 环境级自我认知。"""
     import inspect
     g = globals()
     names = sorted(n for n in g if n.startswith("_inject_") or n == "_append_volatile_context")
@@ -98,12 +92,12 @@ def _make_date_message() -> dict:
 
 
 def _make_prefix_msgs() -> list[dict]:
-    """缓存前缀的不可变系统消息：日期 + AGENTS.md（手册）+ 自动派生的运行时机制索引。"""
+    """缓存前缀的不可变系统消息。"""
     return [_make_date_message(), _make_agents_message(), _make_mechanisms_message()]
 
 
 def _append_volatile_context(ctx: CacheContext) -> None:
-    """注入 volatile 上下文：记忆 + 未完成长任务 + 会话钉板（均缓存安全，挂在 log 尾）。"""
+    """注入 volatile 上下文：记忆 + 未完成长任务 + 会话钉板。"""
     mem_ctx = _make_memory_context()
     if mem_ctx:
         ctx.log.append(mem_ctx)
@@ -118,12 +112,7 @@ def _append_volatile_context(ctx: CacheContext) -> None:
 
 
 def _inject_completion_audit(ctx: CacheContext) -> None:
-    """收尾取证自检：剥上一轮的审计提示，若日志里留下"改动晚于绿测"则挂尾提示。
-
-    治"谎报完成"：事实（最近改动 vs 最近绿测）机械供给，"算不算完成"留给 agent。
-    走全 log 扫描 → 提示持续到补跑为止；volatile 系统块挂尾，只重算尾、不碰前缀缓存。
-    流式下首句已落屏，本提示在下一轮被 agent 看到 → 迟一轮纠正（已与用户交底）。
-    """
+    """收尾取证自检：若日志里留下"改动晚于绿测"则挂尾提示。"""
     ctx.log[:] = [m for m in ctx.log if not m.get("_completion_audit")]
     from .completion_audit import audit_completion
     nudge = audit_completion(ctx.log)
@@ -134,13 +123,7 @@ def _inject_completion_audit(ctx: CacheContext) -> None:
 
 
 def _inject_citation_audit(ctx: CacheContext) -> None:
-    """引用即取证：剥上一轮的提示，若最终回复引用了没取证过的代码文件/标识符则挂尾提示。
-
-    治"编造"的可检查片：引用 path:line 或代码体提及 `标识符` 却全程没在上下文见过
-    → 很可能凭印象编的。事实（引用 vs 可见上下文）机械供给，"是不是真编了"留给
-    agent；只扫最终回复 → 每轮刷新。传 prefix+log：前缀的派生机制索引/AGENTS.md
-    是合法取证源，按索引谈论自身机制不误报。
-    """
+    """引用即取证：若最终回复引用了没取证过的代码文件则挂尾提示。"""
     ctx.log[:] = [m for m in ctx.log if not m.get("_citation_audit")]
     from .citation_audit import audit_citations
     nudge = audit_citations(ctx.prefix + ctx.log)
@@ -158,13 +141,7 @@ _THINKING_NUDGE = (
 
 
 def _inject_thinking_stance(ctx: CacheContext) -> None:
-    """每轮在 log 尾挂一句"检索命中是线索、不是答案"的常驻提醒（缓存安全）。
-
-    同义 bullet 放 AGENTS.md 前缀实测翻不动"复读"这一根深蒂固的默认（前缀离生成点
-    太远）；与两审计同理，行为引导必须挂 log 尾靠 recency 才生效。常驻
-    不设门——"这轮算不算开放问题"是判断、不可机械化（auto-plan 的坑）；措辞里的"问
-    事实就直接答"让它在事实/动作轮自我收敛。strip-then-append 防累积。
-    """
+    """每轮在 log 尾挂一句"检索命中是线索、不是答案"的常驻提醒。"""
     ctx.log[:] = [m for m in ctx.log if not m.get("_thinking_stance")]
     ctx.log.append(
         {"role": "system", "content": _THINKING_NUDGE,
@@ -180,14 +157,12 @@ def process_turn(
     on_progress: Callable[[], None] | None = None,
     session_id: str = "",
 ) -> str:
-    """一轮对话的数据管线：思考牙 → 预读 → run_conversation → 收尾两审计。
-
-    main 的 REPL 与 test_integration_turn 的交互网共用此唯一定义——网即权威，
-    管线一改两边同步，杜绝"测试对着旧副本继续绿"的 drift。I/O（显示/Esc 监听/
-    会话保存/打印）由调用方负责，不进此函数。
-    """
-    # 思考牙：检索命中是线索不是答案，常驻挂尾（前缀劝不动复读，靠 recency 生效）
+    """一轮对话的数据管线：思考牙 → 自动记忆检索 → 预读 → run_conversation → 收尾审计。"""
+    # 思考牙：检索命中是线索不是答案
     _inject_thinking_stance(ctx)
+    # 自动记忆检索：每轮用用户输入搜记忆库（MemoCue 模式）
+    from .auto_recall import inject_prerecall
+    inject_prerecall(ctx, user_input)
     # 预读优化：用户提到了文件路径，先读入上下文
     pre_msgs = _preread_files(user_input, ctx)
     if pre_msgs:
@@ -200,17 +175,14 @@ def process_turn(
         ctx, user_input, on_token, on_tool,
         on_progress=on_progress, session_id=session_id,
     )
-    # 收尾取证自检：未验证的代码改动 + 没取证过的代码引用，挂尾提示（下一轮 agent 见）
+    # 收尾取证自检
     _inject_completion_audit(ctx)
     _inject_citation_audit(ctx)
     return reply
 
 
 def _handle_goal(ctx: CacheContext, goal_text: str, session_id: str | None) -> str | None:
-    """驱动一次任务闭环(/goal):worker 走真实 process_turn 管线,评分隔离在 outcome。
-
-    返回更新后的 session_id。与 r.retry 同模式:指令层只递文本,循环在这里驱动。
-    """
+    """驱动一次任务闭环(/goal): worker 走真实 process_turn 管线, 评分隔离在 outcome。"""
     from .outcome import parse_goal, run_outcome
     spec = parse_goal(goal_text)
     if spec is None:
@@ -288,12 +260,7 @@ def _on_tool(name: str, args: dict) -> None:
 
 
 def _render_turn_error(e: BaseException) -> tuple[list[str], bool]:
-    """分类一轮对话的残余异常（KeyboardInterrupt / SystemExit(0) 已在上游处理）。
-
-    Exception → 友好展示 traceback、不退出循环；其它 BaseException（SystemExit
-    非零等）→ 简短提示并退出。返回 (待打印行, 是否 break)。
-    旧实现两段都会跑，普通异常被重复报告，故拆成互斥两支。
-    """
+    """分类一轮对话的残余异常。"""
     if isinstance(e, Exception):
         lines = [f"\n💥 错误: {type(e).__name__}: {e}"]
         lines += [f"   {ln.strip()}" for ln in traceback.format_exception(type(e), e, e.__traceback__)[-5:]]
@@ -303,7 +270,7 @@ def _render_turn_error(e: BaseException) -> tuple[list[str], bool]:
 
 
 # ═══════════════════════════════════════════════════════════════
-# 预读优化：用户输入中包含文件路径时，提前读入上下文
+# 预读优化
 # ═══════════════════════════════════════════════════════════════
 
 _FILE_PATH_RE = re.compile(
@@ -311,12 +278,12 @@ _FILE_PATH_RE = re.compile(
     r'|(?:(?:\.\.?/|[a-zA-Z]:\\|\\\\)?src/[\w./\\-]+\.py)',
 )
 
-_PREREAD_MAX = 5       # 最多预读文件数
-_PREREAD_MAX_CHARS = 3000  # 单文件最多读取字符
+_PREREAD_MAX = 5
+_PREREAD_MAX_CHARS = 3000
 
 
 def _preread_files(user_input: str, ctx) -> list[dict]:
-    """扫描用户输入中的文件路径，预读到上下文。返回预读的 tool 消息列表。"""
+    """扫描用户输入中的文件路径，预读到上下文。"""
     paths = _collect_preread_paths(user_input)
     if not paths:
         return []
@@ -324,7 +291,6 @@ def _preread_files(user_input: str, ctx) -> list[dict]:
 
 
 def _collect_preread_paths(user_input: str) -> list:
-    """从用户输入正则匹配文件路径，解析为存在的 Path 对象列表。"""
     from .tools.file import _resolve
     paths = set()
     for m in _FILE_PATH_RE.finditer(user_input):
@@ -343,7 +309,6 @@ def _collect_preread_paths(user_input: str) -> list:
 
 
 def _build_preread_messages(paths: list) -> list[dict]:
-    """读取路径列表中的文件内容，返回预读的 tool 消息列表。"""
     from .tools.file import _read_cached
     pre_msgs = []
     for p in paths:
@@ -370,7 +335,6 @@ def _reload_dispatch():
 
     loaded_items = []
 
-    # 1. 热加载指令系统
     for k in list(sys.modules.keys()):
         if k == 'src.commands':
             del sys.modules[k]
@@ -382,7 +346,6 @@ def _reload_dispatch():
     except Exception as e:
         return False, f"指令系统加载失败: {e}"
 
-    # 2. 热加载内置工具
     try:
         from .tools import reload_tools
         mods = reload_tools()
@@ -390,31 +353,23 @@ def _reload_dispatch():
     except Exception as e:
         return False, f"内置工具加载失败: {e}"
 
-    return True, f"已热加载：{'、'.join(loaded_items)}。LLM 下次请求将自动获取最新工具定义。"
-
+    return True, f"已热加载：{'、'.join(loaded_items)}。"
 
 
 # ── 主入口 ──
 
 def _finalize_session(ctx: CacheContext, session_id: str | None) -> list[str]:
-    """会话收尾：有回复才落盘 → 会话后反思 → L1 摘要入知识库 → durable 钉板转存。
-
-    反思(tracker.reflect_on_session,被动进化分析层的唯一写入口)在此接线——
-    曾挂在 load_session 的 return 之后(不可达)，整层分析管线静默死亡，
-    stats/ 下 0 个 reflection 文件实证。反思失败不阻塞退出。
-    """
+    """会话收尾：落盘 → 反思 → L1 摘要 → 记忆收割 → 用户理解收割 → pin 转存。"""
     lines: list[str] = []
-    # 只有存在至少一条 assistant 回复时才保存（避免网络错误等空会话落盘）
     if any(m["role"] == "assistant" for m in ctx.all):
         session_id = save_session(ctx.all, session_id)
         lines.append(f"会话已保存: [{session_id}]")
         try:
             from .tracker import reflect_on_session
             if reflect_on_session(session_id):
-                lines.append("已写入会话反思（异常发现将在下次启动注入）。")
+                lines.append("已写入会话反思。")
         except Exception as e:
-            logger.warning("会话反思失败（不阻塞退出）: %s", e)
-    # ── L1 会话摘要：自动写入 knowledge/sessions/，rag_index_research 可索引 ──
+            logger.warning("会话反思失败: %s", e)
     if any(m["role"] == "assistant" for m in ctx.all):
         try:
             from .session_summary import write_session_summary
@@ -422,8 +377,7 @@ def _finalize_session(ctx: CacheContext, session_id: str | None) -> list[str]:
             if filename:
                 lines.append(f"已写入会话摘要: knowledge/sessions/{filename}")
         except Exception as e:
-            logger.warning("会话摘要失败（不阻塞退出）: %s", e)
-    # ── 机械记忆收割：从对话日志自动提取失败模式，不靠 LLM 自觉 ──
+            logger.warning("会话摘要失败: %s", e)
     try:
         from .lesson import extract_lessons, save_lessons
         lessons = extract_lessons(ctx.all)
@@ -431,9 +385,7 @@ def _finalize_session(ctx: CacheContext, session_id: str | None) -> list[str]:
             n = save_lessons(lessons)
             lines.append(f"已自动收割 {n} 条记忆。")
     except Exception as e:
-        logger.warning("记忆收割失败（不阻塞退出）: %s", e)
-    # ── 用户理解收割：LLM 提炼"这次学到关于用户的什么"，沉淀进每轮注入的 user 档案 ──
-    # 与上面的失败模式收割对称（那个机械、这个语义）；隔离调用不碰前缀缓存。
+        logger.warning("记忆收割失败: %s", e)
     if any(m["role"] == "assistant" for m in ctx.all):
         try:
             from .user_model import harvest_and_save
@@ -441,8 +393,7 @@ def _finalize_session(ctx: CacheContext, session_id: str | None) -> list[str]:
             if note:
                 lines.append(note)
         except Exception as e:
-            logger.warning("用户理解收割失败（不阻塞退出）: %s", e)
-    # 把 durable 钉板转存进记忆（会话内不漂 → 新会话可 recall）
+            logger.warning("用户理解收割失败: %s", e)
     from .session_pins import promote_durable
     promoted = promote_durable()
     if promoted:
@@ -452,7 +403,6 @@ def _finalize_session(ctx: CacheContext, session_id: str | None) -> list[str]:
 
 
 def _ensure_git_hooks() -> None:
-    """幂等确保 core.hooksPath 指向版本管理的钩子，堵掉"克隆后没钩子"。绝不阻塞启动。"""
     try:
         root = str(Path(__file__).resolve().parent.parent)
         if root not in sys.path:
@@ -486,11 +436,9 @@ def main() -> None:
         except ValueError:
             pass
 
-    # 构建 CacheContext：不可变 prefix + 追加 log
     if ctx is None:
         ctx = CacheContext()
     ctx.rebuild_prefix(_make_prefix_msgs())
-    # ── volatile 系统消息（log 末尾，仅追加不修改） ──
     _append_volatile_context(ctx)
 
     print("Agent 已启动，输入 /help 查看指令列表\n")
@@ -504,12 +452,10 @@ def main() -> None:
 
         @kb.add("escape")
         def _(event):
-            """Esc 清空当前输入行，可重新输入。"""
             buf = event.app.current_buffer
             if buf.text:
                 buf.text = ""
             else:
-                # 输入行为空时按 Esc 不做任何事（让 prompt 继续等待输入）
                 pass
 
     try:
@@ -523,7 +469,6 @@ def main() -> None:
                 continue
 
             if user_input.startswith("/"):
-                # ── 热加载：拦截 /reload，不经过旧 dispatch ──
                 if user_input.lower().startswith("/reload"):
                     ok, msg = _reload_dispatch()
                     print(msg)
@@ -539,16 +484,14 @@ def main() -> None:
                     ctx.clear_log()
                     loaded_msgs = load_session(r.load)
                     ctx.log.extend(loaded_msgs)
-                    # volatile 上下文（记忆索引/任务/钉板）保存时被过滤，重注
                     _append_volatile_context(ctx)
                     session_id = r.load
                     print(f"已加载会话 [{r.load}]，共 {len(ctx)} 条消息")
                     _print_recent(ctx.all)
                 if r.clear:
                     ctx.clear_log()
-                    # 重建 prefix 并追加 volatile 上下文（与 session start 一致）
                     ctx.rebuild_prefix(_make_prefix_msgs())
-                    if r.save:   # /new: 同时重置 session + 清空会话钉板 + 会话级缓存
+                    if r.save:
                         session_id = None
                         from .session_pins import clear_pins
                         clear_pins()
@@ -594,8 +537,6 @@ def main() -> None:
                 session_id = sid[0]
                 if has_output():
                     print()
-                # ── 长任务自主续跑：agent 这轮自己推进了 current.md → 接着驱动下一步 ──
-                # 续跑条件是 agent 自己的推进，不是任务存在；停由它判断（停止推进/标 [!]/全 [x]）。
                 from .task_loop import made_task_progress, run_task_continuation
                 if made_task_progress(_task_before, _read_current()):
                     def _task_drive(c, text, sid=sid):
@@ -614,7 +555,6 @@ def main() -> None:
                         _stop_esc_listener()
                     session_id = sid[0]
             except BaseException as e:
-                # ── KeyboardInterrupt：用户主动中断 ──
                 if isinstance(e, KeyboardInterrupt):
                     _stop_esc_listener()
                     print("\n[中断]")
@@ -639,11 +579,9 @@ def main() -> None:
                             print()
                     continue
 
-                # ── SystemExit(0)：正常退出 ──
                 if isinstance(e, SystemExit) and e.code == 0:
                     break
 
-                # 显示错误信息（Exception 友好展示且继续；其它 BaseException 记日志并退出）
                 err_lines, should_break = _render_turn_error(e)
                 for ln in err_lines:
                     print(ln)
