@@ -12,13 +12,17 @@ from __future__ import annotations
 import json
 
 # ── 审计依赖的输出契约（structural，非旋钮 → 留本模块，不进 params.py）──
-# run_command 仅在非零退出码时前置此串；结果无此前缀 ⟹ 退 0 ⟹ pytest 全过。
+# run_command 仅在非零退出码时前置此串（退 0 不带）。仅"无此前缀"还不够判绿——见下。
 _EXIT_PREFIX = "退出码:"
 # write_file / edit_file_lines 成功结果前缀（行内含被改文件路径）。
 _WRITE_OK = "已写入:"
 _EDIT_OK = "已编辑:"
 # git_commit 成功前缀（能提交 ⟹ pre-commit 已跑全量绿）。
 _COMMIT_OK = "✅ 提交成功"
+# 绿测的输出信号：命令串含 "pytest" 不足以判绿——`echo pytest` / `pytest --version` /
+# `pytest --collect-only`（只收集不执行）都含子串却没真跑用例，退 0 也无此串。要求
+# 结果里出现真实通过统计才认绿，否则这类命令可伪造绿测、压掉 staleness 提示。
+_GREEN_PYTEST_SIGNAL = "passed"
 
 _NUDGE = (
     "⚠️ 取证自检：本会话最后一次代码改动晚于最后一次绿测（或全程没跑过测试）。"
@@ -52,7 +56,10 @@ def _is_green(msg: dict, commands: dict[str, str]) -> bool:
         return content.startswith(_COMMIT_OK)
     if name == "run_command":
         cmd = commands.get(msg.get("tool_call_id"), "")
-        return "pytest" in cmd and not content.startswith(_EXIT_PREFIX)
+        if "pytest" not in cmd or content.startswith(_EXIT_PREFIX):
+            return False
+        # 退 0 还不够：要有真实通过统计，挡 echo pytest / --version / --collect-only。
+        return _GREEN_PYTEST_SIGNAL in content.lower()
     return False
 
 

@@ -184,3 +184,61 @@ def test_paths_and_identifiers_both_reported():
     out = audit_citations([_reply("在 ghost.py:7，由 `_phantom_hook` 调用。")])
     assert out is not None
     assert "ghost.py" in out and "_phantom_hook" in out
+
+
+# ── 绕过：换措辞还抓不抓得到（真编造必须抓住） ─────────────────
+
+def test_backslash_path_citation_caught():
+    r"""Windows 反斜杠路径的 path:line 仍被抓（归一到 basename，换路径形态躲不掉）。"""
+    out = audit_citations([_reply(r"问题在 D:\project\src\ghost.py:42。")])
+    assert out is not None
+    assert "ghost.py" in out
+
+
+def test_multiple_fabricated_citations_all_listed():
+    """一次堆多个编造引用 → 全部点名，漏一个都算放过。"""
+    out = audit_citations([_reply("见 a_ghost.py:1、b_ghost.py:2、c_ghost.py:3。")])
+    assert out is not None
+    for f in ("a_ghost.py", "b_ghost.py", "c_ghost.py"):
+        assert f in out
+
+
+# ── 精度边界：刻意放过的，钉死以防"加固"成误报机器（狼来了） ────
+
+def test_identifier_without_backticks_not_audited():
+    """裸文本里的 snake_case（无反引号）不抓——把 prose 里每个函数名都抓会海量假阳性。
+
+    这是 precision 边界，不是疏漏。钉死它：挡未来有人把标识符审计放宽到无反引号，
+    一放宽就误报每句正常的架构讨论，nudge 立刻沦为"狼来了"被 agent 忽略。
+    """
+    assert audit_citations([_reply("这个由 _phantom_audit 兜底处理，完全没问题。")]) is None
+
+
+def test_real_file_fabricated_line_not_audited():
+    """读过的文件 + 编造的行号 → 不抓（grounding 是文件级，验不了行号真伪）。
+
+    诚实留痕的已知边界：机械可检的是"碰没碰过这个文件"，"第 999999 行存不存在"
+    超出范围。想覆盖它得回读文件数行数，代价与误报风险都不划算——留给纪律。
+    """
+    log = [
+        _read_call("c1", "src/llm.py"),
+        _tool_result("c1", "read_file", "x = 1\n"),
+        _reply("看 llm.py:999999 就明白了。"),
+    ]
+    assert audit_citations(log) is None
+
+
+def test_self_grepped_identifier_grounds_conservatively():
+    """自己 grep 过的名字（出现在 tool_call 参数里）即算 grounded——保守偏放过。
+
+    args 入 haystack 是为让成功的 read 即便结果不回显文件名也能 grounded；副作用是
+    agent grep 一个名字就给它背书。这是"宁漏判不误报"的代价，钉死边界、记录在案。
+    """
+    log = [
+        {"role": "assistant", "content": "", "tool_calls": [
+            {"id": "g1", "function": {"name": "grep_code",
+                                      "arguments": json.dumps({"pattern": "_maybe_phantom"})}}]},
+        _tool_result("g1", "grep_code", "（无匹配）"),
+        _reply("由 `_maybe_phantom` 处理。"),
+    ]
+    assert audit_citations(log) is None

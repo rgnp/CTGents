@@ -112,6 +112,44 @@ def test_failed_commit_not_green():
     assert audit_completion(log) == _NUDGE
 
 
+# ── 绕过：命令含 "pytest" 但没真跑用例 → 不得伪造绿测 ──────────────
+# 旧实现只看命令串含 "pytest" + 退 0 就判绿，可被下列命令压掉 staleness 提示。
+
+def _edit_then_run(cmd: str, output: str) -> list[dict]:
+    """一次 .py 改动 + 一条 run_command(cmd) → output。"""
+    return [
+        _py_edit(),
+        _call("c1", "run_command", command=cmd),
+        _result("c1", "run_command", output),
+    ]
+
+
+def test_echo_pytest_not_green():
+    """`echo pytest` 含子串却没跑测试（输出无通过统计）→ 仍 stale。"""
+    assert audit_completion(_edit_then_run("echo pytest", "pytest")) == _NUDGE
+
+
+def test_pytest_collect_only_not_green():
+    """`pytest --collect-only` 只收集不执行 → 输出无 'passed' → 仍 stale。"""
+    log = _edit_then_run("pytest --collect-only", "3 tests collected in 0.02s")
+    assert audit_completion(log) == _NUDGE
+
+
+def test_pytest_version_not_green():
+    """`pytest --version` 不跑用例 → 仍 stale。"""
+    assert audit_completion(_edit_then_run("pytest --version", "pytest 8.1.1")) == _NUDGE
+
+
+def test_pytest_all_skipped_not_green():
+    """全跳过没验证改动 → 输出无 'passed' → 仍 stale（保守偏报）。"""
+    assert audit_completion(_edit_then_run("pytest -q", "3 skipped in 0.10s")) == _NUDGE
+
+
+def test_real_green_pytest_still_fresh():
+    """真绿测（输出含 'passed'）仍判 fresh——加固没误伤正路。"""
+    assert audit_completion(_edit_then_run("pytest -q", "..\n2 passed in 0.05s")) is None
+
+
 # ── 输出契约不变量（C16：审计依赖这些 marker，钉死它们）──────────
 
 class TestOutputContracts:
