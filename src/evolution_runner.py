@@ -324,6 +324,55 @@ def run_owned_paths(run: EvolutionRun, root: Path | None = None) -> list[str]:
     return sorted(current - preflight_dirty)
 
 
+def revert_run_owned_paths(run: EvolutionRun, root: Path | None = None) -> dict[str, Any]:
+    """把本轮改动的文件回滚到 run 启动时状态（仅 owned paths）。
+
+    owned = 当前变更 − 启动时已脏（见 run_owned_paths）：这些文件 run 启动时是干净的
+    （tracked=HEAD / untracked=不存在），故回滚 = tracked 文件 checkout HEAD、run 新建的
+    untracked 文件删除。**绝不碰启动前已脏的 WIP**（7da964e 一锅端教训）。破坏性，仅供
+    显式调用（不在验证失败时自动触发——失败常可修，自动丢弃会毁掉可修复的工作）；
+    before.patch 快照保留在 run 目录，回滚后仍可人工恢复。
+    """
+    project_root = (root or (Path(run.root) if run.root else PROJECT_ROOT)).resolve()
+    status = _run_git(project_root, ["status", "--porcelain"])
+    preflight_dirty = {_status_path(e) for e in run.preflight.get("dirty_files", [])}
+    reverted: list[str] = []
+    removed: list[str] = []
+    errors: list[str] = []
+    for entry in _split_status(status.stdout):
+        path = _status_path(entry)
+        if path in preflight_dirty:
+            continue  # 启动前已脏 = 先前 WIP，不归本轮、不碰
+        if entry.startswith("??"):  # run 新建的未跟踪文件 → 删
+            try:
+                (project_root / path).unlink()
+                removed.append(path)
+            except OSError as e:
+                errors.append(f"{path}: {e}")
+        else:  # tracked 改动 → 还原到 HEAD（仅指定路径，非 reset --hard）
+            res = _run_git(project_root, ["checkout", "HEAD", "--", path])
+            if res.exit_code == 0:
+                reverted.append(path)
+            else:
+                errors.append(f"{path}: {res.stderr.strip()}")
+    return {"reverted": reverted, "removed": removed, "errors": errors}
+
+
+def abort_active_run(root: Path | None = None) -> dict[str, Any] | None:
+    """显式放弃当前 active run：回滚其 owned paths + 归档为 STOPPED(partial)。
+
+    ② "失败回滚"的入口：把"放弃一次失败/不要的进化"做成一步干净操作——不留残骸、
+    且失败侧入档案。无 active run 返回 None；否则返回回滚摘要（含 run_id）。
+    """
+    run = load_active_evolution_run()
+    if run is None:
+        return None
+    summary = revert_run_owned_paths(run, root)
+    summary["run_id"] = run.run_id
+    complete_evolution_run(run.run_id, RunnerStatus.STOPPED, note="aborted: reverted owned paths")
+    return summary
+
+
 def append_run_event(run_id: str, name: str, data: dict | None = None) -> None:
     """给 run 追加一条审计事件（可忽略失败，不阻断主流程）。"""
     try:

@@ -1,5 +1,6 @@
 """evolution_runner.py tests."""
 
+import subprocess
 import sys
 from pathlib import Path
 
@@ -7,6 +8,21 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 import src.evolution_runner as runner
 import src.evolve as ev
+
+
+def _git(repo: Path, *args: str) -> None:
+    subprocess.run(["git", *args], cwd=repo, check=True,
+                   capture_output=True, text=True)
+
+
+def _init_repo(repo: Path) -> None:
+    """初始化一个带一次基线提交的真 git repo（回滚测试需真 git 行为，不 mock）。"""
+    _git(repo, "init", "-q")
+    _git(repo, "config", "user.email", "t@t")
+    _git(repo, "config", "user.name", "t")
+    (repo / "kept.py").write_text("x = 1\n", encoding="utf-8")
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-q", "-m", "base")
 
 
 def _redirect_runner(tmp_path, monkeypatch) -> None:
@@ -86,3 +102,65 @@ def test_clean_start_archives_nothing(tmp_path, monkeypatch):
     _redirect_runner(tmp_path, monkeypatch)
     runner.start_evolution_run("唯一目标", root=tmp_path)
     assert ev.get_last_n(5) == []
+
+
+# ── ② 失败回滚：仅 owned paths，不碰启动前 WIP ──────────────────
+
+def test_revert_restores_tracked_and_removes_new(tmp_path, monkeypatch):
+    """回滚：已跟踪改动还原到 HEAD，本轮新建的未跟踪文件删除。"""
+    _redirect_runner(tmp_path, monkeypatch)
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _init_repo(repo)
+    start = runner.start_evolution_run("回滚测试", root=repo)
+
+    (repo / "kept.py").write_text("x = 999  # 本轮乱改\n", encoding="utf-8")
+    (repo / "newfile.py").write_text("brand new\n", encoding="utf-8")
+
+    summary = runner.revert_run_owned_paths(start.run, root=repo)
+
+    assert (repo / "kept.py").read_text(encoding="utf-8") == "x = 1\n", "tracked 改动应还原到 HEAD"
+    assert not (repo / "newfile.py").exists(), "本轮新建文件应被删除"
+    assert "kept.py" in summary["reverted"]
+    assert "newfile.py" in summary["removed"]
+    assert summary["errors"] == []
+
+
+def test_revert_spares_startup_dirty(tmp_path, monkeypatch):
+    """启动前已脏的文件（先前 WIP）不归本轮 → 回滚绝不碰它。"""
+    _redirect_runner(tmp_path, monkeypatch)
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _init_repo(repo)
+    # 启动前就改脏 kept.py（先前 WIP）
+    (repo / "kept.py").write_text("preexisting WIP\n", encoding="utf-8")
+    start = runner.start_evolution_run("xx", root=repo)
+    # 本轮又改它
+    (repo / "kept.py").write_text("run changed more\n", encoding="utf-8")
+
+    runner.revert_run_owned_paths(start.run, root=repo)
+
+    assert (repo / "kept.py").read_text(encoding="utf-8") == "run changed more\n", \
+        "启动前已脏的文件不归本轮，回滚不得动它（防一锅端）"
+
+
+def test_abort_active_run_reverts_and_archives(tmp_path, monkeypatch):
+    """abort：回滚 owned + 归档 partial + 清 active 指针，一步干净放弃。"""
+    _redirect_runner(tmp_path, monkeypatch)
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _init_repo(repo)
+    start = runner.start_evolution_run("放弃这个", root=repo)
+    (repo / "kept.py").write_text("bad change\n", encoding="utf-8")
+
+    summary = runner.abort_active_run(root=repo)
+
+    assert summary is not None and summary["run_id"] == start.run.run_id
+    assert (repo / "kept.py").read_text(encoding="utf-8") == "x = 1\n"
+    assert runner.load_active_evolution_run() is None, "abort 后 active 指针应清空"
+    assert any(r.get("outcome") == "partial" for r in ev.get_last_n(5)), "应入档案为 partial"
+
+
+def test_abort_no_active_returns_none(tmp_path, monkeypatch):
+    _redirect_runner(tmp_path, monkeypatch)
+    assert runner.abort_active_run() is None

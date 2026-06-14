@@ -531,13 +531,31 @@ def _cmd_lesson(r: CmdResult, ctx, args, _sid) -> None:
 
 
 @builtin("/evolve", description="启动自进化 runner：后台记录，agent 正常执行任务",
-         usage="/evolve <目标描述>")
+         usage="/evolve <目标描述>  |  /evolve revert（回滚放弃当前进化）")
 def _cmd_evolve(r: CmdResult, ctx, args, session_id) -> None:
     """启动自进化 runner，把目标作为普通消息交给 agent。
 
     agent 不需要知道自己在"进化模式"里——像正常任务一样读代码、
     想方案、改文件、跑测试、提交。runner 在后台默默记录。
+    `/evolve revert` 放弃当前 run：回滚其改动到启动前 + 归档为 partial。
     """
+    if args and args[0].lower() == "revert":
+        from .evolution_runner import abort_active_run
+        summary = abort_active_run()
+        if summary is None:
+            r.message = "无 active evolution run 可回滚。"
+            return
+        parts = [f"已回滚并归档进化 run {summary['run_id']}（partial）。"]
+        if summary["reverted"]:
+            parts.append(f"还原到启动前: {', '.join(summary['reverted'])}")
+        if summary["removed"]:
+            parts.append(f"删除本轮新建: {', '.join(summary['removed'])}")
+        if summary["errors"]:
+            parts.append(f"⚠️ 回滚失败项: {'; '.join(summary['errors'])}")
+        if not summary["reverted"] and not summary["removed"]:
+            parts.append("（本轮无 owned 改动可回滚）")
+        r.message = "\n".join(parts)
+        return
     if not args:
         r.message = (
             "用法: /evolve <目标描述>\n"
