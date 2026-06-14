@@ -125,6 +125,51 @@ class TestAnomalyDetection:
         assert len(slow) > 0
         assert slow[0]["tool"] == "grep_code"
 
+    def test_high_volume_detected(self, tmp_path, monkeypatch):
+        """某工具本次调用数远超其它会话 → 检测到 high_volume（撒网式重复调用）。"""
+        monkeypatch.setattr("src.tracker._STATS_DIR", tmp_path)
+        # 基线：grep 每会话约 3 次
+        for sid in ("base1", "base2"):
+            set_session(sid)
+            for _ in range(3):
+                record_tool_call("grep_code", 50, True)
+            flush()
+        # 本会话：撒网 15 次
+        set_session("scatter")
+        for _ in range(15):
+            record_tool_call("grep_code", 50, True)
+        flush()
+        anomalies = detect_anomalies("scatter")
+        hv = [a for a in anomalies if a["type"] == "high_volume"]
+        assert len(hv) > 0
+        assert hv[0]["tool"] == "grep_code"
+        assert "15" in hv[0]["detail"]
+
+    def test_normal_volume_not_flagged(self, tmp_path, monkeypatch):
+        """工具本就高频（其它会话也这么多）→ 不报，避免误伤正常重活。"""
+        monkeypatch.setattr("src.tracker._STATS_DIR", tmp_path)
+        for sid in ("h1", "h2"):
+            set_session(sid)
+            for _ in range(14):
+                record_tool_call("read_file", 10, True)
+            flush()
+        set_session("h3")
+        for _ in range(15):
+            record_tool_call("read_file", 10, True)
+        flush()
+        anomalies = detect_anomalies("h3")
+        assert [a for a in anomalies if a["type"] == "high_volume"] == []
+
+    def test_below_floor_not_flagged(self, tmp_path, monkeypatch):
+        """低于绝对地板（短会话）→ 不报，避免噪声。"""
+        monkeypatch.setattr("src.tracker._STATS_DIR", tmp_path)
+        set_session("short")
+        for _ in range(8):
+            record_tool_call("grep_code", 10, True)
+        flush()
+        anomalies = detect_anomalies("short")
+        assert [a for a in anomalies if a["type"] == "high_volume"] == []
+
 
 class TestReflection:
     def test_reflect_on_session_no_anomalies(self, tmp_path, monkeypatch):

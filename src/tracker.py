@@ -213,6 +213,11 @@ def get_cross_session_baseline(recent_n: int = 10) -> dict:
 ANOMALY_SLOW_FACTOR = 3.0
 ANOMALY_FAILURE_RATE = 0.30
 ANOMALY_MIN_CALLS = 5
+# high_volume：某工具本次调用数 ≥ 绝对地板 且 > 其它会话每会话均值 ×factor →
+# 疑似撒网式重复调用（多次重叠 grep / 反复 read 同区域，烧上下文与前缀缓存）。
+# 纯观测信号，不拦截——让"收不住"在实际使用里可见、可量。
+ANOMALY_VOLUME_MIN = 12
+ANOMALY_VOLUME_FACTOR = 3.0
 
 
 def detect_anomalies(session_id: str, baseline: dict | None = None) -> list[dict]:
@@ -254,6 +259,24 @@ def detect_anomalies(session_id: str, baseline: dict | None = None) -> list[dict
                         f"{name} 本次平均 {avg_ms:.0f}ms，"
                         f"基线中位数 {baseline_p50:.0f}ms（{avg_ms / baseline_p50:.1f}x）"
                     ),
+                    "severity": "warn",
+                })
+
+        # high_volume：某工具本次调用数显著高于其它会话 → 疑似撒网式重复调用。
+        # 基线含本会话，故按"扣掉本会话后的每会话均值"比，避免本会话自抬基线。
+        if stats["count"] >= ANOMALY_VOLUME_MIN:
+            n_other = max(baseline.get("sessions_analyzed", 0) - 1, 1)
+            total = baseline_tool["count"] if baseline_tool else 0
+            avg_other = max(total - stats["count"], 0) / n_other
+            if not avg_other or stats["count"] > avg_other * ANOMALY_VOLUME_FACTOR:
+                detail = f"{name} 本次 {stats['count']} 次"
+                detail += (f"，其它会话约 {avg_other:.0f} 次/会话" if avg_other
+                           else "（暂无基线对比）")
+                detail += " — 显著偏高，疑似撒网式重复调用"
+                anomalies.append({
+                    "tool": name,
+                    "type": "high_volume",
+                    "detail": detail,
                     "severity": "warn",
                 })
 
