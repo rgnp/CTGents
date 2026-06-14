@@ -83,14 +83,43 @@ class MultiKeyTavilyClient:
         self._idx += 1
         return True
 
+    def _promote_current_key(self) -> None:
+        """将当前可用 key 排到 .env 的 TAVILY_API_KEYS 最前面，持久化。
+
+        跨会话/自愈重建后自然从可用 key 开始，不再每次撞已耗尽的 key 0。
+        """
+        if self._idx == 0:
+            return
+        promoted_key = self._api_keys[self._idx]
+        new_keys = [promoted_key] + [k for i, k in enumerate(self._api_keys) if i != self._idx]
+        self._api_keys = new_keys
+        self._idx = 0
+        self._clients = {}
+        # 写回 .env 文件
+        env_path = Path(__file__).resolve().parent.parent / ".env"
+        lines = env_path.read_text(encoding="utf-8").splitlines(keepends=True)
+        new_lines: list[str] = []
+        for line in lines:
+            if line.startswith("TAVILY_API_KEYS="):
+                new_lines.append(f"TAVILY_API_KEYS={','.join(new_keys)}\n")
+            else:
+                new_lines.append(line)
+        env_path.write_text("".join(new_lines), encoding="utf-8")
+        # 同步 os.environ，同一进程内 load_dotenv(override=True) 也能拿最新值
+        os.environ["TAVILY_API_KEYS"] = ",".join(new_keys)
+
     def search(self, *args: object, **kwargs: object) -> dict:
+        rotated = False
         for _ in range(len(self._api_keys)):
             try:
-                return self._client.search(*args, **kwargs)
+                result = self._client.search(*args, **kwargs)
+                if rotated:
+                    self._promote_current_key()
+                return result
             except (UsageLimitExceededError, InvalidAPIKeyError):
                 if not self._rotate():
                     raise
-        # 理论上不会到这里（最后一次迭代会 re-raise），但类型安全兜底
+                rotated = True
         raise UsageLimitExceededError("所有 Tavily API key 均已耗尽")
 
     def __getattr__(self, name: str) -> object:

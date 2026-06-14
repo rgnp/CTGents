@@ -39,7 +39,7 @@ class TestMultiKeyTavilyClient:
         assert client._idx == 0
 
     def test_rotate_on_usage_limit(self, monkeypatch):
-        """第一个 key 额度耗尽 → 自动切第二个。"""
+        """第一个 key 额度耗尽 → 自动切第二个 → promote 持久化。"""
         client = MultiKeyTavilyClient(["key-a", "key-b"])
 
         c0 = client._client
@@ -53,9 +53,21 @@ class TestMultiKeyTavilyClient:
         )
         client._idx = 0
 
+        # Mock _promote_current_key：保留状态变更，跳过 .env 磁盘写入
+        def mock_promote():
+            # 手动做内存状态变更（避免写 .env）
+            promoted_key = client._api_keys[client._idx]
+            client._api_keys = [promoted_key] + [
+                k for i, k in enumerate(client._api_keys) if i != client._idx
+            ]
+            client._idx = 0
+            client._clients = {}
+        monkeypatch.setattr(client, "_promote_current_key", mock_promote)
+
         result = client.search("test")
         assert result["results"][0]["title"] == "from b"
-        assert client._idx == 1
+        assert client._idx == 0
+        assert client._api_keys == ["key-b", "key-a"]
 
     def test_all_keys_exhausted(self, monkeypatch):
         """所有 key 耗尽 → 最终抛出 UsageLimitExceededError。"""
@@ -73,7 +85,7 @@ class TestMultiKeyTavilyClient:
             client.search("test")
 
     def test_rotate_on_invalid_key(self, monkeypatch):
-        """无效 key 也应触发轮换。"""
+        """无效 key 也应触发轮换 → promote 持久化。"""
         client = MultiKeyTavilyClient(["bad-key", "good-key"])
 
         c0 = client._client
@@ -87,5 +99,17 @@ class TestMultiKeyTavilyClient:
         )
         client._idx = 0
 
+        # Mock _promote_current_key：保留状态变更，跳过 .env 磁盘写入
+        def mock_promote():
+            promoted_key = client._api_keys[client._idx]
+            client._api_keys = [promoted_key] + [
+                k for i, k in enumerate(client._api_keys) if i != client._idx
+            ]
+            client._idx = 0
+            client._clients = {}
+        monkeypatch.setattr(client, "_promote_current_key", mock_promote)
+
         result = client.search("test")
         assert result["results"][0]["title"] == "from good key"
+        assert client._idx == 0
+        assert client._api_keys == ["good-key", "bad-key"]
