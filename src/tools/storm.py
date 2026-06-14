@@ -19,8 +19,11 @@
 import json
 import threading
 
-# ── 黑名单：有副作用的工具，永远不去重（从工具元数据自动派生）──
+# 从工具元数据自动派生（_meta 是唯一真相源）：
+#   DEDUP_BLACKLIST — 有副作用的工具（写盘/执行），永远不去重且清缓存
+#   NO_DEDUP_TOOLS  — 时变读（poll 轮询异步任务），不去重但无副作用、不清缓存
 from ._tool_meta import DEDUP_BLACKLIST as _DEDUP_BLACKLIST
+from ._tool_meta import NO_DEDUP_TOOLS as _NO_DEDUP_TOOLS
 
 # 窗口大小
 _WINDOW_SIZE = 64
@@ -57,6 +60,16 @@ def _is_blacklisted(name: str) -> bool:
     return name in _DEDUP_BLACKLIST
 
 
+def _is_no_dedup(name: str) -> bool:
+    """时变读（如 poll）：结果随时间变，绝不去重、也不进缓存。
+
+    失败类：poll 探测长任务是否跑完，首次结果("运行中")被缓存后，后续同
+    job_id 的 poll 永远吃到陈旧"运行中" → 卡死轮询循环、永远收不到完成。
+    与黑名单的区别：黑名单清缓存（有副作用），这里只跳过去重、不碰别人的缓存。
+    """
+    return name in _NO_DEDUP_TOOLS
+
+
 def storm_invalidate() -> None:
     """写操作后清空窗口与缓存：磁盘/外部状态已变，旧读取结果不可信。
 
@@ -84,6 +97,8 @@ def storm_record(name: str, args: dict, result: str) -> None:
     if _is_blacklisted(name):
         storm_invalidate()
         return
+    if _is_no_dedup(name):
+        return  # 时变读：不缓存（下次必须真执行拿新状态），也不清别人的缓存
     h = _hash_call(name, args)
     with _lock:
         _result_cache[h] = result
@@ -105,7 +120,7 @@ def storm_check(name: str, args: dict) -> str | None:
         None — 不是重复，正常执行
     """
     global _dedup_hits
-    if _is_blacklisted(name):
+    if _is_blacklisted(name) or _is_no_dedup(name):
         return None
 
     clean = {k: v for k, v in args.items() if v is not None}
@@ -155,3 +170,8 @@ def get_storm_stats() -> dict:
 def get_blacklist() -> frozenset[str]:
     """返回黑名单集合（用于调试/诊断）。"""
     return _DEDUP_BLACKLIST
+
+
+def get_no_dedup() -> frozenset[str]:
+    """返回时变读集合（不去重、不清缓存；用于调试/诊断）。"""
+    return _NO_DEDUP_TOOLS

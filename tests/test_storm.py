@@ -2,6 +2,7 @@
 
 from src.tools.storm import (
     get_blacklist,
+    get_no_dedup,
     get_storm_stats,
     reset_storm,
     storm_check,
@@ -217,6 +218,52 @@ class TestStormBlacklist:
         for tool in ("read_file", "search_web", "grep_code", "rag_query",
                      "git_status", "git_log", "git_diff", "git_branch"):
             assert tool not in bl, f"{tool} 不应在黑名单中"
+
+
+class TestNoDedupTimeVarying:
+    """时变读：poll 探测长任务状态，绝不能被去重缓存卡死轮询。
+
+    真实失败类（探针实测）：agent 用 poll 探测全量测试有没有跑完，storm 把首次
+    "运行中"缓存住，后续同 job_id 的 poll 永远命中陈旧缓存 → 永远收不到"完成"，
+    agent 卡在轮询循环里直到识破"缓存卡住了"手动绕开。修法=poll 入 NO_DEDUP_TOOLS。
+    """
+
+    def setup_method(self):
+        reset_storm()
+
+    def test_poll_registered_as_no_dedup_not_blacklist(self):
+        """时变读 poll：在 no_dedup 集合里，但不在副作用黑名单里。"""
+        assert "poll" in get_no_dedup(), "poll 必须不去重（时变读）"
+        assert "poll" not in get_blacklist(), "poll 无副作用，不该进黑名单（否则每次 poll 误清读缓存）"
+
+    def test_poll_never_deduped_even_after_record(self):
+        """同 job_id 反复 poll 必须每次真执行（返回 None），绝不返回缓存的旧状态。"""
+        args = {"job_id": "job-abc"}
+        assert storm_check("poll", args) is None
+        storm_record("poll", args, "running")           # 首次"运行中"
+        # 关键回归：第二次 poll 不得吃到缓存的"running"，必须 None（去真查）
+        assert storm_check("poll", args) is None, "poll 被去重=卡死轮询的根因"
+        storm_record("poll", args, "running")
+        assert storm_check("poll", args) is None
+
+    def test_poll_does_not_pollute_window_or_cache(self):
+        """时变读完全不进窗口/缓存，不占位也不留陈旧条目。"""
+        for _ in range(5):
+            storm_check("poll", {"job_id": "j1"})
+            storm_record("poll", {"job_id": "j1"}, "running")
+        stats = get_storm_stats()
+        assert stats["window_size"] == 0
+        assert stats["cached"] == 0
+
+    def test_poll_record_does_not_invalidate_other_cache(self):
+        """无副作用读：record poll 不得清掉别的读缓存（区别于黑名单工具）。"""
+        storm_check("read_file", {"path": "a.py"})
+        storm_record("read_file", {"path": "a.py"}, "内容")
+        # 中间穿插 poll —— 不该像 run_command 那样清空 read_file 的缓存
+        storm_check("poll", {"job_id": "j1"})
+        storm_record("poll", {"job_id": "j1"}, "running")
+        dup = storm_check("read_file", {"path": "a.py"})
+        assert dup is not None and "内容" in dup, "poll 误清了读缓存=借用了黑名单的副作用语义"
 
 
 

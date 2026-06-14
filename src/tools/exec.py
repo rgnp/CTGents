@@ -225,7 +225,7 @@ TOOLS_EXEC = [
         },
     },
     {
-        "_meta": {"label": "轮询异步任务", "parallel_safe": True},
+        "_meta": {"label": "轮询异步任务", "parallel_safe": True, "no_dedup": True},
         "type": "function",
         "function": {
             "name": "poll",

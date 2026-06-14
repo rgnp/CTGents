@@ -105,9 +105,10 @@ class TestHotReloadPreservesMeta:
     def test_reload_tools_preserves_meta(self):
         from src.tools import reload_tools
         reload_tools()
-        labels, psafe, skip, dedup = _derive()
+        labels, psafe, skip, dedup, no_dedup = _derive()
         assert len(labels) == 55
         assert len(psafe) == 30
+        assert "poll" in no_dedup, "poll 是时变读，必须在 no_dedup 集合"
 
 
 class TestDispatchContract:

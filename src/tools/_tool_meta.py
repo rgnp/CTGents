@@ -96,6 +96,10 @@ TOOL_LABELS: dict[str, str] = {}
 PARALLEL_SAFE: frozenset[str] = frozenset()
 SKIP_COMPRESS_TOOLS: frozenset[str] = frozenset()
 DEDUP_BLACKLIST: frozenset[str] = frozenset()
+# 时变读：结果随时间变（如 poll 轮询异步任务），绝不去重、也无副作用不清缓存。
+# 与 dedup_blacklist 区分：黑名单=有副作用(写盘/执行)→不去重且清缓存；no_dedup=纯
+# 读但结果不稳定→不去重但不清缓存。挤进黑名单会让每次 poll 误清整轮读缓存。
+NO_DEDUP_TOOLS: frozenset[str] = frozenset()
 
 
 def _load_raw_tools() -> list[dict]:
@@ -113,7 +117,7 @@ def _load_raw_tools() -> list[dict]:
 
 
 def _derive() -> tuple[dict[str, str], frozenset[str],
-                       frozenset[str], frozenset[str]]:
+                       frozenset[str], frozenset[str], frozenset[str]]:
     """从工具定义的 _meta 字段派生所有元数据集合。"""
     tools = _load_raw_tools()
 
@@ -121,6 +125,7 @@ def _derive() -> tuple[dict[str, str], frozenset[str],
     parallel_safe: set[str] = set()
     skip_compress: set[str] = set()
     dedup_blacklist: set[str] = set()
+    no_dedup: set[str] = set()
 
     for t in tools:
         meta = t.get("_meta", {})
@@ -133,6 +138,8 @@ def _derive() -> tuple[dict[str, str], frozenset[str],
             skip_compress.add(name)
         if meta.get("dedup_blacklist"):
             dedup_blacklist.add(name)
+        if meta.get("no_dedup"):
+            no_dedup.add(name)
 
     # 合并别名
     for alias_name, alias_meta in _META_ALIASES.items():
@@ -143,20 +150,23 @@ def _derive() -> tuple[dict[str, str], frozenset[str],
             skip_compress.add(alias_name)
         if alias_meta.get("dedup_blacklist"):
             dedup_blacklist.add(alias_name)
+        if alias_meta.get("no_dedup"):
+            no_dedup.add(alias_name)
 
     return (
         labels,
         frozenset(parallel_safe),
         frozenset(skip_compress),
         frozenset(dedup_blacklist),
+        frozenset(no_dedup),
     )
 
 
 def _refresh_globals() -> None:
     """重新派生并更新模块级全局变量。供热加载调用。"""
-    global TOOL_LABELS, PARALLEL_SAFE, SKIP_COMPRESS_TOOLS, DEDUP_BLACKLIST
+    global TOOL_LABELS, PARALLEL_SAFE, SKIP_COMPRESS_TOOLS, DEDUP_BLACKLIST, NO_DEDUP_TOOLS
     (TOOL_LABELS, PARALLEL_SAFE,
-     SKIP_COMPRESS_TOOLS, DEDUP_BLACKLIST) = _derive()
+     SKIP_COMPRESS_TOOLS, DEDUP_BLACKLIST, NO_DEDUP_TOOLS) = _derive()
 
 
 # 首次导入时计算
