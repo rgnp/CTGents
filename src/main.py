@@ -157,12 +157,14 @@ def process_turn(
     on_progress: Callable[[], None] | None = None,
     session_id: str = "",
 ) -> str:
-    """一轮对话的数据管线：思考牙 → 自动记忆检索 → 预读 → run_conversation → 收尾审计。"""
+    """一轮对话的数据管线：思考牙 → 预读 → run_conversation → 收尾审计。
+
+    记忆每轮已由 _append_volatile_context 的记忆索引全文注入（约 20 条全给）；
+    曾经的 auto_recall（embedding 每轮再搜 top-3 注入）与之重叠、且拖一个未声明的
+    80MB sentence-transformers 依赖，已删。需要深挖某条记忆用 recall 工具。
+    """
     # 思考牙：检索命中是线索不是答案
     _inject_thinking_stance(ctx)
-    # 自动记忆检索：每轮用用户输入搜记忆库（MemoCue 模式）
-    from .auto_recall import inject_prerecall
-    inject_prerecall(ctx, user_input)
     # 预读优化：用户提到了文件路径，先读入上下文
     pre_msgs = _preread_files(user_input, ctx)
     if pre_msgs:
