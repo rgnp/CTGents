@@ -401,8 +401,8 @@ def _append_cache_section(lines: list[str], ctx, _sid: str | None) -> None:
         tail_note = f"仅显示最近 {len(shown)}/{len(history)} 次，" if base > 0 else ""
         lines.append(f"    （{tail_note}T=轮首带尾 L=循环内跳尾）")
         lines.append(
-            "    取证: ▲前沿变=旧消息被改写(查代码) · ⏳=间隔大疑TTL"
-            " · ⚡=payload稳仍塌→服务端淘汰"
+            "    取证: ▲前沿变=旧消息被改写 · ⚡服务端吃掉=发过的前缀仍 miss"
+            " · 新内容=miss 在新后缀(预期内)"
         )
     else:
         lines.append("")
@@ -410,22 +410,31 @@ def _append_cache_section(lines: list[str], ctx, _sid: str | None) -> None:
 
 
 def _spike_verdict(e: dict, prev: dict | None, p: int, h: int, pct: float) -> str:
-    """突刺取证判词。命中≈0=冷启动；命中率<70% 才算突刺（治旧版按 2×中位数误标
-    长新内容），再按结构指纹定因：前沿哈希变=我们改写旧消息；payload 稳而命中塌→
-    服务端淘汰；间隔大→疑 TTL。旧格式 history（无 fe）只给冷/突刺，不强行定因。
+    """突刺取证判词，靠 lcpr（与上条 payload 公共前缀比 = 本该命中的上限）定因：
+
+      命中≈0 / 首请求大半没命中 → 冷启动（一次性）。
+      前沿哈希变               → 靠前旧消息被改写（我们的 bug）。
+      实命中率 << lcpr         → 我们发过、缓存过的前缀被服务端吃了（答"纯追加为何命中降"）。
+      实命中率 ≈ lcpr 但偏低    → miss 全在新追加后缀（工具输出/读文件），预期内、非异常。
+    旧格式 history（无 lcpr）退回 fe/间隔 粗判。命中率≥70% 视作健康、不标。
     """
     if h <= p * 0.05 or (prev is None and pct < 70):  # 首请求大半没命中也是冷启动
         return "  冷启动"
-    if pct >= 70:
-        return ""
-    if "fe" not in e:          # 旧格式：无取证字段，只标突刺
-        return "  ←突刺"
-    g = e.get("g", 0)
-    if prev is not None and prev.get("fe") and e.get("fe") != prev.get("fe"):
+    if prev is not None and prev.get("fe") and e.get("fe") and e.get("fe") != prev.get("fe"):
         return "  ▲前沿变(查改写)"
-    if g >= 30:
-        return f"  ⏳间隔{g}s(疑TTL)"
-    return f"  ⚡payload稳/间隔{g}s→服务端淘汰?"
+    lcpr = e.get("lcpr")
+    if lcpr is not None and prev is not None and pct < 90:
+        expected = lcpr * 100  # 本该命中率（%）= 与上条 payload 的公共前缀占比
+        if pct < expected - 10:            # 实命中比"本该命中"低 10pp 以上 = 服务端吃了
+            eaten = int((expected - pct) / 100 * p)
+            return f"  ⚡服务端吃掉~{eaten:,}(本该{expected:.0f}%/实{pct:.0f}%)"
+        if pct < 70:                       # 命中≈本该命中，miss 都在新后缀
+            return "  新内容(工具/读文件，预期内)"
+        return ""
+    # 旧格式（无 lcpr）：信息不足，只标突刺、不强行定因
+    if pct < 70:
+        return "  ←突刺"
+    return ""
 
 @builtin("/compact", description="手动压缩上下文：驱逐旧对话换摘要（不必等 65% 自动触发）")
 def _cmd_compact(r: CmdResult, ctx, _args, _sid) -> None:

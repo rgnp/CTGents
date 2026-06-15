@@ -377,29 +377,54 @@ def _trailing_system_tokens(messages: list[dict]) -> int:
     return total
 
 
-_last_req_time = None  # 上一条请求的时刻（monotonic），算请求间隔用
+_last_req_time = None      # 上一条请求的时刻（monotonic），算请求间隔用
+_prev_payload_sig = None   # 上次 payload 的逐消息 (hash, est_tok)，算最长公共前缀
 
 
 def _payload_fingerprint(messages: list[dict]) -> dict:
     """量本次 payload 的结构指纹，供突刺取证（命中塌了到底是谁的锅）。
 
     中段 = send() 里排在 prefix 之后、tail 之前的非 system 消息，正常只追加不改：
-      n  = 中段消息条数（缩了=有东西删/改了旧消息）。
-      fe = 中段「前沿」哈希（最靠前 3 条内容）。它本该恒定（最早几轮对话从不变）：
-           突刺时 fe 变 = 靠前旧消息被原地改写（我们的 bug，往代码里查）；
-           fe 稳而命中塌  = 我们没动 payload → 是服务端淘汰了前缀缓存。
-      g  = 距上条请求秒数。大间隔→疑 TTL；毫秒级→排除 TTL（服务端容量/LRU）。
-    只探前沿：中段深处的原地改写只可能来自压缩，此处阈值远未触发，故不在 fe 覆盖内。
+      n    = 中段消息条数（缩了=有东西删/改了旧消息）。
+      fe   = 中段「前沿」哈希（最靠前 3 条内容）。本该恒定（最早几轮对话从不变）：
+             突刺时 fe 变 = 靠前旧消息被原地改写（我们的 bug，往代码里查）。
+      g    = 距上条请求秒数。大间隔→疑 TTL；毫秒级→排除 TTL（服务端容量/LRU）。
+      lcpr = 与上一条 payload 的最长公共前缀占本次的比例（按 token 估算）。
+             这就是「本该命中」的上限——前缀缓存对未变的前缀必命中。
+             实命中率 << lcpr = 我们发过、之前缓存过的前缀被服务端吃了（不是新内容 miss，
+             答得了"纯追加为何命中反降"）；实命中率 ≈ lcpr = miss 全在新追加后缀，预期内。
+    用比例而非绝对值：抵消 estimate_tokens 与真实 token 的系统性尺度差（两边同尺度相除）。
     """
     import time
-    global _last_req_time
+
+    from .tools.tokens import estimate_tokens
+    global _last_req_time, _prev_payload_sig
     nonsys = [m for m in messages if m.get("role") != "system"]
     front = "\x00".join((m.get("content") or "")[:500] for m in nonsys[:3])
     fe = hashlib.sha256(front.encode("utf-8", "ignore")).hexdigest()[:8] if nonsys else "-"
+
+    # 逐消息签名（顺序即 payload 顺序），含 tool_calls 以防工具调用变化被漏掉
+    sig: list[tuple[str, int]] = []
+    for m in messages:
+        key = m.get("role", "") + "\x00" + (m.get("content") or "")
+        if m.get("tool_calls"):
+            key += "\x00tc" + str(len(m["tool_calls"]))
+        h = hashlib.sha256(key.encode("utf-8", "ignore")).hexdigest()[:8]
+        sig.append((h, estimate_tokens(m.get("content") or "")))
+    total_est = sum(t for _h, t in sig) or 1
+    lcp = 0
+    if _prev_payload_sig:
+        for (h1, t1), (h2, _t2) in zip(sig, _prev_payload_sig, strict=False):
+            if h1 != h2:
+                break
+            lcp += t1
+    _prev_payload_sig = sig
+    lcpr = round(lcp / total_est, 3)
+
     now = time.monotonic()
     gap = 0.0 if _last_req_time is None else round(now - _last_req_time, 1)
     _last_req_time = now
-    return {"n": len(nonsys), "fe": fe, "g": gap}
+    return {"n": len(nonsys), "fe": fe, "g": gap, "lcpr": lcpr}
 
 # 当前会话 ID 和内存中的统计（切换会话时自动读写文件）
 _current_session_id: str = ""
@@ -515,7 +540,7 @@ def _update_cache_stats(model_key: str, messages: list[dict], session_id: str = 
         fp = _payload_fingerprint(messages)
         hist.append({"p": usage["prompt_tokens"], "h": usage["cache_hit_tokens"],
                      "t": _trailing_system_tokens(messages),
-                     "n": fp["n"], "fe": fp["fe"], "g": fp["g"]})
+                     "n": fp["n"], "fe": fp["fe"], "g": fp["g"], "lcpr": fp["lcpr"]})
         if len(hist) > _HISTORY_LIMIT:
             del hist[:-_HISTORY_LIMIT]
         _last_api_usage[model_key] = None  # 消费掉，防止重复计数

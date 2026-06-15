@@ -181,20 +181,20 @@ def test_spike_verdict_classifies():
     # 冷启动：命中 ≈ 0
     assert "冷启动" in _spike_verdict({"fe": "a"}, None, 1000, 10, 1.0)
     # 健康（>=70%）：无判词，治旧版 #16(90%) 误标
-    assert _spike_verdict({"fe": "a"}, {"fe": "a"}, 1000, 900, 90.0) == ""
-    # 前沿变 → 我们改写了旧消息
-    v = _spike_verdict({"fe": "b", "g": 0.5}, {"fe": "a"}, 1000, 300, 30.0)
+    assert _spike_verdict({"fe": "a", "lcpr": 0.95}, {"fe": "a"}, 1000, 900, 90.0) == ""
+    # 前沿变 → 我们改写了旧消息（优先于 lcpr）
+    v = _spike_verdict({"fe": "b", "lcpr": 0.1}, {"fe": "a"}, 1000, 300, 30.0)
     assert "前沿变" in v
-    # payload 稳 + 间隔大 → 疑 TTL
-    v = _spike_verdict({"fe": "a", "g": 99}, {"fe": "a"}, 1000, 300, 30.0)
-    assert "TTL" in v
-    # payload 稳 + 间隔小 → 服务端淘汰
-    v = _spike_verdict({"fe": "a", "g": 0.3}, {"fe": "a"}, 1000, 300, 30.0)
-    assert "服务端淘汰" in v
-    # 旧格式（无 fe，且有前序请求）：只标突刺、不强行定因
-    assert "突刺" in _spike_verdict({}, {"fe": "a"}, 1000, 300, 30.0)
-    # 首请求（prev=None）大半没命中 = 冷启动，不误判服务端淘汰
-    assert "冷启动" in _spike_verdict({"fe": "a", "g": 0.0}, None, 11176, 3968, 36.0)
+    # 实命中率 << 本该命中(lcpr) → 服务端吃掉已发过的前缀（答"纯追加为何命中降"）
+    v = _spike_verdict({"fe": "a", "lcpr": 0.91}, {"fe": "a"}, 10868, 8320, 77.0)
+    assert "服务端吃掉" in v
+    # 实命中率 ≈ 本该命中，miss 都在新后缀 → 新内容（预期内，非异常）
+    v = _spike_verdict({"fe": "a", "lcpr": 0.66}, {"fe": "a"}, 15487, 10067, 65.0)
+    assert "新内容" in v
+    # 旧格式（无 lcpr，有前序请求）：信息不足，只标突刺、不强行定因
+    assert "突刺" in _spike_verdict({"fe": "a"}, {"fe": "a"}, 1000, 300, 30.0)
+    # 首请求（prev=None）大半没命中 = 冷启动，不误判
+    assert "冷启动" in _spike_verdict({"fe": "a", "lcpr": 0.0}, None, 11176, 3968, 36.0)
 
 
 def test_miss_attribution_credits_cold_and_caps_tail_per_request():
