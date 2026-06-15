@@ -391,11 +391,13 @@ def _append_cache_section(lines: list[str], ctx, _sid: str | None) -> None:
             m = p - h
             pct = h / p * 100 if p else 0
             kind = "T" if e.get("t", 0) > 0 else "L"
+            c = e.get("c")
+            out = f" 出{c:>5,}" if c is not None else ""
             extra = f" g{e.get('g', 0)}s n{e.get('n', 0)}" if "fe" in e else ""
             verdict = _spike_verdict(e, prev, p, h, pct)
             lines.append(
                 f"    #{i:<3}[{kind}] 输入{p:>7,} 命中{h:>7,} miss{m:>7,} ({pct:>3.0f}%)"
-                f"{extra}{verdict}"
+                f"{out}{extra}{verdict}"
             )
             prev = e
         tail_note = f"仅显示最近 {len(shown)}/{len(history)} 次，" if base > 0 else ""
@@ -420,7 +422,10 @@ def _spike_verdict(e: dict, prev: dict | None, p: int, h: int, pct: float) -> st
     """
     if h <= p * 0.05 or (prev is None and pct < 70):  # 首请求大半没命中也是冷启动
         return "  冷启动"
-    if prev is not None and prev.get("fe") and e.get("fe") and e.get("fe") != prev.get("fe"):
+    # 前沿（最早 3 条非 sys）变 = 旧消息被改写。但前 3 条尚未填满时 fe 本就随追加变化，
+    # 不算改写——故要求上一条已有 ≥3 条中段消息（前沿已定型）才判，避免开头几轮误报。
+    if (prev is not None and prev.get("n", 0) >= 3
+            and prev.get("fe") and e.get("fe") and e.get("fe") != prev.get("fe")):
         return "  ▲前沿变(查改写)"
     lcpr = e.get("lcpr")
     if lcpr is not None and prev is not None and pct < 90:

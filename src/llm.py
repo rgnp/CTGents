@@ -539,6 +539,7 @@ def _update_cache_stats(model_key: str, messages: list[dict], session_id: str = 
         hist = stats.setdefault("history", [])
         fp = _payload_fingerprint(messages)
         hist.append({"p": usage["prompt_tokens"], "h": usage["cache_hit_tokens"],
+                     "c": usage["completion_tokens"],
                      "t": _trailing_system_tokens(messages),
                      "n": fp["n"], "fe": fp["fe"], "g": fp["g"], "lcpr": fp["lcpr"]})
         if len(hist) > _HISTORY_LIMIT:

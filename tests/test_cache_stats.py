@@ -71,8 +71,9 @@ def test_turn_accum_and_tail_history(monkeypatch, tmp_path):
     assert len(hist) == 2
     assert hist[0]["t"] > 0                         # 带尾部的请求
     assert hist[1]["t"] == 0                        # 无尾部（skip_volatile 模拟）
-    # 取证指纹字段齐全
-    assert {"n", "fe", "g"} <= set(hist[0])
+    # 取证指纹字段齐全 + 每请求输出 token
+    assert {"n", "fe", "g", "lcpr", "c"} <= set(hist[0])
+    assert hist[0]["c"] == 50 and hist[1]["c"] == 30  # 各请求 completion_tokens
     assert hist[0]["n"] == 1 and hist[1]["n"] == 1  # 各一条非 system 消息
     llm.reset_turn_accum()
 
@@ -182,9 +183,12 @@ def test_spike_verdict_classifies():
     assert "冷启动" in _spike_verdict({"fe": "a"}, None, 1000, 10, 1.0)
     # 健康（>=70%）：无判词，治旧版 #16(90%) 误标
     assert _spike_verdict({"fe": "a", "lcpr": 0.95}, {"fe": "a"}, 1000, 900, 90.0) == ""
-    # 前沿变 → 我们改写了旧消息（优先于 lcpr）
-    v = _spike_verdict({"fe": "b", "lcpr": 0.1}, {"fe": "a"}, 1000, 300, 30.0)
+    # 前沿变 → 我们改写了旧消息（优先于 lcpr）；要求上一条前沿已定型（n>=3）
+    v = _spike_verdict({"fe": "b", "lcpr": 0.1, "n": 5}, {"fe": "a", "n": 4}, 1000, 300, 30.0)
     assert "前沿变" in v
+    # 开头几轮前沿还在填（上一条 n<3）→ fe 变属正常，不误报「前沿变」
+    v = _spike_verdict({"fe": "b", "lcpr": 0.45, "n": 5}, {"fe": "a", "n": 1}, 9964, 8320, 84.0)
+    assert "前沿变" not in v
     # 实命中率 << 本该命中(lcpr) → 服务端吃掉已发过的前缀（答"纯追加为何命中降"）
     v = _spike_verdict({"fe": "a", "lcpr": 0.91}, {"fe": "a"}, 10868, 8320, 77.0)
     assert "服务端吃掉" in v
