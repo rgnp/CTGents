@@ -361,6 +361,13 @@ def auto_select_model(user_input: str) -> LLMBackend:
 # 统计持久化目录：agent/stats/{session_id}.json
 _STATS_DIR = Path(__file__).resolve().parent.parent / "stats"
 
+# 取证开关：CTG_DUMP_PAYLOADS=1 时把每次真实发给 API 的 messages 原样落盘，
+# 供 tools/payload_diff.py 逐消息算相邻请求真公共前缀（字符/token），与服务端
+# 报的 cache_hit 对账，一锤定音「命中塌陷是代码改了历史还是服务端吃了缓存」。
+# 默认关：正常运行零落盘、零开销。
+_DUMP_PAYLOADS = os.getenv("CTG_DUMP_PAYLOADS", "").strip().lower() not in ("", "0", "false", "no")
+_PAYLOAD_DIR = _STATS_DIR / "payloads"
+
 # 空统计模板
 _EMPTY_STATS = {"requests": 0, "prompt_tokens": 0, "completion_tokens": 0,
                  "cache_hit_tokens": 0, "cache_miss_tokens": 0}
@@ -492,6 +499,23 @@ def _save_cache_stats(session_id: str) -> None:
         pass  # 写入失败不阻塞
 
 
+def _dump_payload(session_id: str, req_idx: int, messages: list[dict], usage: dict | None) -> None:
+    """把本次真实发给 API 的 messages 原样落盘（CTG_DUMP_PAYLOADS 开时）。
+
+    存 stats/payloads/<session>/req_<NNNN>.json，含真实 usage（p/h/miss/c），
+    供 payload_diff.py 算真公共前缀并与服务端命中对账。这是不带任何估算的地面真相：
+    相邻 payload 字节相同的前缀 = 前缀缓存「本该命中」的硬上限。
+    """
+    if not _DUMP_PAYLOADS:
+        return
+    with contextlib.suppress(Exception):
+        d = _PAYLOAD_DIR / (session_id or "_nameless")
+        d.mkdir(parents=True, exist_ok=True)
+        rec = {"req": req_idx, "usage": usage, "messages": messages}
+        (d / f"req_{req_idx:04d}.json").write_text(
+            json.dumps(rec, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
 def _ensure_session(session_id: str) -> None:
     """确保内存中是目标会话的统计。如果会话切换，自动保存旧会话、加载新会话。"""
     global _current_session_id, _CACHE_STATS
@@ -566,6 +590,7 @@ def _update_cache_stats(model_key: str, messages: list[dict], session_id: str = 
                      "n": fp["n"], "fe": fp["fe"], "g": fp["g"], "lcpr": fp["lcpr"]})
         if len(hist) > _HISTORY_LIMIT:
             del hist[:-_HISTORY_LIMIT]
+        _dump_payload(_current_session_id, stats["requests"], messages, usage)
         _last_api_usage[model_key] = None  # 消费掉，防止重复计数
         _save_cache_stats(_current_session_id)
         return
