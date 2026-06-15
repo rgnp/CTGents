@@ -765,6 +765,10 @@ _MAX_REQUESTS_PER_TURN = RUNTIME.max_requests_per_turn
 # 带工具的对话、看 /context 第一个[L]是否仍塌；机制（为何 skip 丢命中）也未坐实，勿当结论。
 # 设 CTG_TOOLLOOP_KEEP_TAIL=0 恢复旧行为（skip）。
 _KEEP_TOOLLOOP_TAIL = os.getenv("CTG_TOOLLOOP_KEEP_TAIL", "1").strip().lower() not in ("", "0", "false", "no")
+# 诊断实验：CTG_NO_VOLATILE_TAIL=1 时每个请求都跳过全部尾部 volatile（stance/任务/钉板都不发），
+# payload 变成纯 [前缀][对话]、可证明只追加。用于终结"命中塌陷是我们的代码还是服务端"之争：
+# 开着仍塌=代码已证明只追加→服务端淘汰；开着不塌=尾部那套在作怪。默认关。
+_NO_VOLATILE_TAIL = os.getenv("CTG_NO_VOLATILE_TAIL", "").strip().lower() not in ("", "0", "false", "no")
 # 干了不少活却没建任务 → 提示建任务的请求数阈值——真值在 params.RUNTIME
 _TASK_SUGGEST_MIN_REQUESTS = RUNTIME.task_suggest_min_requests
 # eager 工具执行线程池（LLM 流式期间预启动 SAFE 工具，持久复用）
@@ -1509,7 +1513,7 @@ def run_conversation(
             logger.info("压缩后消息数: %d", len(ctx))
 
         try:
-            _skip_tail = (requests_made > 0) and not _KEEP_TOOLLOOP_TAIL
+            _skip_tail = _NO_VOLATILE_TAIL or ((requests_made > 0) and not _KEEP_TOOLLOOP_TAIL)
             content, tool_calls, eager_results = _invoke_llm_eager(
                 backend, ctx.send(skip_volatile_system=_skip_tail), on_token, session_id,
             )
