@@ -992,10 +992,6 @@ def _replace_log_with_summary(ctx, kept: list[dict], evicted: list[dict],
         "─── 以上为归档摘要，以下为当前对话 ───"
     )}]
     new_log.extend(kept)
-    for m in evicted:
-        if m.get("_volatile") and "记忆" in m.get("content", ""):
-            new_log.insert(0, m)
-            break
     ctx.log.clear()
     ctx.log.extend(new_log)
 # ── LLM 摘要缓存：相同内容哈希不重复调 LLM（滑窗压缩时同段对话反复驱替）──
@@ -1432,40 +1428,6 @@ def _handle_tool_results(
     return storm_sig, storm_count
 
 
-def _refresh_volatile_signals(ctx: CacheContext) -> None:
-    """刷新 ctx.log 中的 volatile 消息：记忆索引 + 钉板。"""
-    _refresh_memory_signal(ctx)
-    _refresh_pinboard_signal(ctx)
-
-
-def _refresh_memory_signal(ctx: CacheContext) -> None:
-    """记忆索引变更后更新 ctx.log 中的记忆上下文。"""
-    from .tools.memory import clear_dirty, is_dirty
-    from .tools.memory import get_context as _get_mem_ctx
-    if not is_dirty():
-        return
-    old_idx = next((i for i, m in enumerate(ctx.log)
-                    if m.get("role") == "system" and "你拥有以下记忆" in m.get("content", "")), -1)
-    new_ctx = _get_mem_ctx()
-    if new_ctx and old_idx >= 0:
-        ctx.log[old_idx] = {"role": "system", "content": new_ctx, "_volatile": True}
-    elif new_ctx and old_idx < 0:
-        ctx.log.append({"role": "system", "content": new_ctx, "_volatile": True})
-    clear_dirty()
-
-
-def _refresh_pinboard_signal(ctx: CacheContext) -> None:
-    """钉板变更后刷新 ctx.log 中的钉板消息。"""
-    from .session_pins import is_pinboard_msg, render_tail
-    pin_idx = next((i for i, m in enumerate(ctx.log) if is_pinboard_msg(m)), -1)
-    pin_content = render_tail()
-    if pin_content and pin_idx >= 0:
-        ctx.log[pin_idx] = {"role": "system", "content": pin_content, "_volatile": True}
-    elif pin_content and pin_idx < 0:
-        ctx.log.append({"role": "system", "content": pin_content, "_volatile": True})
-    elif not pin_content and pin_idx >= 0:
-        ctx.log.pop(pin_idx)
-
 def run_conversation(
     ctx: CacheContext,
     user_input: str,
@@ -1662,17 +1624,8 @@ def run_conversation(
                         "content": result,
                         "_tool_name": tool_name,
                     })
-                # 记忆变更后更新 ctx.log 中的记忆索引
-                from .tools.memory import clear_dirty, get_context, is_dirty
-                if is_dirty():
-                    old_idx = next((i for i, m in enumerate(ctx.log)
-                                    if m.get("role") == "system" and "你拥有以下记忆" in m.get("content","")), -1)
-                    new_ctx = get_context()
-                    if new_ctx and old_idx >= 0:
-                        ctx.log[old_idx] = {"role": "system", "content": new_ctx, "_volatile": True}
-                    elif new_ctx and old_idx < 0:
-                        ctx.log.append({"role": "system", "content": new_ctx, "_volatile": True})
-                    clear_dirty()
+                # 记忆已移入缓存前缀（会话开始快照、会话内不变），不在轮内更新——
+                # 中途 remember 的新记忆靠对话上下文带过本会话，落盘后下次会话进前缀索引。
                 # 钉板变更后刷新 ctx.log 中的钉板消息（轮内 pin/unpin 即时生效，缓存安全挂尾）
                 from .session_pins import is_pinboard_msg, render_tail
                 pin_idx = next((i for i, m in enumerate(ctx.log) if is_pinboard_msg(m)), -1)

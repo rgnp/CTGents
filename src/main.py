@@ -97,15 +97,22 @@ def _make_date_message() -> dict:
 
 
 def _make_prefix_msgs() -> list[dict]:
-    """缓存前缀的不可变系统消息。"""
-    return [_make_date_message(), _make_agents_message(), _make_mechanisms_message()]
+    """缓存前缀的不可变系统消息（会话开始构建一次，会话内哈希锁死、不变）。
+
+    记忆索引放这里而非尾部：① 它进了缓存前缀，每个请求(含工具循环)都命中、都看得到，
+    不再每轮首因排在增长的对话之后而重新 miss；② 会话中途 remember 不会(也不能)改前缀——
+    新记忆靠对话上下文带过本会话、落盘后下次会话开始重建前缀时才进索引。记忆是参考资料、
+    不靠 recency，进前缀合适（行为牙 _inject_*_stance 仍留尾部，靠 recency 压默认）。
+    """
+    msgs = [_make_date_message(), _make_agents_message(), _make_mechanisms_message()]
+    mem = _make_memory_context()
+    if mem:
+        msgs.append(mem)
+    return msgs
 
 
 def _append_volatile_context(ctx: CacheContext) -> None:
-    """注入 volatile 上下文：记忆 + 未完成长任务 + 会话钉板。"""
-    mem_ctx = _make_memory_context()
-    if mem_ctx:
-        ctx.log.append(mem_ctx)
+    """注入 volatile 上下文：未完成长任务 + 会话钉板（记忆已移入缓存前缀，见 _make_prefix_msgs）。"""
     from .tasks import make_task_context_message
     task_ctx = make_task_context_message()
     if task_ctx:
