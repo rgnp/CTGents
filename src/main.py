@@ -216,12 +216,14 @@ def run_agent_turn(ctx: CacheContext, user_input: str,
     曾经 /retry 和中断"指导"直接调 run_conversation、绕过 process_turn 的审计与任务
     续跑——同一 agent 从不同入口跑的不是同一个循环。收敛到此函数后各入口一致、闭合。
     """
+    from . import status_bar
     from .task_loop import made_task_progress, run_task_continuation
     from .tasks import read_current as _read_current
 
     task_before = _read_current()
     sid = [session_id]
     on_token, has_output = _make_display()
+    status_bar.note_turn_start()
     _start_esc_listener()
     try:
         process_turn(
@@ -250,6 +252,10 @@ def run_agent_turn(ctx: CacheContext, user_input: str,
             run_task_continuation(ctx, _task_drive, on_status=print)
         finally:
             _stop_esc_listener()
+
+    footer = status_bar.note_turn_end()
+    if footer and sys.stdin.isatty():
+        print(footer)
     return sid[0]
 
 
