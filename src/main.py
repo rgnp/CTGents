@@ -540,7 +540,14 @@ def main() -> None:
     try:
         while True:
             try:
-                user_input = prompt("You: ", key_bindings=kb).strip() if _use_rich_input else input("You: ").strip()
+                if _use_rich_input:
+                    from . import status_bar
+                    status_bar.refresh(ctx, session_id)
+                    user_input = prompt(
+                        "You: ", key_bindings=kb, bottom_toolbar=status_bar.text
+                    ).strip()
+                else:
+                    user_input = input("You: ").strip()
             except (EOFError, KeyboardInterrupt):
                 break
 
@@ -565,6 +572,8 @@ def main() -> None:
                     ctx.log.extend(loaded_msgs)
                     _append_volatile_context(ctx)
                     session_id = r.load
+                    from . import status_bar
+                    status_bar.reset()  # 切会话复位 Δmiss 基线
                     print(f"已加载会话 [{r.load}]，共 {len(ctx)} 条消息")
                     _print_recent(ctx.all)
                 if r.clear:
@@ -576,6 +585,8 @@ def main() -> None:
                         clear_pins()
                         from .tasks import reset_gaps_cache
                         reset_gaps_cache()
+                        from . import status_bar
+                        status_bar.reset()  # 清空会话复位 Δmiss 基线
                     _append_volatile_context(ctx)
                 if r.goal:
                     session_id = _handle_goal(ctx, r.goal, session_id)
