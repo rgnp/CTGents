@@ -315,7 +315,9 @@ def _append_cache_section(lines: list[str], ctx, _sid: str | None) -> None:
       冷启动   = 首请求无缓存的非尾部部分（一次性，命中≈0 才算）
       尾部注入 = 各请求实际尾部 token 之和（工具循环 skip_volatile 的请求记 0）
       对话增量 = 残差（工具结果/读文件/生成）
-    每请求明细揪「突刺」：哪一次 miss 异常大（大工具输出 / 压缩重写 / 缓存驱逐）。
+    调用结构 = 轮首(带尾) vs 循环内(跳尾) 的请求数与 miss 分布（架构视角）。
+    每请求明细揪「突刺」并给取证判词：前沿哈希变→旧消息被改写(我们 bug)；
+    payload 稳而命中塌→服务端淘汰；间隔大→疑 TTL。靠 _payload_fingerprint 的 n/fe/g。
     """
     from .llm import get_cache_stats
     cache = get_cache_stats(_sid)
@@ -360,28 +362,65 @@ def _append_cache_section(lines: list[str], ctx, _sid: str | None) -> None:
     lines.append(f"    尾部注入  {tail_total:>9,}  ({n_tail}/{len(history)} 请求带尾部，循环内其余跳过)")
     lines.append(f"    对话增量  {body:>9,}  (工具结果/读文件/生成)")
 
-    # ── 每请求明细（揪突刺）──
+    # ── 调用结构（架构视角：轮首带尾 vs 循环内跳尾，miss 落在哪）──
     if history:
-        import statistics
-        misses = [e.get("p", 0) - e.get("h", 0) for e in history]
-        med = statistics.median(misses) if misses else 0
+        t_rows = [e for e in history if e.get("t", 0) > 0]   # 轮首：带尾部注入
+        l_rows = [e for e in history if e.get("t", 0) == 0]  # 循环内：跳尾
+        miss_t = sum(e.get("p", 0) - e.get("h", 0) for e in t_rows)
+        miss_l = sum(e.get("p", 0) - e.get("h", 0) for e in l_rows)
+        lines.append("")
+        lines.append("  调用结构:")
+        ratio = f"  ≈ {len(history) / len(t_rows):.1f} 请求/轮" if t_rows else ""
+        lines.append(f"    轮首 {len(t_rows)} 次 / 循环内 {len(l_rows)} 次{ratio}")
+        lines.append(f"    miss 分布:  轮首 {miss_t:,}  ·  循环内 {miss_l:,}")
+
+    # ── 每请求明细（揪突刺 + 取证）──
+    if history:
         shown = history[-15:]
         base = len(history) - len(shown)
         lines.append("")
-        lines.append("  每请求明细（揪突刺）:")
+        lines.append("  每请求明细（揪突刺 + 取证）:")
+        prev = history[base - 1] if base > 0 else None
         for i, e in enumerate(shown, start=base + 1):
             p, h = e.get("p", 0), e.get("h", 0)
             m = p - h
             pct = h / p * 100 if p else 0
-            mark = " 冷" if h <= p * 0.05 else (" ← 突刺" if med and m > med * 2 else "")
+            kind = "T" if e.get("t", 0) > 0 else "L"
+            extra = f" g{e.get('g', 0)}s n{e.get('n', 0)}" if "fe" in e else ""
+            verdict = _spike_verdict(e, prev, p, h, pct)
             lines.append(
-                f"    #{i:<3} 输入 {p:>8,}  命中 {h:>8,}  miss {m:>8,}  ({pct:>3.0f}%){mark}"
+                f"    #{i:<3}[{kind}] 输入{p:>7,} 命中{h:>7,} miss{m:>7,} ({pct:>3.0f}%)"
+                f"{extra}{verdict}"
             )
-        if base > 0:
-            lines.append(f"    （仅显示最近 {len(shown)}/{len(history)} 次）")
+            prev = e
+        tail_note = f"仅显示最近 {len(shown)}/{len(history)} 次，" if base > 0 else ""
+        lines.append(f"    （{tail_note}T=轮首带尾 L=循环内跳尾）")
+        lines.append(
+            "    取证: ▲前沿变=旧消息被改写(查代码) · ⏳=间隔大疑TTL"
+            " · ⚡=payload稳仍塌→服务端淘汰"
+        )
     else:
         lines.append("")
         lines.append("  每请求明细：本次更新后开始记录（旧会话仅有汇总）。")
+
+
+def _spike_verdict(e: dict, prev: dict | None, p: int, h: int, pct: float) -> str:
+    """突刺取证判词。命中≈0=冷启动；命中率<70% 才算突刺（治旧版按 2×中位数误标
+    长新内容），再按结构指纹定因：前沿哈希变=我们改写旧消息；payload 稳而命中塌→
+    服务端淘汰；间隔大→疑 TTL。旧格式 history（无 fe）只给冷/突刺，不强行定因。
+    """
+    if h <= p * 0.05:
+        return "  冷启动"
+    if pct >= 70:
+        return ""
+    if "fe" not in e:          # 旧格式：无取证字段，只标突刺
+        return "  ←突刺"
+    g = e.get("g", 0)
+    if prev is not None and prev.get("fe") and e.get("fe") != prev.get("fe"):
+        return "  ▲前沿变(查改写)"
+    if g >= 30:
+        return f"  ⏳间隔{g}s(疑TTL)"
+    return f"  ⚡payload稳/间隔{g}s→服务端淘汰?"
 
 @builtin("/compact", description="手动压缩上下文：驱逐旧对话换摘要（不必等 65% 自动触发）")
 def _cmd_compact(r: CmdResult, ctx, _args, _sid) -> None:

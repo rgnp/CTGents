@@ -376,6 +376,31 @@ def _trailing_system_tokens(messages: list[dict]) -> int:
         total += estimate_tokens(m.get("content") or "")
     return total
 
+
+_last_req_time = None  # 上一条请求的时刻（monotonic），算请求间隔用
+
+
+def _payload_fingerprint(messages: list[dict]) -> dict:
+    """量本次 payload 的结构指纹，供突刺取证（命中塌了到底是谁的锅）。
+
+    中段 = send() 里排在 prefix 之后、tail 之前的非 system 消息，正常只追加不改：
+      n  = 中段消息条数（缩了=有东西删/改了旧消息）。
+      fe = 中段「前沿」哈希（最靠前 3 条内容）。它本该恒定（最早几轮对话从不变）：
+           突刺时 fe 变 = 靠前旧消息被原地改写（我们的 bug，往代码里查）；
+           fe 稳而命中塌  = 我们没动 payload → 是服务端淘汰了前缀缓存。
+      g  = 距上条请求秒数。大间隔→疑 TTL；毫秒级→排除 TTL（服务端容量/LRU）。
+    只探前沿：中段深处的原地改写只可能来自压缩，此处阈值远未触发，故不在 fe 覆盖内。
+    """
+    import time
+    global _last_req_time
+    nonsys = [m for m in messages if m.get("role") != "system"]
+    front = "\x00".join((m.get("content") or "")[:500] for m in nonsys[:3])
+    fe = hashlib.sha256(front.encode("utf-8", "ignore")).hexdigest()[:8] if nonsys else "-"
+    now = time.monotonic()
+    gap = 0.0 if _last_req_time is None else round(now - _last_req_time, 1)
+    _last_req_time = now
+    return {"n": len(nonsys), "fe": fe, "g": gap}
+
 # 当前会话 ID 和内存中的统计（切换会话时自动读写文件）
 _current_session_id: str = ""
 _CACHE_STATS: dict[str, dict] = {
@@ -484,10 +509,13 @@ def _update_cache_stats(model_key: str, messages: list[dict], session_id: str = 
         stats["cache_miss_tokens"] += usage["cache_miss_tokens"]
         _turn_accum["completion_tokens"] += usage["completion_tokens"]
         _turn_accum["miss"] += usage["cache_miss_tokens"]
-        # 记每请求明细：p=输入 h=命中（miss=p-h 派生）t=本次尾部注入，保留最近 N 条
+        # 记每请求明细：p=输入 h=命中（miss=p-h 派生）t=本次尾部注入，
+        # 外加结构指纹 n/fe/g（突刺取证用，见 _payload_fingerprint）。保留最近 N 条。
         hist = stats.setdefault("history", [])
+        fp = _payload_fingerprint(messages)
         hist.append({"p": usage["prompt_tokens"], "h": usage["cache_hit_tokens"],
-                     "t": _trailing_system_tokens(messages)})
+                     "t": _trailing_system_tokens(messages),
+                     "n": fp["n"], "fe": fp["fe"], "g": fp["g"]})
         if len(hist) > _HISTORY_LIMIT:
             del hist[:-_HISTORY_LIMIT]
         _last_api_usage[model_key] = None  # 消费掉，防止重复计数

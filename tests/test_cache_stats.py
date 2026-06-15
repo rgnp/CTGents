@@ -71,7 +71,43 @@ def test_turn_accum_and_tail_history(monkeypatch, tmp_path):
     assert len(hist) == 2
     assert hist[0]["t"] > 0                         # 带尾部的请求
     assert hist[1]["t"] == 0                        # 无尾部（skip_volatile 模拟）
+    # 取证指纹字段齐全
+    assert {"n", "fe", "g"} <= set(hist[0])
+    assert hist[0]["n"] == 1 and hist[1]["n"] == 1  # 各一条非 system 消息
     llm.reset_turn_accum()
+
+
+# ── 突刺取证：payload 结构指纹 ──
+
+def test_payload_fingerprint_front_hash_stable_when_front_unchanged(monkeypatch):
+    """前沿不变 → fe 恒定（即使后面追加新消息）；中段条数 n 随追加增长。"""
+    monkeypatch.setattr(llm, "_last_req_time", None)
+    base = [{"role": "system", "content": "PREFIX"},
+            {"role": "user", "content": "Q1"},
+            {"role": "assistant", "content": "A1"},
+            {"role": "user", "content": "Q2"}]   # 前沿 3 条已满
+    grown = base + [{"role": "assistant", "content": "A2"},
+                    {"role": "system", "content": "TAIL"}]
+    fp1 = llm._payload_fingerprint(base)
+    fp2 = llm._payload_fingerprint(grown)
+    assert fp1["fe"] == fp2["fe"]      # 前沿（最早 3 条非 sys）没变，尾部追加不影响
+    assert fp2["n"] > fp1["n"]         # 中段条数增长
+
+
+def test_payload_fingerprint_front_hash_changes_when_front_rewritten(monkeypatch):
+    """靠前旧消息被改写 → fe 变（这正是要抓的"原地改写"信号）。"""
+    monkeypatch.setattr(llm, "_last_req_time", None)
+    a = [{"role": "user", "content": "Q1"}, {"role": "assistant", "content": "A1"}]
+    b = [{"role": "user", "content": "Q1-REWRITTEN"}, {"role": "assistant", "content": "A1"}]
+    assert llm._payload_fingerprint(a)["fe"] != llm._payload_fingerprint(b)["fe"]
+
+
+def test_payload_fingerprint_gap_grows(monkeypatch):
+    """第二次调用记录与上次的间隔（>=0），首次为 0。"""
+    monkeypatch.setattr(llm, "_last_req_time", None)
+    assert llm._payload_fingerprint([{"role": "user", "content": "x"}])["g"] == 0.0
+    g2 = llm._payload_fingerprint([{"role": "user", "content": "x"}])["g"]
+    assert g2 >= 0.0
 
 
 def test_reset_turn_accum_zeroes(monkeypatch):
@@ -135,3 +171,25 @@ def test_cache_section_note_when_zero_requests(monkeypatch):
     commands._append_cache_section(lines, _Ctx(), "sid")
     assert any("API 缓存" in ln for ln in lines)
     assert any("暂无 API 请求" in ln for ln in lines)
+
+
+# ── 突刺取证判词 ──
+
+def test_spike_verdict_classifies():
+    from src.commands import _spike_verdict
+
+    # 冷启动：命中 ≈ 0
+    assert "冷启动" in _spike_verdict({"fe": "a"}, None, 1000, 10, 1.0)
+    # 健康（>=70%）：无判词，治旧版 #16(90%) 误标
+    assert _spike_verdict({"fe": "a"}, {"fe": "a"}, 1000, 900, 90.0) == ""
+    # 前沿变 → 我们改写了旧消息
+    v = _spike_verdict({"fe": "b", "g": 0.5}, {"fe": "a"}, 1000, 300, 30.0)
+    assert "前沿变" in v
+    # payload 稳 + 间隔大 → 疑 TTL
+    v = _spike_verdict({"fe": "a", "g": 99}, {"fe": "a"}, 1000, 300, 30.0)
+    assert "TTL" in v
+    # payload 稳 + 间隔小 → 服务端淘汰
+    v = _spike_verdict({"fe": "a", "g": 0.3}, {"fe": "a"}, 1000, 300, 30.0)
+    assert "服务端淘汰" in v
+    # 旧格式（无 fe）：只标突刺、不强行定因
+    assert "突刺" in _spike_verdict({}, None, 1000, 300, 30.0)
