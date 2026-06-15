@@ -32,6 +32,33 @@ def _tool_call(name: str, args: dict) -> dict:
     }
 
 
+def test_stream_surfaces_reasoning_when_no_content(monkeypatch):
+    """模型只产出 reasoning_content、无 content/工具 → 兜出思考显示+返回，不空屏。
+
+    复刻线上 bug：deepseek-v4-pro 某轮只输出思考，旧码不读 reasoning_content →
+    屏幕全空、history 存空 assistant，但 completion_tokens 照样计 → footer 显示「输出 N tok」。
+    """
+    from types import SimpleNamespace
+
+    backend = llm.AVAILABLE_MODELS["pro"]
+
+    def _delta(content=None, reasoning=None):
+        return SimpleNamespace(content=content, reasoning_content=reasoning, tool_calls=None)
+
+    def fake_create(**kwargs):
+        return iter([
+            SimpleNamespace(choices=[SimpleNamespace(delta=_delta(reasoning="先想一下"))], usage=None),
+            SimpleNamespace(choices=[SimpleNamespace(delta=_delta(reasoning="还是想"))], usage=None),
+        ])
+
+    monkeypatch.setattr(backend.client.chat.completions, "create", fake_create)
+    shown: list[str] = []
+    content, tcs = backend.chat_stream([{"role": "user", "content": "hi"}], shown.append, None)
+    assert tcs is None
+    assert content and "只输出了思考" in content and "先想一下还是想" in content
+    assert any("先想一下" in s for s in shown)   # 确实打到了屏幕
+
+
 def test_smoke_no_tool_response(monkeypatch):
     """LLM 直接给最终答复（无工具）→ run_conversation 原样返回。
 

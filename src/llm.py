@@ -93,6 +93,15 @@ class ModelInfo:
     max_tokens: int = 8192     # 最大输出 token
 
 
+def _reasoning_fallback(reasoning: str) -> str:
+    """模型本轮只产出思考(reasoning_content)、没产出正式 content 时的兜底文本。
+
+    不处理的话：思考计入 completion_tokens 但 content 为空 → 屏幕全空 + history 存空
+    assistant。把思考兜出来显示并留存，至少不丢、不空。正常有 content 的回复不走这里。
+    """
+    return "[模型本轮只输出了思考、未给正式回复]\n\n" + reasoning
+
+
 class LLMBackend(ABC):
     """LLM 后端抽象基类。所有模型后端都实现这个接口。"""
 
@@ -150,6 +159,7 @@ class DeepSeekBackend(LLMBackend):
     ) -> tuple[str | None, list[dict] | None]:
         """流式调用。on_tool_ready(idx, name, args_json) 在工具参数完整时回调。"""
         content_parts: list[str] = []
+        reasoning_parts: list[str] = []  # 模型的思考通道(reasoning_content)，正常不显示
         tool_calls: list[dict] = []
         _tc_parsed: set[int] = set()  # 已触发过 on_tool_ready 的索引
 
@@ -184,6 +194,9 @@ class DeepSeekBackend(LLMBackend):
                 if delta.content:
                     on_token(delta.content)
                     content_parts.append(delta.content)
+                rc = getattr(delta, "reasoning_content", None)
+                if rc:
+                    reasoning_parts.append(rc)
 
                 if delta.tool_calls:
                     for tc_delta in delta.tool_calls:
@@ -219,6 +232,9 @@ class DeepSeekBackend(LLMBackend):
         # 流式正常结束
         content = "".join(content_parts) if content_parts else None
         final_tool_calls = tool_calls if tool_calls else None
+        if not content and not final_tool_calls and reasoning_parts:
+            content = _reasoning_fallback("".join(reasoning_parts))
+            on_token(content)  # 否则整屏空白（计入 completion_tokens 却无 content）
         return content, final_tool_calls
 
     def chat_non_stream(
@@ -257,10 +273,15 @@ class DeepSeekBackend(LLMBackend):
                 for tc in msg.tool_calls
             ]
 
-        if msg.content:
-            on_token(msg.content)
+        content = msg.content
+        if not content and not tool_calls:
+            reasoning = getattr(msg, "reasoning_content", None)
+            if reasoning:
+                content = _reasoning_fallback(reasoning)
+        if content:
+            on_token(content)
 
-        return msg.content, tool_calls
+        return content, tool_calls
 
 
 # ═══════════════════════════════════════════════════════════════
