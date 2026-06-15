@@ -244,7 +244,7 @@ def _cmd_context(r: CmdResult, ctx, _args, _sid) -> None:
     _append_prefix_section(lines, ctx)
     _append_log_section(lines, log_msgs)
     _append_tail_section(lines, log_msgs)
-    _append_cache_section(lines, _sid)
+    _append_cache_section(lines, ctx, _sid)
 
     r.message = "\n".join(lines)
 
@@ -308,8 +308,21 @@ def _append_tail_section(lines: list[str], log_msgs: list[dict]) -> None:
             lines.append(f"  [✓] {label:<10} {chars:>7,} 字符")
 
 
-def _append_cache_section(lines: list[str], _sid: str | None) -> None:
-    """在 API 缓存段追加缓存命中率统计。无请求数据则跳过。"""
+def _measure_tail_tokens(log_msgs: list[dict]) -> int:
+    """估算每请求尾部注入成本：log 中 system 消息（send() 一律排到末尾→必 miss）。"""
+    chars = sum(len(m.get("content") or "") for m in log_msgs if m.get("role") == "system")
+    return chars // 4
+
+
+def _append_cache_section(lines: list[str], ctx, _sid: str | None) -> None:
+    """在 API 缓存段追加命中率 + miss 归因 + 每请求明细。无请求数据则跳过。
+
+    miss 三块归因（估）让人一眼看到钱花哪：
+      冷启动   = 首请求无缓存（一次性，命中≈0 才算）
+      尾部注入 = 当前尾部 token × 请求数（每请求必 miss，但通常小）
+      对话增量 = 残差（工具结果/读文件/生成，真大头）
+    每请求明细揪「突刺」：哪一次 miss 异常大（大工具输出 / 压缩重写 / 缓存驱逐）。
+    """
     from .llm import get_cache_stats
     cache = get_cache_stats(_sid)
     t = cache.get("total", {}) if isinstance(cache, dict) else {}
@@ -320,7 +333,6 @@ def _append_cache_section(lines: list[str], _sid: str | None) -> None:
     hit = t.get("cache_hit_tokens", 0)
     miss = prompt - hit
     hit_pct = hit / prompt * 100 if prompt > 0 else 0
-    avg_miss = miss / reqs if reqs > 0 else 0
 
     lines.append("")
     lines.append("── API 缓存 ──")
@@ -330,7 +342,48 @@ def _append_cache_section(lines: list[str], _sid: str | None) -> None:
     bar = "█" * hit_bars + "░" * (bar_len - hit_bars)
     lines.append(f"  命中率:  {bar}  {hit_pct:.1f}%")
     lines.append(f"           (命中 {hit:,} / 输入 {prompt:,} tok)")
-    lines.append(f"  每轮 miss: ~{avg_miss:,.0f} tok (对话增量 + 尾部注入)")
+    lines.append(f"  miss 合计: {miss:,} tok")
+
+    history = cache.get("models", {}).get("pro", {}).get("history", []) or []
+
+    # ── miss 归因（估）──
+    tail_per = _measure_tail_tokens(ctx.log) if hasattr(ctx, "log") else 0
+    cold = 0
+    if history:
+        first = history[0]
+        if first.get("h", 0) <= first.get("p", 0) * 0.05:  # 首请求命中≈0 才算真冷启动
+            cold = first.get("p", 0) - first.get("h", 0)
+    tail_total = min(tail_per * reqs, max(miss - cold, 0))
+    body = max(miss - cold - tail_total, 0)
+    lines.append("")
+    lines.append("  miss 归因（估）:")
+    if cold:
+        lines.append(f"    冷启动    {cold:>9,}  (首请求无缓存，一次性)")
+    lines.append(f"    尾部注入  {tail_total:>9,}  (尾部 ~{tail_per:,} × {reqs} 请求)")
+    lines.append(f"    对话增量  {body:>9,}  (工具结果/读文件/生成，真大头)")
+
+    # ── 每请求明细（揪突刺）──
+    if history:
+        import statistics
+        misses = [e.get("p", 0) - e.get("h", 0) for e in history]
+        med = statistics.median(misses) if misses else 0
+        shown = history[-15:]
+        base = len(history) - len(shown)
+        lines.append("")
+        lines.append("  每请求明细（揪突刺）:")
+        for i, e in enumerate(shown, start=base + 1):
+            p, h = e.get("p", 0), e.get("h", 0)
+            m = p - h
+            pct = h / p * 100 if p else 0
+            mark = " 冷" if h <= p * 0.05 else (" ← 突刺" if med and m > med * 2 else "")
+            lines.append(
+                f"    #{i:<3} 输入 {p:>8,}  命中 {h:>8,}  miss {m:>8,}  ({pct:>3.0f}%){mark}"
+            )
+        if base > 0:
+            lines.append(f"    （仅显示最近 {len(shown)}/{len(history)} 次）")
+    else:
+        lines.append("")
+        lines.append("  每请求明细：本次更新后开始记录（旧会话仅有汇总）。")
 
 @builtin("/compact", description="手动压缩上下文：驱逐旧对话换摘要（不必等 65% 自动触发）")
 def _cmd_compact(r: CmdResult, ctx, _args, _sid) -> None:

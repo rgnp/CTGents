@@ -343,6 +343,10 @@ _STATS_DIR = Path(__file__).resolve().parent.parent / "stats"
 _EMPTY_STATS = {"requests": 0, "prompt_tokens": 0, "completion_tokens": 0,
                  "cache_hit_tokens": 0, "cache_miss_tokens": 0}
 
+# 每请求明细：存于 stats["history"]，保留最近 N 条（揪 miss 突刺用）。
+# total 聚合只算 _EMPTY_STATS 的数值键，history 是 list、不参与求和。
+_HISTORY_LIMIT = 50
+
 # 当前会话 ID 和内存中的统计（切换会话时自动读写文件）
 _current_session_id: str = ""
 _CACHE_STATS: dict[str, dict] = {
@@ -439,6 +443,11 @@ def _update_cache_stats(model_key: str, messages: list[dict], session_id: str = 
         stats["completion_tokens"] += usage["completion_tokens"]
         stats["cache_hit_tokens"] += usage["cache_hit_tokens"]
         stats["cache_miss_tokens"] += usage["cache_miss_tokens"]
+        # 记每请求明细：p=输入 h=命中（miss=p-h 派生），保留最近 N 条
+        hist = stats.setdefault("history", [])
+        hist.append({"p": usage["prompt_tokens"], "h": usage["cache_hit_tokens"]})
+        if len(hist) > _HISTORY_LIMIT:
+            del hist[:-_HISTORY_LIMIT]
         _last_api_usage[model_key] = None  # 消费掉，防止重复计数
         _save_cache_stats(_current_session_id)
         return
