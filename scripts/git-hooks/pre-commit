@@ -42,18 +42,22 @@ if command -v timeout >/dev/null 2>&1; then
     TIMEOUT="timeout 180"
 fi
 
-# P1 暂存快照：stash 掉未暂存+未跟踪改动，让门禁只看将要提交的内容
-stash_before=$(git rev-parse -q --verify refs/stash || true)
-git stash push --keep-index --include-untracked --quiet --message "pre-commit-$$" || true
-stash_after=$(git rev-parse -q --verify refs/stash || true)
+# P1 暂存快照：只有存在「未暂存/未跟踪」改动需要隐藏时才 stash，让门禁只看将提交内容。
+# 工作树已等于暂存快照时（典型：只 git add 目标文件、别无脏改动）直接跳过——
+# 避开 `git stash --keep-index` + `git stash pop` 这对脆弱组合：pop 冲突会留下孤儿
+# stash 并清空 index → 提交空树却仍自报「门禁通过」（实测踩过：gate 测的是 HEAD 而非
+# 暂存，应有的 888 退化成 885 还显示通过）。仅真有脏改动时才进 stash 那条老路。
 STASHED=0
-if [ "$stash_before" != "$stash_after" ]; then
-    STASHED=1
+if ! git diff --quiet || [ -n "$(git ls-files --others --exclude-standard)" ]; then
+    if git stash push --keep-index --include-untracked --quiet --message "pre-commit-$$"; then
+        STASHED=1
+    fi
 fi
 
 restore_worktree() {
     if [ "$STASHED" = "1" ]; then
-        git stash pop --quiet || echo "[pre-commit] ⚠️ stash pop 失败，未暂存改动仍在 stash 中，请手动 git stash pop。"
+        git stash pop --quiet 2>/dev/null \
+            || echo "[pre-commit] ⚠️ stash pop 失败，未暂存改动仍在 stash 中，请手动 git stash pop。"
     fi
 }
 trap restore_worktree EXIT
