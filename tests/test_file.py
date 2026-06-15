@@ -123,6 +123,34 @@ class TestReadWrite:
         assert "b" in result
         assert "d" in result
 
+    def test_read_file_caps_huge_full_read(self, tmp_path):
+        # 整文件读超 cap（默认 24000 字符）→ 只返回前段 + 截断提示，不整灌
+        from src.tools.file import RUNTIME
+        n = 1000
+        f = tmp_path / "big.py"
+        f.write_text("\n".join(f"line{i:04d}_" + "x" * 40 for i in range(n)), encoding="utf-8")
+        result = read_file(str(f))
+        assert "[已截断" in result
+        assert f"{n} 行" in result
+        assert "start_line" in result
+        assert len(result) < RUNTIME.read_file_max_chars + 500  # 截到 cap 附近，没整灌
+
+    def test_read_file_small_full_read_unchanged(self, tmp_path):
+        # 小文件远在 cap 内，原样返回、无截断提示
+        f = tmp_path / "small.py"
+        f.write_text("x = 1\ny = 2\n", encoding="utf-8")
+        result = read_file(str(f))
+        assert result == "x = 1\ny = 2\n"
+        assert "[已截断" not in result
+
+    def test_read_file_slice_ignores_cap(self, tmp_path):
+        # 带行号的切片读不受 cap 限制（agent 明确要某段）
+        f = tmp_path / "big.py"
+        f.write_text("\n".join(f"line{i:04d}_" + "x" * 40 for i in range(1000)), encoding="utf-8")
+        result = read_file(str(f), start_line=1, end_line=300)
+        assert "[已截断" not in result
+        assert "300|" in result
+
     def test_read_file_line_range_out_of_bounds(self, tmp_path):
         f = tmp_path / "lines.py"
         f.write_text("a\nb\n", encoding="utf-8")

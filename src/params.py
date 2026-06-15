@@ -97,7 +97,6 @@ EVOLUTION = EvolutionParams()
 class RuntimeParams:
     """运行时旋钮：LLM 重试、代码执行、token 预算/估算。"""
 
-    tool_result_compress_threshold: int = _env_int("CTG_TOOL_RESULT_COMPRESS_THRESHOLD", 2400)
     # eager 工具执行线程池大小（LLM 流式期间预启动 SAFE 工具）
     eager_executor_workers: int = _env_int("CTG_EAGER_EXECUTOR_WORKERS", 8)
     max_retries: int = _env_int("CTG_MAX_RETRIES", 3)
@@ -117,6 +116,11 @@ class RuntimeParams:
     tool_result_budget: float = _env_float("CTG_TOOL_RESULT_BUDGET", 0.15)
     # 工具结果超过此字符数即压缩（read_file 等除外，见 SKIP_COMPRESS_TOOLS）
     tool_result_compress_threshold: int = _env_int("CTG_TOOL_RESULT_COMPRESS_THRESHOLD", 2400)
+    # read_file 无行号参数（整文件读）的字符上限。超限只返回前段+行数提示，逼按需切片。
+    # read_file 在 SKIP_COMPRESS_TOOLS 里不被下游压缩，必须在源头截，否则整文件灌进对话=
+    # 单次巨型 miss + 把 payload 推向 65% 压缩核弹（llm.py 72k 字符≈2.5万 token，比整轮对话还大）。
+    # 带 start_line/end_line 的切片读不受此限（agent 明确要某段）。
+    read_file_max_chars: int = _env_int("CTG_READ_FILE_MAX_CHARS", 24000)
     # token 估算（无 tokenizer 的粗估，分字符类）：中文每字 / 其他每字符。
     # 可用 API 返回的 prompt_tokens 真值对账校准这两个旋钮。
     token_per_char_cjk: float = _env_float("CTG_TOKEN_PER_CHAR_CJK", 0.6)

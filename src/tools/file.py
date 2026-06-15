@@ -6,6 +6,8 @@ import time
 from datetime import datetime
 from pathlib import Path
 
+from ..params import RUNTIME
+
 # ── list_files 缓存 ──
 _LIST_CACHE_TTL = 300   # 秒（同 web 工具一致，5 分钟）
 _list_cache: dict[str, tuple[float, str]] = {}
@@ -527,7 +529,9 @@ def _read_cached(path: Path) -> str:
 
 
 def read_file(path: str, start_line: int | None = None, end_line: int | None = None) -> str:
-    """读取文件。不带行号参数返回全文，带行号参数返回带行号的指定范围。"""
+    """读取文件。不带行号参数返回全文（超大文件只返回前段+行数提示，需按行段再取）；
+    带 start_line/end_line 返回带行号的指定范围（大文件优先用切片读，省上下文）。
+    """
     filepath = _resolve(path)
     if not filepath.exists():
         return f"文件不存在: {path}"
@@ -538,7 +542,19 @@ def read_file(path: str, start_line: int | None = None, end_line: int | None = N
         return f"无法以 UTF-8 编码读取: {path}（可能是二进制文件）"
 
     if start_line is None and end_line is None:
-        return raw
+        cap = RUNTIME.read_file_max_chars
+        if len(raw) <= cap:
+            return raw
+        # 超限：截到 cap 处的行边界，附行数 + 切片用法，逼 agent 按需取段而非整灌对话
+        head = raw[:cap]
+        nl = head.rfind("\n")
+        if nl > 0:
+            head = head[:nl]
+        shown = head.count("\n") + 1
+        total = raw.count("\n") + 1
+        return (f"{head}\n\n[已截断：文件共 {total} 行 / {len(raw)} 字符，上面是前 {shown} 行。"
+                f'要更多用 read_file("{path}", start_line, end_line) 取指定行段，'
+                f"或 grep_code 先定位再切片]")
 
     lines = raw.split("\n")
     total = len(lines)
