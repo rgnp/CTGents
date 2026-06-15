@@ -108,63 +108,57 @@ def test_no_task_segment_when_finished(monkeypatch):
     assert "▶" not in out
 
 
-# ── 每轮 footer：耗时 / 输出 / 请求 / miss ──
+# ── 每轮 footer：增量走 llm 单轮累加器（不受会话切换影响）──
+
+def _set_accum(monkeypatch, *, requests, completion, miss):
+    """钉死 llm 单轮累加器返回值（footer/Δmiss 读它，不再快照全局累计做差）。"""
+    import src.llm as llm
+    monkeypatch.setattr(llm, "reset_turn_accum", lambda: None)
+    monkeypatch.setattr(llm, "get_turn_accum",
+                        lambda: {"requests": requests, "completion_tokens": completion, "miss": miss})
+
+
+def _run_turn(monkeypatch, *, requests=1, completion=100, miss=500):
+    _set_accum(monkeypatch, requests=requests, completion=completion, miss=miss)
+    sb.note_turn_start()
+    return sb.note_turn_end()
+
 
 def test_footer_reports_time_output_requests(monkeypatch):
-    s = Stats()
-    _patch_stats(monkeypatch, s)
-    s.requests, s.completion, s.prompt, s.hit = 5, 1000, 50000, 40000
-    sb.note_turn_start()
-    s.requests, s.completion, s.prompt, s.hit = 9, 2847, 95000, 80000
-    footer = sb.note_turn_end()
+    footer = _run_turn(monkeypatch, requests=4, completion=1847, miss=5000)
     assert footer is not None
     assert footer.strip().startswith("本轮")
-    assert "输出 1,847 tok" in footer       # 2847-1000
-    assert "4 请求" in footer                # 9-5
-    assert "miss 5.0k" in footer            # (95000-80000)-(50000-40000)
+    assert "输出 1,847 tok" in footer
+    assert "4 请求" in footer
+    assert "miss 5.0k" in footer
     assert "s" in footer                     # 含耗时
 
 
-def test_footer_none_without_start(monkeypatch):
-    _patch_stats(monkeypatch, Stats())
-    assert sb.note_turn_end() is None        # 没起点快照
+def test_footer_none_without_start():
+    assert sb.note_turn_end() is None        # 没起点（set=False）
 
 
 # ── 突刺：per-turn miss 暴涨 ──
 
-def _run_turn(monkeypatch, s: Stats, miss: int):
-    _patch_stats(monkeypatch, s)
-    sb.note_turn_start()
-    s.requests += 1
-    s.prompt += miss + 1000
-    s.hit += 1000                            # Δ(prompt-hit)=miss
-    return sb.note_turn_end()
-
-
 def test_footer_spike_flagged(monkeypatch):
-    s = Stats()
     for _ in range(3):
-        _run_turn(monkeypatch, s, 500)       # 建立平稳基线
-    footer = _run_turn(monkeypatch, s, 50000)
+        _run_turn(monkeypatch, miss=500)     # 建立平稳基线
+    footer = _run_turn(monkeypatch, miss=50000)
     assert "突刺" in footer
 
 
 def test_no_spike_on_steady(monkeypatch):
-    s = Stats()
+    footer = None
     for _ in range(4):
-        footer = _run_turn(monkeypatch, s, 500)
+        footer = _run_turn(monkeypatch, miss=500)
     assert "突刺" not in footer
 
 
 # ── 状态条 Δmiss 复用 last_turn ──
 
 def test_bar_delta_from_last_turn(monkeypatch):
-    s = Stats()
-    _patch_stats(monkeypatch, s)
-    sb.note_turn_start()
-    s.requests, s.prompt, s.hit = 1, 50000, 44700  # miss 5300
-    sb.note_turn_end()
-    out = _render(monkeypatch, tokens=_at_pct(10), stats=s)
+    _run_turn(monkeypatch, requests=1, completion=0, miss=5300)
+    out = _render(monkeypatch, tokens=_at_pct(10), stats=Stats())
     assert "Δmiss 5.3k" in out
 
 
@@ -174,10 +168,9 @@ def test_bar_no_delta_before_any_turn(monkeypatch):
 
 
 def test_reset_clears_last_turn(monkeypatch):
-    s = Stats()
-    _run_turn(monkeypatch, s, 5000)
+    _run_turn(monkeypatch, miss=5000)
     sb.reset()
-    out = _render(monkeypatch, tokens=_at_pct(10), stats=s)
+    out = _render(monkeypatch, tokens=_at_pct(10), stats=Stats())
     assert "Δmiss" not in out
 
 
@@ -195,9 +188,11 @@ def test_refresh_never_raises(monkeypatch):
 
 def test_note_turn_end_never_raises(monkeypatch):
     import src.llm as llm
-    monkeypatch.setattr(llm, "get_cache_stats", lambda _s="": (_ for _ in ()).throw(RuntimeError()))
-    sb.note_turn_start()   # 吞异常，set=False
-    assert sb.note_turn_end() is None
+    monkeypatch.setattr(llm, "reset_turn_accum", lambda: None)
+    monkeypatch.setattr(llm, "get_turn_accum",
+                        lambda: (_ for _ in ()).throw(RuntimeError()))
+    sb.note_turn_start()
+    assert sb.note_turn_end() is None   # get_turn_accum 抛 → 吞掉返回 None
 
 
 # ── 纯函数 ──

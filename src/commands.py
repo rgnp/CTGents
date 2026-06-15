@@ -308,19 +308,13 @@ def _append_tail_section(lines: list[str], log_msgs: list[dict]) -> None:
             lines.append(f"  [✓] {label:<10} {chars:>7,} 字符")
 
 
-def _measure_tail_tokens(log_msgs: list[dict]) -> int:
-    """估算每请求尾部注入成本：log 中 system 消息（send() 一律排到末尾→必 miss）。"""
-    chars = sum(len(m.get("content") or "") for m in log_msgs if m.get("role") == "system")
-    return chars // 4
-
-
 def _append_cache_section(lines: list[str], ctx, _sid: str | None) -> None:
     """在 API 缓存段追加命中率 + miss 归因 + 每请求明细。无请求数据则跳过。
 
-    miss 三块归因（估）让人一眼看到钱花哪：
-      冷启动   = 首请求无缓存（一次性，命中≈0 才算）
-      尾部注入 = 当前尾部 token × 请求数（每请求必 miss，但通常小）
-      对话增量 = 残差（工具结果/读文件/生成，真大头）
+    miss 三块归因让人一眼看到钱花哪（尾部为每请求实测、非估算）：
+      冷启动   = 首请求无缓存的非尾部部分（一次性，命中≈0 才算）
+      尾部注入 = 各请求实际尾部 token 之和（工具循环 skip_volatile 的请求记 0）
+      对话增量 = 残差（工具结果/读文件/生成）
     每请求明细揪「突刺」：哪一次 miss 异常大（大工具输出 / 压缩重写 / 缓存驱逐）。
     """
     from .llm import get_cache_stats
@@ -346,21 +340,22 @@ def _append_cache_section(lines: list[str], ctx, _sid: str | None) -> None:
 
     history = cache.get("models", {}).get("pro", {}).get("history", []) or []
 
-    # ── miss 归因（估）──
-    tail_per = _measure_tail_tokens(ctx.log) if hasattr(ctx, "log") else 0
+    # ── miss 归因（尾部实测：每请求 payload 真实尾部 token 之和）──
+    tail_total = sum(e.get("t", 0) for e in history)
     cold = 0
     if history:
         first = history[0]
         if first.get("h", 0) <= first.get("p", 0) * 0.05:  # 首请求命中≈0 才算真冷启动
-            cold = first.get("p", 0) - first.get("h", 0)
-    tail_total = min(tail_per * reqs, max(miss - cold, 0))
+            cold = max(first.get("p", 0) - first.get("h", 0) - first.get("t", 0), 0)
+    tail_total = min(tail_total, max(miss - cold, 0))
     body = max(miss - cold - tail_total, 0)
+    n_tail = sum(1 for e in history if e.get("t", 0) > 0)
     lines.append("")
-    lines.append("  miss 归因（估）:")
+    lines.append("  miss 归因:")
     if cold:
         lines.append(f"    冷启动    {cold:>9,}  (首请求无缓存，一次性)")
-    lines.append(f"    尾部注入  {tail_total:>9,}  (尾部 ~{tail_per:,} × {reqs} 请求)")
-    lines.append(f"    对话增量  {body:>9,}  (工具结果/读文件/生成，真大头)")
+    lines.append(f"    尾部注入  {tail_total:>9,}  ({n_tail}/{len(history)} 请求带尾部，循环内其余跳过)")
+    lines.append(f"    对话增量  {body:>9,}  (工具结果/读文件/生成)")
 
     # ── 每请求明细（揪突刺）──
     if history:

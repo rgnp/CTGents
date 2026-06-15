@@ -347,6 +347,35 @@ _EMPTY_STATS = {"requests": 0, "prompt_tokens": 0, "completion_tokens": 0,
 # total 聚合只算 _EMPTY_STATS 的数值键，history 是 list、不参与求和。
 _HISTORY_LIMIT = 50
 
+# 单轮增量累加器：每个真实请求就地累加，note_turn_start 复位、note_turn_end 读取。
+# 不走"快照全局累计再做差"——那条路会被会话切换时 _ensure_session 换/重置
+# _CACHE_STATS 指针击穿（""→真 id 那次本轮写入对两次快照不可见 → 增量全 0）。
+_turn_accum = {"requests": 0, "completion_tokens": 0, "miss": 0}
+
+
+def reset_turn_accum() -> None:
+    """一轮开始前复位单轮累加器。"""
+    _turn_accum.update(requests=0, completion_tokens=0, miss=0)
+
+
+def get_turn_accum() -> dict:
+    """读单轮累加器快照（请求数 / 输出 token / miss）。"""
+    return dict(_turn_accum)
+
+
+def _trailing_system_tokens(messages: list[dict]) -> int:
+    """量本次 payload 尾部注入的 token：send() 把 system 消息排到末尾，
+    末尾连续的 system 段就是尾部（工具循环 skip_volatile 时它更短甚至为空）。
+    前缀的 system 在开头、不计。
+    """
+    from .tools.tokens import estimate_tokens
+    total = 0
+    for m in reversed(messages):
+        if m.get("role") != "system":
+            break
+        total += estimate_tokens(m.get("content") or "")
+    return total
+
 # 当前会话 ID 和内存中的统计（切换会话时自动读写文件）
 _current_session_id: str = ""
 _CACHE_STATS: dict[str, dict] = {
@@ -435,6 +464,7 @@ def _update_cache_stats(model_key: str, messages: list[dict], session_id: str = 
 
     stats = _CACHE_STATS.setdefault(model_key, dict(_EMPTY_STATS))
     stats["requests"] += 1
+    _turn_accum["requests"] += 1
 
     # 优先用 API 返回的真实数据
     usage = _last_api_usage.get(model_key)
@@ -443,9 +473,12 @@ def _update_cache_stats(model_key: str, messages: list[dict], session_id: str = 
         stats["completion_tokens"] += usage["completion_tokens"]
         stats["cache_hit_tokens"] += usage["cache_hit_tokens"]
         stats["cache_miss_tokens"] += usage["cache_miss_tokens"]
-        # 记每请求明细：p=输入 h=命中（miss=p-h 派生），保留最近 N 条
+        _turn_accum["completion_tokens"] += usage["completion_tokens"]
+        _turn_accum["miss"] += usage["cache_miss_tokens"]
+        # 记每请求明细：p=输入 h=命中（miss=p-h 派生）t=本次尾部注入，保留最近 N 条
         hist = stats.setdefault("history", [])
-        hist.append({"p": usage["prompt_tokens"], "h": usage["cache_hit_tokens"]})
+        hist.append({"p": usage["prompt_tokens"], "h": usage["cache_hit_tokens"],
+                     "t": _trailing_system_tokens(messages)})
         if len(hist) > _HISTORY_LIMIT:
             del hist[:-_HISTORY_LIMIT]
         _last_api_usage[model_key] = None  # 消费掉，防止重复计数

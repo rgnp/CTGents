@@ -34,7 +34,7 @@ _state: dict = {
     "text": None,       # 缓存的 toolbar 文本（HTML 对象 / None）
     "last_turn": None,   # 上一轮增量 {elapsed,out,req,miss,spike}，footer 与状态条共用
 }
-_turn: dict = {"req": 0, "out": 0, "miss": 0, "t0": 0.0, "set": False}  # 轮起点快照
+_turn: dict = {"t0": 0.0, "set": False}  # 轮起点（仅耗时；增量走 llm 单轮累加器）
 _recent_miss: list[int] = []  # 最近若干轮的 per-turn miss，用于突刺判定
 
 
@@ -56,26 +56,28 @@ def text():
 # ── 每轮收尾小结 ──
 
 def note_turn_start() -> None:
-    """一轮 agent 驱动开始前调用：快照当前累计统计。绝不抛。"""
+    """一轮 agent 驱动开始前调用：复位 llm 单轮累加器、记起点时间。绝不抛。"""
     try:
-        r, o, m = _cum()
-        _turn.update(req=r, out=o, miss=m, t0=time.perf_counter(), set=True)
+        from .llm import reset_turn_accum
+        reset_turn_accum()
+        _turn["t0"] = time.perf_counter()
+        _turn["set"] = True
     except Exception:
         _turn["set"] = False
 
 
 def note_turn_end() -> str | None:
-    """一轮结束后调用：算增量，存进 last_turn（供状态条复用），返回 footer 字符串。
+    """一轮结束后调用：读单轮累加器增量，存进 last_turn（供状态条复用），返回 footer。
 
-    返回 None=没有有效起点快照 / 出错。绝不抛。
+    增量走 llm._turn_accum（每个真实请求就地累加），不受会话切换重置统计指针影响。
+    返回 None=没有有效起点 / 出错。绝不抛。
     """
     try:
         if not _turn.get("set"):
             return None
-        r, o, m = _cum()
-        dreq = max(r - _turn["req"], 0)
-        dout = max(o - _turn["out"], 0)
-        dmiss = max(m - _turn["miss"], 0)
+        from .llm import get_turn_accum
+        a = get_turn_accum()
+        dreq, dout, dmiss = a["requests"], a["completion_tokens"], a["miss"]
         elapsed = max(time.perf_counter() - _turn["t0"], 0.0)
         _turn["set"] = False
         spike = _is_spike(dmiss, _recent_miss)
@@ -96,14 +98,6 @@ def reset() -> None:
 
 
 # ── 内部 ──
-
-def _cum() -> tuple[int, int, int]:
-    """读内存里当前会话的累计统计：(请求数, 输出token, miss)。"""
-    from .llm import get_cache_stats
-    t = (get_cache_stats("") or {}).get("total", {})
-    miss = t.get("prompt_tokens", 0) - t.get("cache_hit_tokens", 0)
-    return t.get("requests", 0), t.get("completion_tokens", 0), miss
-
 
 def _fmt_k(n: int) -> str:
     return f"{n / 1000:.1f}k" if n >= 1000 else str(int(n))
