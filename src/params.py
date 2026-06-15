@@ -165,10 +165,6 @@ class MemoryParams:
     weight_body: float = _env_float("CTG_MEMORY_WEIGHT_BODY", 1.0)
     # 完整查询作为子串命中的强力加成(保留精确短语优先)
     exact_bonus: float = _env_float("CTG_MEMORY_EXACT_BONUS", 5.0)
-
-    # 完整查询作为子串命中的强力加成(保留精确短语优先)
-    # 完整查询作为子串命中的强力加成(保留精确短语优先)
-    exact_bonus: float = _env_float("CTG_MEMORY_EXACT_BONUS", 5.0)
     # 时间衰减率：每天旧记忆分数乘 1/(1+age_days*decay_rate)。0=关，0.01≈百天减半
     decay_rate: float = _env_float("CTG_MEMORY_DECAY_RATE", 0.0)
 

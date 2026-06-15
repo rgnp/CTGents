@@ -120,12 +120,6 @@ def _build_context() -> str | None:
         lines.append("  此外还有：")
         lines.extend(brief_entries)
 
-    # ── 活跃任务微刺激：当前有未完成任务时追加提醒，对抗"检索被动" ──
-    task_file = Path(ARCHIVE_DIR).parent / "current.md"
-    if task_file.exists() and task_file.read_text(encoding="utf-8").strip():
-        lines.append("")
-        lines.append("⚠️ 当前有未完成任务（tasks/current.md），遇到同类问题时先 recall 搜索已有经验。")
-
     return "\n".join(lines)
 
 
