@@ -119,6 +119,13 @@ def _build_context() -> str | None:
     if brief_entries:
         lines.append("  此外还有：")
         lines.extend(brief_entries)
+
+    # ── 活跃任务微刺激：当前有未完成任务时追加提醒，对抗"检索被动" ──
+    task_file = Path(ARCHIVE_DIR).parent / "current.md"
+    if task_file.exists() and task_file.read_text(encoding="utf-8").strip():
+        lines.append("")
+        lines.append("⚠️ 当前有未完成任务（tasks/current.md），遇到同类问题时先 recall 搜索已有经验。")
+
     return "\n".join(lines)
 
 
@@ -146,6 +153,7 @@ def clear_dirty() -> None:
 def is_dirty() -> bool:
     """检查记忆索引是否需要重建。"""
     return _context_dirty
+
 
 TOOLS_MEMORY = [
     {
@@ -361,8 +369,9 @@ def _tokenize(text: str) -> set[str]:
 
 
 def _score_memory(q_tokens: set[str], q_lower: str,
-                  name: str, desc: str, body: str) -> float:
-    """给一条记忆打分:每个 token 取命中的最高权重字段累加 + 精确子串加成。
+                  name: str, desc: str, body: str,
+                  updated: str = "") -> float:
+    """给一条记忆打分:每个 token 取命中的最高权重字段累加 + 精确子串加成 + 时间衰减。
 
     只对语义字段(name/description/body)打分,绝不碰 frontmatter 结构词
     (metadata/type/updated…),否则 'ad' 会误命中 'met·ad·ata'、'type' 命中所有记忆。
@@ -379,6 +388,18 @@ def _score_memory(q_tokens: set[str], q_lower: str,
         score += best
     if q_lower and any(q_lower in field_text for field_text, _w in fields):
         score += _PARAMS.exact_bonus
+
+    # ── 时间衰减：旧记忆自动降权 ──
+    dr = _PARAMS.decay_rate
+    if dr > 0.0 and updated:
+        try:
+            ts = datetime.fromisoformat(updated.replace("Z", "+00:00"))
+            age_days = (datetime.now(UTC) - ts).total_seconds() / 86400.0
+            if age_days > 0:
+                score *= 1.0 / (1.0 + age_days * dr)
+        except (ValueError, OSError):
+            pass  # 无法解析时间 → 不衰减
+
     return score
 
 
@@ -397,7 +418,8 @@ def _scan_into(directory: Path, q_tokens: set[str], q_lower: str,
             continue
         meta, body = _split_frontmatter(full)
         s = _score_memory(q_tokens, q_lower, meta.get("name", f.stem),
-                          meta.get("description", ""), body)
+                          meta.get("description", ""), body,
+                          meta.get("updated", ""))
         if s <= _PARAMS.recall_min_score:
             continue
         snippet = body[:_SNIPPET_CHARS].replace("\n", " ")

@@ -4,6 +4,7 @@ import contextlib
 import hashlib
 import json
 import logging
+import os
 import threading
 import time
 from abc import ABC, abstractmethod
@@ -758,6 +759,10 @@ _TOOL_RESULT_COMPRESS_THRESHOLD = RUNTIME.tool_result_compress_threshold
 _COMPRESS_MIN_OMITTED = 120
 # 单轮请求数熔断——真值在 params.RUNTIME
 _MAX_REQUESTS_PER_TURN = RUNTIME.max_requests_per_turn
+# 实验开关：工具循环请求是否照常携带尾部 volatile（默认 skip 以省 token）。
+# 用于诊断"[T]→第一个[L] 命中塌回前缀"是否由 skip_volatile（尾部 shape 切换）触发：
+# 置 1 后工具循环也带尾部、shape 不再随轮内切换。默认关=现状行为。
+_KEEP_TOOLLOOP_TAIL = os.getenv("CTG_TOOLLOOP_KEEP_TAIL", "").strip().lower() not in ("", "0", "false", "no")
 # 干了不少活却没建任务 → 提示建任务的请求数阈值——真值在 params.RUNTIME
 _TASK_SUGGEST_MIN_REQUESTS = RUNTIME.task_suggest_min_requests
 # eager 工具执行线程池（LLM 流式期间预启动 SAFE 工具，持久复用）
@@ -1502,8 +1507,9 @@ def run_conversation(
             logger.info("压缩后消息数: %d", len(ctx))
 
         try:
+            _skip_tail = (requests_made > 0) and not _KEEP_TOOLLOOP_TAIL
             content, tool_calls, eager_results = _invoke_llm_eager(
-                backend, ctx.send(skip_volatile_system=(requests_made > 0)), on_token, session_id,
+                backend, ctx.send(skip_volatile_system=_skip_tail), on_token, session_id,
             )
             requests_made += 1
         except UserInterruptError:
