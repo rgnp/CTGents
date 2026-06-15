@@ -759,18 +759,18 @@ _TOOL_RESULT_COMPRESS_THRESHOLD = RUNTIME.tool_result_compress_threshold
 _COMPRESS_MIN_OMITTED = 120
 # 单轮请求数熔断——真值在 params.RUNTIME
 _MAX_REQUESTS_PER_TURN = RUNTIME.max_requests_per_turn
-# 实验开关：工具循环请求是否照常携带尾部 volatile（默认 skip 以省 token）。
-# 用于诊断"[T]→第一个[L] 命中塌回前缀"是否由 skip_volatile（尾部 shape 切换）触发：
-# 工具循环请求是否携带尾部 volatile。曾经默认 skip 以省 token，
-# 但 skip 导致尾部 role 序列变化 → DeepSeek 按 role 切分的 cache prefix unit
-# 边界漂移 → [T]→[L] 命中塌回前缀（仅 ~37%，本该 ~96%）。诊断确认后改为默认 keep。
-# 设 CTG_TOOLLOOP_KEEP_TAIL=0 可恢复旧行为（向后兼容）。
+# 工具循环请求是否携带尾部 volatile。默认 keep（=1）。
+# 待验证假设：曾默认 skip 省 token，疑似导致 [T]→第一个[L] 命中塌回前缀（~37%，本该~96%）；
+# 改 keep 让轮内 payload shape 不切换，看能否消除塌陷。**尚未实测**——需开 CTGents 跑一轮
+# 带工具的对话、看 /context 第一个[L]是否仍塌；机制（为何 skip 丢命中）也未坐实，勿当结论。
+# 设 CTG_TOOLLOOP_KEEP_TAIL=0 恢复旧行为（skip）。
 _KEEP_TOOLLOOP_TAIL = os.getenv("CTG_TOOLLOOP_KEEP_TAIL", "1").strip().lower() not in ("", "0", "false", "no")
 # 干了不少活却没建任务 → 提示建任务的请求数阈值——真值在 params.RUNTIME
 _TASK_SUGGEST_MIN_REQUESTS = RUNTIME.task_suggest_min_requests
-_TASK_SUGGEST_MIN_REQUESTS = RUNTIME.task_suggest_min_requests
 # eager 工具执行线程池（LLM 流式期间预启动 SAFE 工具，持久复用）
 _EAGER_EXECUTOR: _ThreadPoolExecutor | None = None
+
+
 def _is_quota_error(result: str) -> bool:
     """检测工具结果是否为 Tavily 配额耗尽错误——统一检测，替代逐层 try/except。"""
     return (
