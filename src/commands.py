@@ -345,22 +345,25 @@ def _append_cache_section(lines: list[str], ctx, _sid: str | None) -> None:
 
     history = cache.get("models", {}).get("pro", {}).get("history", []) or []
 
-    # ── miss 归因（尾部实测：每请求 payload 真实尾部 token 之和）──
-    tail_total = sum(e.get("t", 0) for e in history)
-    cold = 0
-    if history:
-        first = history[0]
-        if first.get("h", 0) <= first.get("p", 0) * 0.05:  # 首请求命中≈0 才算真冷启动
-            cold = max(first.get("p", 0) - first.get("h", 0) - first.get("t", 0), 0)
-    tail_total = min(tail_total, max(miss - cold, 0))
-    body = max(miss - cold - tail_total, 0)
+    # ── miss 归因（逐请求拆分，不在聚合层估算）──
+    # 尾部在 payload 末尾：一条只要有 miss，尾部整段必落在 miss 区，故 tail_miss=min(t,miss)；
+    # 残差=对话增量（工具输出/读文件/生成，新内容只付一次）。首请求大面积未命中=冷启动(一次性)。
+    cold = tail_total = body = 0
+    for idx, e in enumerate(history):
+        mi = e.get("p", 0) - e.get("h", 0)
+        if idx == 0 and e.get("h", 0) < e.get("p", 0) * 0.5:  # 首请求大半没命中 = 冷启动
+            cold += mi
+            continue
+        ti = min(e.get("t", 0), mi)
+        tail_total += ti
+        body += mi - ti
     n_tail = sum(1 for e in history if e.get("t", 0) > 0)
     lines.append("")
     lines.append("  miss 归因:")
     if cold:
         lines.append(f"    冷启动    {cold:>9,}  (首请求无缓存，一次性)")
     lines.append(f"    尾部注入  {tail_total:>9,}  ({n_tail}/{len(history)} 请求带尾部，循环内其余跳过)")
-    lines.append(f"    对话增量  {body:>9,}  (工具结果/读文件/生成)")
+    lines.append(f"    对话增量  {body:>9,}  (工具输出/读文件/生成，新内容只付一次)")
 
     # ── 调用结构（架构视角：轮首带尾 vs 循环内跳尾，miss 落在哪）──
     if history:
@@ -373,6 +376,8 @@ def _append_cache_section(lines: list[str], ctx, _sid: str | None) -> None:
         ratio = f"  ≈ {len(history) / len(t_rows):.1f} 请求/轮" if t_rows else ""
         lines.append(f"    轮首 {len(t_rows)} 次 / 循环内 {len(l_rows)} 次{ratio}")
         lines.append(f"    miss 分布:  轮首 {miss_t:,}  ·  循环内 {miss_l:,}")
+        if miss_l:
+            lines.append("    （循环内 miss = 工具输出灌入的新内容，第一次出现必 miss、之后命中）")
 
     # ── 每请求明细（揪突刺 + 取证）──
     if history:
@@ -409,7 +414,7 @@ def _spike_verdict(e: dict, prev: dict | None, p: int, h: int, pct: float) -> st
     长新内容），再按结构指纹定因：前沿哈希变=我们改写旧消息；payload 稳而命中塌→
     服务端淘汰；间隔大→疑 TTL。旧格式 history（无 fe）只给冷/突刺，不强行定因。
     """
-    if h <= p * 0.05:
+    if h <= p * 0.05 or (prev is None and pct < 70):  # 首请求大半没命中也是冷启动
         return "  冷启动"
     if pct >= 70:
         return ""

@@ -191,5 +191,33 @@ def test_spike_verdict_classifies():
     # payload 稳 + 间隔小 → 服务端淘汰
     v = _spike_verdict({"fe": "a", "g": 0.3}, {"fe": "a"}, 1000, 300, 30.0)
     assert "服务端淘汰" in v
-    # 旧格式（无 fe）：只标突刺、不强行定因
-    assert "突刺" in _spike_verdict({}, None, 1000, 300, 30.0)
+    # 旧格式（无 fe，且有前序请求）：只标突刺、不强行定因
+    assert "突刺" in _spike_verdict({}, {"fe": "a"}, 1000, 300, 30.0)
+    # 首请求（prev=None）大半没命中 = 冷启动，不误判服务端淘汰
+    assert "冷启动" in _spike_verdict({"fe": "a", "g": 0.0}, None, 11176, 3968, 36.0)
+
+
+def test_miss_attribution_credits_cold_and_caps_tail_per_request():
+    """归因逐请求拆：首请求大面积 miss=冷启动；尾部 miss 每条 ≤ 该条总 miss（不虚高）。"""
+    from unittest.mock import patch
+
+    from src import llm
+    from src.commands import _append_cache_section
+    # #1 冷启动(命中≈前缀) + #2 轮首尾部小 + #3 循环内工具输出(t=0 全归对话增量)
+    hist = [
+        {"p": 11176, "h": 3968, "t": 600, "n": 1, "fe": "a", "g": 0.0},   # 冷启动 7208
+        {"p": 11437, "h": 11136, "t": 600, "n": 3, "fe": "a", "g": 90},   # miss301 尾部截到301内
+        {"p": 15487, "h": 10880, "t": 0, "n": 14, "fe": "a", "g": 18},    # miss4607 全对话增量
+    ]
+    fake = {"total": {"requests": 3, "prompt_tokens": 38100, "cache_hit_tokens": 25984},
+            "models": {"pro": {"history": hist}}}
+    lines: list = []
+    with patch.object(llm, "get_cache_stats", lambda _s: fake):
+        _append_cache_section(lines, None, "sid")
+    text = "\n".join(lines)
+    assert "冷启动    " in text and "7,208" in text          # #1 被认作冷启动
+    # 尾部注入不得虚高：#2 尾部 miss ≤301，#3 尾部=0 → 合计 ≤601，远小于 size 累加 1200
+    tail_line = next(ln for ln in lines if "尾部注入" in ln)
+    tail_val = int(tail_line.split("尾部注入")[1].split()[0].replace(",", ""))
+    assert tail_val <= 601
+    assert "4,607" in text or "对话增量" in text             # 工具输出进对话增量
