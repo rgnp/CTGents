@@ -66,6 +66,7 @@ def test_finalize_session_triggers_reflection(monkeypatch):
     monkeypatch.setattr(main, "save_session", lambda msgs, sid: "sid-123")
     monkeypatch.setattr(tracker, "reflect_on_session",
                         lambda sid: calls.append(sid) or None)
+    main._session_state["turn_ran"] = True
     ctx = CacheContext(log_msgs=[{"role": "user", "content": "嗨"},
                                  {"role": "assistant", "content": "好"}])
     lines = main._finalize_session(ctx, None)
@@ -82,6 +83,7 @@ def test_finalize_session_skips_empty(monkeypatch):
                         lambda *a: (_ for _ in ()).throw(AssertionError("不应保存")))
     monkeypatch.setattr(tracker, "reflect_on_session",
                         lambda sid: (_ for _ in ()).throw(AssertionError("不应反思")))
+    main._session_state["turn_ran"] = True  # 测内层 any-assistant 闸（非空会话早退）
     ctx = CacheContext(log_msgs=[{"role": "user", "content": "嗨"}])
     lines = main._finalize_session(ctx, None)
     assert not any("会话已保存" in ln for ln in lines)
@@ -95,6 +97,7 @@ def test_finalize_session_reflect_failure_not_blocking(monkeypatch):
     monkeypatch.setattr(main, "save_session", lambda msgs, sid: "sid-9")
     monkeypatch.setattr(tracker, "reflect_on_session",
                         lambda sid: (_ for _ in ()).throw(OSError("disk")))
+    main._session_state["turn_ran"] = True
     ctx = CacheContext(log_msgs=[{"role": "assistant", "content": "好"}])
     lines = main._finalize_session(ctx, None)
     assert any("会话已保存" in ln for ln in lines)

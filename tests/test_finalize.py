@@ -9,12 +9,25 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
+import pytest
+
 import src.lesson as lesson
 import src.main as main
 import src.session_pins as sp
 import src.session_summary as ssum
 import src.tracker as tracker
 from src.cache_context import CacheContext
+
+
+@pytest.fixture(autouse=True)
+def _turn_ran():
+    """默认本进程跑过一轮——多数测试验证"有内容"的收尾管线。
+
+    turn_ran=False 的"空会话/未改动加载会话"早退路径单独由 test_no_turn_* 测。
+    """
+    main._session_state["turn_ran"] = True
+    yield
+    main._session_state["turn_ran"] = False
 
 
 def _ctx_with_assistant() -> CacheContext:
@@ -266,3 +279,25 @@ def test_lessons_saved_when_found(monkeypatch):
 
     assert saved_count == [1]
     assert any("收割" in ln for ln in lines)
+
+
+# ═══════════════════════════════════════════════════════════════
+# 没真跑过一轮（空会话 / 加载后未改动就退出）→ 啥也不收割
+# ═══════════════════════════════════════════════════════════════
+
+
+def test_no_turn_skips_everything(monkeypatch):
+    """turn_ran=False → 早退，save/reflect/summary/extract/promote 全不调（不白烧 LLM）。"""
+    calls = []
+    monkeypatch.setattr(main, "save_session", lambda m, s: calls.append("save") or "sid")
+    monkeypatch.setattr(tracker, "reflect_on_session", lambda s: calls.append("reflect"))
+    monkeypatch.setattr(ssum, "write_session_summary", lambda m, s: calls.append("summary"))
+    monkeypatch.setattr(lesson, "extract_lessons", lambda m: calls.append("extract") or [])
+    monkeypatch.setattr(sp, "promote_durable", lambda: calls.append("promote") or 0)
+
+    main._session_state["turn_ran"] = False  # 覆盖 autouse 的 True
+    ctx = _ctx_with_assistant()  # 即便上下文里有 assistant（加载来的），也不收割
+    lines = main._finalize_session(ctx, None)
+
+    assert calls == []
+    assert any("退出" in ln for ln in lines)

@@ -55,6 +55,11 @@ def _stop_esc_listener() -> None:
     _esc_listener_active = False
 
 
+# 本进程是否真跑过一轮（产生过新内容）。空会话 / 加载后未改动的会话退出时
+# 不触发反思/摘要/收割（那是白烧 LLM）。加载/清空会话时复位。
+_session_state = {"turn_ran": False}
+
+
 def _make_memory_context() -> dict | None:
     """读取记忆索引，生成简洁的记忆上下文。"""
     from .tools.memory import get_context
@@ -220,6 +225,7 @@ def run_agent_turn(ctx: CacheContext, user_input: str,
     from .task_loop import made_task_progress, run_task_continuation
     from .tasks import read_current as _read_current
 
+    _session_state["turn_ran"] = True
     task_before = _read_current()
     sid = [session_id]
     on_token, has_output = _make_display()
@@ -266,6 +272,7 @@ def _handle_goal(ctx: CacheContext, goal_text: str, session_id: str | None) -> s
     if spec is None:
         print("用法: /goal 目标 || 标准1 | 标准2 [>> 交付文件路径](标准不可省略)")
         return session_id
+    _session_state["turn_ran"] = True
     sid = [session_id]
 
     def drive(c, text: str) -> str:
@@ -437,8 +444,14 @@ def _reload_dispatch():
 # ── 主入口 ──
 
 def _finalize_session(ctx: CacheContext, session_id: str | None) -> list[str]:
-    """会话收尾：落盘 → 反思 → L1 摘要 → 记忆收割 → 用户理解收割 → pin 转存。"""
+    """会话收尾：落盘 → 反思 → L1 摘要 → 记忆收割 → 用户理解收割 → pin 转存。
+
+    本进程没真跑过一轮（空会话 / 加载后未改动就退出）则直接退出，不触发任何
+    反思/摘要/收割——那些是 LLM 调用，对没新内容的会话纯属白烧。
+    """
     lines: list[str] = []
+    if not _session_state["turn_ran"]:
+        return ["退出"]
     if any(m["role"] == "assistant" for m in ctx.all):
         session_id = save_session(ctx.all, session_id)
         lines.append(f"会话已保存: [{session_id}]")
@@ -580,6 +593,7 @@ def main() -> None:
                     session_id = r.load
                     from . import status_bar
                     status_bar.reset()  # 切会话复位 Δmiss 基线
+                    _session_state["turn_ran"] = False  # 加载未改动则退出不收割
                     print(f"已加载会话 [{r.load}]，共 {len(ctx)} 条消息")
                     _print_recent(ctx.all)
                 if r.clear:
@@ -593,6 +607,7 @@ def main() -> None:
                         reset_gaps_cache()
                         from . import status_bar
                         status_bar.reset()  # 清空会话复位 Δmiss 基线
+                        _session_state["turn_ran"] = False  # 清空后空会话退出不收割
                     _append_volatile_context(ctx)
                 if r.goal:
                     session_id = _handle_goal(ctx, r.goal, session_id)
