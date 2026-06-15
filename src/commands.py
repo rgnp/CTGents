@@ -322,6 +322,9 @@ def _append_cache_section(lines: list[str], ctx, _sid: str | None) -> None:
     t = cache.get("total", {}) if isinstance(cache, dict) else {}
     reqs = t.get("requests", 0)
     if reqs == 0:
+        lines.append("")
+        lines.append("── API 缓存 ──")
+        lines.append("  本会话暂无 API 请求记录（先问一句再看）。")
         return
     prompt = t.get("prompt_tokens", 0)
     hit = t.get("cache_hit_tokens", 0)

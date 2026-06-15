@@ -429,6 +429,15 @@ def _ensure_session(session_id: str) -> None:
     if session_id == _current_session_id:
         return
 
+    # 无名会话("")→新分配的真 id：把已累计的统计搬过去，别丢首请求。
+    # 新会话首请求落在 session_id="" 上，随后 on_progress 保存才分配真 id——
+    # 若此时直接 load 真 id（空文件）会把那个首请求统计丢掉（per-session 累计 -1，
+    # 单请求会话直接变 0 → /context 整段消失）。仅当真 id 尚无统计文件时搬运。
+    if not _current_session_id and not _stats_path(session_id).exists():
+        _current_session_id = session_id
+        _save_cache_stats(session_id)
+        return
+
     # 保存当前会话的统计
     if _current_session_id:
         _save_cache_stats(_current_session_id)
