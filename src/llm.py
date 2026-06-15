@@ -761,14 +761,16 @@ _COMPRESS_MIN_OMITTED = 120
 _MAX_REQUESTS_PER_TURN = RUNTIME.max_requests_per_turn
 # 实验开关：工具循环请求是否照常携带尾部 volatile（默认 skip 以省 token）。
 # 用于诊断"[T]→第一个[L] 命中塌回前缀"是否由 skip_volatile（尾部 shape 切换）触发：
-# 置 1 后工具循环也带尾部、shape 不再随轮内切换。默认关=现状行为。
-_KEEP_TOOLLOOP_TAIL = os.getenv("CTG_TOOLLOOP_KEEP_TAIL", "").strip().lower() not in ("", "0", "false", "no")
+# 工具循环请求是否携带尾部 volatile。曾经默认 skip 以省 token，
+# 但 skip 导致尾部 role 序列变化 → DeepSeek 按 role 切分的 cache prefix unit
+# 边界漂移 → [T]→[L] 命中塌回前缀（仅 ~37%，本该 ~96%）。诊断确认后改为默认 keep。
+# 设 CTG_TOOLLOOP_KEEP_TAIL=0 可恢复旧行为（向后兼容）。
+_KEEP_TOOLLOOP_TAIL = os.getenv("CTG_TOOLLOOP_KEEP_TAIL", "1").strip().lower() not in ("", "0", "false", "no")
 # 干了不少活却没建任务 → 提示建任务的请求数阈值——真值在 params.RUNTIME
+_TASK_SUGGEST_MIN_REQUESTS = RUNTIME.task_suggest_min_requests
 _TASK_SUGGEST_MIN_REQUESTS = RUNTIME.task_suggest_min_requests
 # eager 工具执行线程池（LLM 流式期间预启动 SAFE 工具，持久复用）
 _EAGER_EXECUTOR: _ThreadPoolExecutor | None = None
-
-
 def _is_quota_error(result: str) -> bool:
     """检测工具结果是否为 Tavily 配额耗尽错误——统一检测，替代逐层 try/except。"""
     return (
