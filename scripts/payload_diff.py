@@ -53,6 +53,21 @@ def _head(s: str | None, n: int = 70) -> str:
     return s[:n] + ("…" if len(s) > n else "")
 
 
+def _trailing_system_count(msgs: list[dict]) -> int:
+    """末尾连续 system 消息条数 = send() 注入的「尾部牙」(行为牙/pinboard/task_ctx)。"""
+    c = 0
+    for m in reversed(msgs):
+        if m.get("role") == "system":
+            c += 1
+        else:
+            break
+    return c
+
+
+def _est_tokens_msgs(msgs: list[dict]) -> int:
+    return estimate_tokens("".join(_msg_sig(m) for m in msgs))
+
+
 def _pick_session() -> Path | None:
     if not _PAYLOAD_DIR.exists():
         return None
@@ -101,39 +116,47 @@ def main() -> int:
         req = cur.get("req", i + 1)
 
         k = _common_prefix_msgs(pmsgs, cmsgs)
-        pure_append = (k == len(pmsgs))  # 上次整个 payload 是这次的前缀
+        prev_tail = _trailing_system_count(pmsgs)          # 上次尾部牙条数
+        conv_boundary = len(pmsgs) - prev_tail              # 上次「对话/尾部」分界
+        tail_msgs = pmsgs[conv_boundary:] if prev_tail else []
+        tail_est = _est_tokens_msgs(tail_msgs)
 
         hitpct = f"{hit / prompt * 100:4.0f}%" if prompt else "  - "
         head = f"  #{req:<3d} {len(pmsgs):>6d}  {len(cmsgs):>6d}    前{k:>2d}条同   {hit:>7,}/{prompt:<7,}({hitpct})"
 
-        if not pure_append:
-            # 前缀在第 k 条断 = 旧消息被改/删/插 → 代码的锅
+        if k < conv_boundary:
+            # 断点落在对话内部（不是尾部边界）= 真·有旧对话消息被原地改/删/插 → 代码的锅
             old = pmsgs[k] if k < len(pmsgs) else None
             new = cmsgs[k] if k < len(cmsgs) else None
-            print(head + f"  ❌代码改了历史@第{k}条")
+            print(head + f"  ❌真改历史@对话第{k}条")
             if old is not None:
                 print(f"        旧[{old.get('role')}] {_head(old.get('content'))}")
             if new is not None:
                 print(f"        新[{new.get('role')}] {_head(new.get('content'))}")
             continue
 
-        # 纯追加：本该命中 ≈ 上次真实 prompt_tokens（不估算）
-        expected = prev_prompt
-        if expected <= 0:
+        # k >= conv_boundary：对话部分逐字节相同。断点要么是尾部浮动(prev_tail>0)、
+        # 要么是真纯追加(prev_tail==0，如 NO_VOLATILE_TAIL 模式)。
+        # 「本该命中」= 对话前缀，不含上次浮动的尾部牙：≈ 上次 prompt - 上次尾部 token。
+        if prev_prompt <= 0:
             print(head + "  (上次无 usage，无法对账)")
             continue
+        floating = prev_tail > 0 and k < len(pmsgs)
+        expected = prev_prompt - (tail_est if floating else 0)
         gap = expected - hit
-        # 命中按 64-token 块向下取整，留一块容差；再留 5% 余量抵噪声
-        slack = max(64, int(expected * 0.05))
+        slack = max(64, int(expected * 0.05))  # 64-token 块取整 + 5% 噪声余量
+        tag = f"尾部浮动{tail_est:,}est/轮" if floating else "纯追加"
         if gap <= slack:
-            print(head + f"  ✅一致(本该≈{expected:,})")
+            print(head + f"  ✅一致({tag},本该≈{expected:,})")
         else:
-            est_added = estimate_tokens("".join(_msg_sig(m) for m in cmsgs[k:]))
-            print(head + f"  ⚡服务端吃掉~{gap:,}(本该命中{expected:,}/实{hit:,};本轮新增约{est_added:,}est)")
+            print(head + f"  ⚡服务端吃掉~{gap:,}({tag};本该命中{expected:,}/实{hit:,})")
 
     print()
-    print("读法：全是 ✅/⚡ 而无 ❌ ⟹ 我们只追加、从不改历史，命中塌陷是服务端淘汰；")
-    print("　　　出现 ❌ ⟹ 代码在改旧消息，那一条就是塌陷根因，往那条的生产路径查。")
+    print("读法：")
+    print("  ❌真改历史  = 对话内某条被原地改/删 → 代码 bug，往那条生产路径查（本轮重点排除项）。")
+    print("  ✅尾部浮动  = 对话逐字节相同，只是尾部牙每轮飘到末尾、重发 ~Nest token；")
+    print("              这是尾部注入的设计成本，不是 bug。开 CTG_NO_VOLATILE_TAIL=1 可消除。")
+    print("  ⚡服务端吃掉 = 连对话前缀都没全命中，差额是 DeepSeek 淘汰的（常伴大间隔 g）。")
     return 0
 
 
