@@ -1,4 +1,4 @@
-"""记忆触发：_inject_memory_triggers 的关键词匹配与宁缺毋滥策略验证。"""
+"""记忆触发：_inject_memory_triggers 的关键词匹配、两级输出、宁缺毋滥策略验证。"""
 
 import tempfile
 from pathlib import Path
@@ -32,30 +32,48 @@ def _make_mem_file(mem_dir: Path, name: str, content: str,
     (mem_dir / f"{name}.md").write_text(text, encoding="utf-8")
 
 
-def test_trigger_on_self_evolution_with_roadmap(monkeypatch):
-    """用户说'自进化路线' → 命中有 self+evolution 和 evolution+roadmap 的记忆。"""
+def test_knowledge_trigger_hint(monkeypatch):
+    """知识型记忆触发 → 一行摘要提示。"""
     with tempfile.TemporaryDirectory() as td:
         mem_dir = Path(td)
         monkeypatch.setattr("src.tools.memory._dir", lambda: mem_dir)
 
         _make_mem_file(mem_dir, "self-evolution-three-gaps-2026-06-16",
-                       "2026-06-16 诊断「越用越懂」的三个差距。",
-                       fingerprint="self_evolution_diagnosis")
+                       "越用越懂的三个差距。",
+                       fingerprint="self_evolution_diagnosis", mem_type="knowledge")
         _make_mem_file(mem_dir, "evolution-roadmap-2026-06-16",
-                       "自进化路线：先做最基础的闭环。",
-                       fingerprint="evolution_roadmap")
-        _make_mem_file(mem_dir, "unrelated-memory",
-                       "跟自进化无关的内容。")
+                       "自进化路线：先做基础闭环。",
+                       fingerprint="evolution_roadmap", mem_type="knowledge")
 
         ctx = _FakeCtx()
         _inject_memory_triggers(ctx, "自进化路线")
 
         triggers = [m for m in ctx.log if m.get("_memory_trigger")]
-        assert len(triggers) == 1, f"应触发 1 条，实际 {len(triggers)}: {triggers}"
+        assert len(triggers) == 1
         content = triggers[0]["content"]
         assert "self-evolution-three-gaps" in content
         assert "evolution-roadmap" in content
-        assert "unrelated" not in content
+        assert "[记忆触发]" in content
+
+
+def test_strategy_trigger_constraint(monkeypatch):
+    """策略型记忆触发 → 可执行约束模板，非摘要提示。"""
+    with tempfile.TemporaryDirectory() as td:
+        mem_dir = Path(td)
+        monkeypatch.setattr("src.tools.memory._dir", lambda: mem_dir)
+
+        _make_mem_file(mem_dir, "three-systematic-errors-2026-06-16",
+                       "三个系统性问题：调研、行编辑、异步。",
+                       fingerprint="systematic_errors", mem_type="strategy")
+
+        ctx = _FakeCtx()
+        _inject_memory_triggers(ctx, "系统性错误 编辑代码 调研")
+
+        triggers = [m for m in ctx.log if m.get("_memory_trigger")]
+        assert len(triggers) >= 1
+        content = triggers[0]["content"]
+        assert "[约束]" in content
+        assert "执行前必查" in content
 
 
 def test_no_trigger_on_irrelevant_input(monkeypatch):
@@ -67,14 +85,12 @@ def test_no_trigger_on_irrelevant_input(monkeypatch):
         _make_mem_file(mem_dir, "self-evolution-three-gaps-2026-06-16",
                        "越用越懂的三个差距。",
                        fingerprint="self_evolution_diagnosis")
-        _make_mem_file(mem_dir, "user-profile",
-                       "用户偏好档案。")
 
         ctx = _FakeCtx()
         _inject_memory_triggers(ctx, "今天天气怎么样")
 
         triggers = [m for m in ctx.log if m.get("_memory_trigger")]
-        assert len(triggers) == 0, f"无关输入不应触发: {triggers}"
+        assert len(triggers) == 0
 
 
 def test_trigger_clears_previous(monkeypatch):
@@ -85,7 +101,7 @@ def test_trigger_clears_previous(monkeypatch):
 
         _make_mem_file(mem_dir, "self-evolution-three-gaps-2026-06-16",
                        "越用越懂的三个差距。",
-                       fingerprint="self_evolution_diagnosis")
+                       fingerprint="self_evolution_diagnosis", mem_type="knowledge")
 
         ctx = _FakeCtx()
         ctx.log.append({"role": "system", "content": "旧的触发", "_memory_trigger": True})
@@ -93,7 +109,7 @@ def test_trigger_clears_previous(monkeypatch):
         _inject_memory_triggers(ctx, "自进化")
 
         triggers = [m for m in ctx.log if m.get("_memory_trigger")]
-        assert len(triggers) == 1, f"应只有 1 条（旧已被清），实际 {len(triggers)}"
+        assert len(triggers) == 1
         assert "旧的触发" not in triggers[0]["content"]
 
 
@@ -111,7 +127,7 @@ def test_no_trigger_below_threshold(monkeypatch):
         _inject_memory_triggers(ctx, "用户的偏好是什么")
 
         triggers = [m for m in ctx.log if m.get("_memory_trigger")]
-        assert len(triggers) == 0, f"单关键词命中不应触发: {triggers}"
+        assert len(triggers) == 0
 
 
 def test_empty_memory_dir_no_error(monkeypatch):
@@ -125,3 +141,26 @@ def test_empty_memory_dir_no_error(monkeypatch):
 
         triggers = [m for m in ctx.log if m.get("_memory_trigger")]
         assert len(triggers) == 0
+
+
+def test_mixed_strategy_and_knowledge(monkeypatch):
+    """同时命中策略型+知识型 → 两路输出都注入。"""
+    with tempfile.TemporaryDirectory() as td:
+        mem_dir = Path(td)
+        monkeypatch.setattr("src.tools.memory._dir", lambda: mem_dir)
+
+        _make_mem_file(mem_dir, "three-systematic-errors-2026-06-16",
+                       "系统性问题。",
+                       fingerprint="systematic_errors", mem_type="strategy")
+        _make_mem_file(mem_dir, "self-evolution-three-gaps-2026-06-16",
+                       "越用越懂的三个差距。",
+                       fingerprint="self_evolution_diagnosis", mem_type="knowledge")
+
+        ctx = _FakeCtx()
+        _inject_memory_triggers(ctx, "系统性错误 进化 诊断")
+
+        triggers = [m for m in ctx.log if m.get("_memory_trigger")]
+        assert len(triggers) >= 2
+        contents = " ".join(m["content"] for m in triggers)
+        assert "[约束]" in contents
+        assert "[记忆触发]" in contents

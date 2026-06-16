@@ -196,18 +196,42 @@ _MEMORY_TRIGGER_TRANSLATIONS: dict[str, list[str]] = {
     "反思": ["reflection"],
     "壁纸": ["wallpaper"],
     "宁缺毋滥": ["precision"],
+    "错误": ["error", "errors"],
+    "系统性": ["systematic"],
+    "编辑": ["edit"],
+    "调研": ["research", "search"],
+    "异步": ["async", "asynchronous"],
 }
 
 # 记忆名中属于噪音的部分（日期、纯数字）
 _MEMORY_NOISE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$|^\d+$")
 
+# 策略型记忆触发时输出的约束模板（按 fingerprint 路由）
+_STRATEGY_CONSTRAINT_TEMPLATES: dict[str, str] = {
+    "systematic_errors": (
+        "[约束] 本轮涉及代码/设计决策——执行前必查三点："
+        "① 设计前先 rag_search+search_web 调研方案，不凭大脑知识库；"
+        "② 改代码前先 read_file 确认内容，单行→edit_file_lines，多行→write_file；"
+        "③ 长任务用 run_async 启动后在后台等，不 poll 循环盯着跑。"
+    ),
+    "edit_repeated": (
+        "[约束] 即将编辑代码：改前必读文件（read_file），"
+        "单行替换→edit_file_lines，多行→write_file 完整重写。"
+        "行号漂移是 37 次遭遇的最高频失败原因——选错工具就是在同一个坑里原地踏步。"
+    ),
+    "memory_behavior_gap": (
+        "[约束] 记忆→行为闭环：触发了教训记忆时，本轮回复/行动中必须体现对应行为改变。"
+        "不是「我知道了」，是「我这次不同了」。"
+    ),
+}
+
 
 def _inject_memory_triggers(ctx: CacheContext, user_input: str) -> None:
     """记忆触发：用户输入关键词匹配记忆标题/指纹时，提亮一行提醒。宁缺毋滥。
 
-    扫描 memory/*.md 的全部非 lesson 记忆，从 name + fingerprint 提取内容词，
-    与用户输入（含中→英翻译扩展）做交匹配。≥2 个词命中才触发，最多 3 条。
-    只提亮一行摘要，不注入全文——需要深挖用 recall 工具。
+    两级输出：
+    - 策略型（strategy）→ 注入可执行约束模板，强制前置检查
+    - 知识型（knowledge/reference）→ 注入一行摘要，需要时 recall 深读
     """
     from .tools.memory import _dir, _split_frontmatter, _tokenize
 
@@ -225,7 +249,7 @@ def _inject_memory_triggers(ctx: CacheContext, user_input: str) -> None:
             user_lower += " " + " ".join(en_list)
     user_tokens = _tokenize(user_lower)
 
-    triggers: list[tuple[str, str, int]] = []  # (name, desc_short, match_count)
+    triggers: list[tuple[str, str, str, str, int]] = []  # (name, desc, type, fp, matches)
 
     for f in sorted(mem_dir.glob("*.md")):
         if f.name == "MEMORY.md":
@@ -236,6 +260,7 @@ def _inject_memory_triggers(ctx: CacheContext, user_input: str) -> None:
                 continue
             name = meta.get("name", f.stem)
             fp = meta.get("fingerprint", "")
+            mem_type = meta.get("type", "")
 
             # 从 name 和 fingerprint 提取内容词
             keywords: set[str] = set()
@@ -253,36 +278,57 @@ def _inject_memory_triggers(ctx: CacheContext, user_input: str) -> None:
             if not keywords:
                 continue
 
-            # 匹配：关键词是否出现在用户 token 集或翻译后的文本中
             matches = sum(
                 1 for kw in keywords
                 if kw in user_tokens or kw in user_lower
             )
             if matches >= 2:
                 desc = meta.get("description", "")
-                triggers.append((name, desc[:40] if desc else "", matches))
+                triggers.append((name, desc[:40] if desc else "", mem_type, fp, matches))
         except Exception:
             continue
 
     if not triggers:
         return
 
-    triggers.sort(key=lambda x: x[2], reverse=True)
+    triggers.sort(key=lambda x: x[4], reverse=True)
     triggers = triggers[:3]
 
-    parts = []
-    for name, desc, _ in triggers:
-        if desc:
-            parts.append(f"{name}（{desc}）")
+    # 按类型分层输出
+    strategy_hits: list[tuple[str, str, str]] = []  # (name, desc, fp)
+    knowledge_hits: list[tuple[str, str]] = []       # (name, desc)
+
+    for name, desc, mem_type, fp, _ in triggers:
+        if mem_type == "strategy":
+            strategy_hits.append((name, desc, fp))
         else:
-            parts.append(name)
-    line = (
-        f"[记忆触发] 以下记忆可能与本轮相关，需要时用 recall 搜索详情："
-        f" {', '.join(parts)}"
-    )
-    ctx.log.append(
-        {"role": "system", "content": line, "_volatile": True, "_memory_trigger": True}
-    )
+            knowledge_hits.append((name, desc))
+
+    # 策略型 → 强约束模板
+    for _name, _desc, fp in strategy_hits:
+        template = _STRATEGY_CONSTRAINT_TEMPLATES.get(fp)
+        if template:
+            ctx.log.append({
+                "role": "system", "content": template,
+                "_volatile": True, "_memory_trigger": True,
+            })
+
+    # 知识型 → 摘要提示
+    if knowledge_hits:
+        parts = []
+        for name, desc in knowledge_hits:
+            if desc:
+                parts.append(f"{name}（{desc}）")
+            else:
+                parts.append(name)
+        line = (
+            f"[记忆触发] 以下记忆可能与本轮相关，需要时用 recall 搜索详情："
+            f" {', '.join(parts)}"
+        )
+        ctx.log.append({
+            "role": "system", "content": line,
+            "_volatile": True, "_memory_trigger": True,
+        })
 
 
 def process_turn(
@@ -303,7 +349,7 @@ def process_turn(
     _inject_thinking_stance(ctx)
     # 证据牙：信心要匹配证据，没看够别下定论
     _inject_evidence_stance(ctx)
-    # 记忆触发：用户输入关键词匹配记忆标题 → 提亮一行
+    # 记忆触发：用户输入关键词匹配记忆标题 → 策略型注入约束模板，知识型注入摘要
     _inject_memory_triggers(ctx, user_input)
     # 预读优化：用户提到了文件路径，先读入上下文
     pre_msgs = _preread_files(user_input, ctx)
