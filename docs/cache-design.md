@@ -1,6 +1,8 @@
 # DeepSeek 前缀缓存优化设计
 
 > 基于 [DeepSeek-Reasonix](https://github.com/esengine/DeepSeek-Reasonix) 的架构调研。
+> 相关：[`deepseek-cache-spike-findings.md`](deepseek-cache-spike-findings.md)（命中突刺调查报告：
+> 设计已生效、残留突刺经取证证明是服务端淘汰） · [`../CACHE_SPIKE_DIAGNOSIS.md`](../CACHE_SPIKE_DIAGNOSIS.md)（取证工具）。
 
 ---
 
