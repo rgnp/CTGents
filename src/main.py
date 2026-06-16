@@ -124,15 +124,19 @@ def _append_volatile_context(ctx: CacheContext) -> None:
 
 
 def _inject_completion_audit(ctx: CacheContext) -> None:
-    """收尾取证自检：若日志里留下"改动晚于绿测"则挂尾提示。"""
+    """收尾取证自检：改动晚于绿测 / 改文件前没先读 → 挂尾提示。"""
     ctx.log[:] = [m for m in ctx.log if not m.get("_completion_audit")]
-    from .completion_audit import audit_completion
-    nudge = audit_completion(ctx.log)
-    if nudge:
+    from .completion_audit import audit_completion, audit_read_before_write
+    nudges = []
+    for fn in (audit_completion, audit_read_before_write):
+        nudge = fn(ctx.log)
+        if nudge:
+            nudges.append(nudge)
+    if nudges:
         ctx.log.append(
-            {"role": "system", "content": nudge, "_volatile": True, "_completion_audit": True}
+            {"role": "system", "content": "\n".join(nudges),
+             "_volatile": True, "_completion_audit": True}
         )
-
 
 def _inject_citation_audit(ctx: CacheContext) -> None:
     """引用即取证：若最终回复引用了没取证过的代码文件则挂尾提示。"""

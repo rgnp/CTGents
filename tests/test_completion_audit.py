@@ -13,7 +13,9 @@ from src.completion_audit import (
     _EXIT_PREFIX,
     _NUDGE,
     _WRITE_OK,
+    _WRITE_WITHOUT_READ_NUDGE,
     audit_completion,
+    audit_read_before_write,
 )
 from src.tools.exec import run_command
 from src.tools.file import edit_file_lines, write_file
@@ -178,3 +180,71 @@ class TestOutputContracts:
 
     # git_commit 成功（"✅ 提交成功"）需真 repo + 绿树，太重 → 不做集成测试；
     # 该 marker 的耦合由 completion_audit._COMMIT_OK 处的注释 + 本类记录在案。
+
+
+# ── audit_read_before_write ─────────────────────────────────────
+
+def _user_msg(content: str = "fix bug") -> dict:
+    return {"role": "user", "content": content}
+
+
+def _call_assist(cid: str, name: str) -> dict:
+    return {"role": "assistant", "content": "", "tool_calls": [
+        {"id": cid, "function": {"name": name, "arguments": "{}"}}]}
+
+
+def _turn(log: list[dict]) -> list[dict]:
+    """包装成完整一轮：user → ... → end。tool_names_this_turn 从最后一条 user 往前扫。"""
+    return [_user_msg()] + log
+
+
+def test_write_without_read_nudge():
+    """edit_file_lines 调了但没调 read_file → 提示。"""
+    log = _turn([
+        _call_assist("e1", "edit_file_lines"),
+        _result("e1", "edit_file_lines", "已编辑: m.py"),
+    ])
+    assert audit_read_before_write(log) == _WRITE_WITHOUT_READ_NUDGE
+
+
+def test_write_file_without_read_nudge():
+    log = _turn([
+        _call_assist("w1", "write_file"),
+        _result("w1", "write_file", "已写入: m.py"),
+    ])
+    assert audit_read_before_write(log) == _WRITE_WITHOUT_READ_NUDGE
+
+
+def test_write_after_read_is_fine():
+    log = _turn([
+        _call_assist("r1", "read_file"),
+        _result("r1", "read_file", "content..."),
+        _call_assist("e1", "edit_file_lines"),
+        _result("e1", "edit_file_lines", "已编辑: m.py"),
+    ])
+    assert audit_read_before_write(log) is None
+
+
+def test_only_read_no_nudge():
+    log = _turn([
+        _call_assist("r1", "read_file"),
+        _result("r1", "read_file", "content..."),
+    ])
+    assert audit_read_before_write(log) is None
+
+
+def test_no_file_ops_no_nudge():
+    log = _turn([
+        _call_assist("c1", "run_command"),
+        _result("c1", "run_command", "ok"),
+    ])
+    assert audit_read_before_write(log) is None
+
+
+def test_no_user_boundary_returns_none():
+    """没有 user 消息的 log → 扫不到工具名 → 不误报。"""
+    assert audit_read_before_write([]) is None
+    assert audit_read_before_write([
+        _call_assist("e1", "edit_file_lines"),
+        _result("e1", "edit_file_lines", "已编辑: m.py"),
+    ]) is None

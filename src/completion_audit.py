@@ -91,3 +91,37 @@ def audit_completion(log: list[dict]) -> str | None:
     if last_edit >= 0 and last_edit > last_green:
         return _NUDGE
     return None
+
+
+_WRITE_WITHOUT_READ_NUDGE = (
+    "⚠️ 取证自检：本轮你修改了文件（write_file / edit_file_lines）"
+    "但本轮没有先调用 read_file 读过目标文件。行号/内容可能已漂移，"
+    "下次改文件前先读一遍——不读就改是最高频的原地踏步来源。"
+)
+
+
+def _tool_names_this_turn(log: list[dict]) -> set[str]:
+    """收集本轮所有 tool_calls 的工具名（从最后一条 user 消息起）。
+    没有 user 消息则返回空集合——没有轮次边界就无从审计。
+    """
+    if not any(m.get("role") == "user" for m in log):
+        return set()
+    names: set[str] = set()
+    for msg in reversed(log):
+        role = msg.get("role", "")
+        for tc in msg.get("tool_calls") or []:
+            name = tc.get("function", {}).get("name", "")
+            if name:
+                names.add(name)
+        if role == "user":
+            break
+    return names
+
+
+def audit_read_before_write(log: list[dict]) -> str | None:
+    """本轮调了 write_file / edit_file_lines 但没调 read_file → 返回提示。"""
+    names = _tool_names_this_turn(log)
+    writes = {"write_file", "edit_file_lines"}
+    if writes & names and "read_file" not in names:
+        return _WRITE_WITHOUT_READ_NUDGE
+    return None
