@@ -99,7 +99,9 @@ def harvest_project_knowledge(log: list[dict]) -> str | None:
     last_err: Exception | None = None
     for attempt in range(PROJECT_KNOWLEDGE.harvest_retries + 1):
         try:
-            content, _ = backend.chat_non_stream(messages, lambda _t: None, tools=None)
+            content, _ = backend.chat_non_stream(
+                messages, lambda _t: None, tools=None,
+                max_tokens=PROJECT_KNOWLEDGE.max_body_chars * 2)
             return _clean_output(content or "") or None
         except RETRYABLE as e:
             last_err = e

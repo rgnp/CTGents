@@ -125,8 +125,9 @@ class LLMBackend(ABC):
         messages: list[dict],
         on_token: TokenCallback,
         tools: list[dict] | None = None,
+        max_tokens: int | None = None,
     ) -> tuple[str | None, list[dict] | None]:
-        """非流式调用。返回 (content, tool_calls)。"""
+        """非流式调用。返回 (content, tool_calls)。max_tokens 默认用模型上限。"""
         ...
 
 
@@ -248,11 +249,12 @@ class DeepSeekBackend(LLMBackend):
         messages: list[dict],
         on_token: TokenCallback,
         tools: list[dict] | None = None,
+        max_tokens: int | None = None,
     ) -> tuple[str | None, list[dict] | None]:
         kwargs = {
             "model": self.info.id,
             "messages": messages,
-            "max_tokens": self.info.max_tokens,
+            "max_tokens": max_tokens or self.info.max_tokens,
         }
         if tools and self.info.supports_tools:
             kwargs["tools"] = tools

@@ -38,7 +38,6 @@
 | `src/diagnostics.py` | 325 | 诊断层：tracker 异常 → 可行动诊断 |
 | `src/tracker.py` | 314 | 工具调用性能追踪（被动进化感知层唯一数据入口） |
 | `src/tasks.py` | 304 | 长任务状态：current.md 读取/判活/注入/归档 |
-| `src/session_summary.py` | 287 | 会话摘要生成 |
 | `src/tools/repo.py` | 287 | 仓库管理：clone/list/status |
 | `src/evolve.py` | 285 | 进化档案（JSONL）读写/查询 |
 | `src/cache_context.py` | 225 | 三段式上下文管理器：prefix/log/scratch |

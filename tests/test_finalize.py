@@ -1,6 +1,6 @@
 """_finalize_session 收尾管线测试 — 会话关闭的记忆闭环。
 
-_finalize_session 串联四个子步骤：会话落盘 → 被动反思 → L1摘要 → 记忆收割 → 钉板转存。
+_finalize_session 串联子步骤：会话落盘 → 被动反思 → 记忆收割 → 钉板转存。
 每个子步骤被 except Exception 包裹——改坏任何一个，只有 logger.warning，
 测试不红。这里 mock 所有子步骤，验证调用链和故障隔离。
 """
@@ -14,7 +14,6 @@ import pytest
 import src.lesson as lesson
 import src.main as main
 import src.session_pins as sp
-import src.session_summary as ssum
 import src.tracker as tracker
 from src.cache_context import CacheContext
 
@@ -44,12 +43,12 @@ def _ctx_empty() -> CacheContext:
 
 
 # ═══════════════════════════════════════════════════════════════
-# 四个子步骤全部调用
+# 各子步骤全部调用
 # ═══════════════════════════════════════════════════════════════
 
 
-def test_all_four_substeps_called(monkeypatch):
-    """含 assistant 消息的会话 → save + reflect + summary + lessons + pins 全调。"""
+def test_substeps_all_called(monkeypatch):
+    """含 assistant 消息的会话 → save + reflect + lessons + pins 全调。"""
     calls = []
 
     def fake_save(messages, sid):
@@ -60,10 +59,6 @@ def test_all_four_substeps_called(monkeypatch):
         calls.append("reflect")
         return None
 
-    def fake_summary(messages, sid):
-        calls.append("summary")
-        return "summary.md"
-
     def fake_extract(messages):
         calls.append("extract")
         return []
@@ -74,7 +69,6 @@ def test_all_four_substeps_called(monkeypatch):
 
     monkeypatch.setattr(main, "save_session", fake_save)
     monkeypatch.setattr(tracker, "reflect_on_session", fake_reflect)
-    monkeypatch.setattr(ssum, "write_session_summary", fake_summary)
     monkeypatch.setattr(lesson, "extract_lessons", fake_extract)
     monkeypatch.setattr(lesson, "save_lessons", lambda _: 0)
     monkeypatch.setattr(sp, "promote_durable", fake_promote)
@@ -84,19 +78,18 @@ def test_all_four_substeps_called(monkeypatch):
 
     assert "save" in calls
     assert "reflect" in calls
-    assert "summary" in calls
     assert "extract" in calls
     assert "promote" in calls
     assert any("退出" in ln for ln in lines)
 
 
 # ═══════════════════════════════════════════════════════════════
-# 空会话不保存/不反思/不摘要
+# 空会话不保存/不反思
 # ═══════════════════════════════════════════════════════════════
 
 
-def test_empty_session_skips_save_reflect_summary(monkeypatch):
-    """无 assistant 消息 → 不保存、不反思、不摘要（避免空文件/无效反思）。"""
+def test_empty_session_skips_save_reflect(monkeypatch):
+    """无 assistant 消息 → 不保存、不反思（避免空文件/无效反思）。"""
     calls = []
 
     def fake_save(messages, sid):
@@ -107,10 +100,6 @@ def test_empty_session_skips_save_reflect_summary(monkeypatch):
         calls.append("reflect")
         return None
 
-    def fake_summary(messages, sid):
-        calls.append("summary")
-        return ""
-
     def fake_extract(messages):
         calls.append("extract")
         return []
@@ -121,7 +110,6 @@ def test_empty_session_skips_save_reflect_summary(monkeypatch):
 
     monkeypatch.setattr(main, "save_session", fake_save)
     monkeypatch.setattr(tracker, "reflect_on_session", fake_reflect)
-    monkeypatch.setattr(ssum, "write_session_summary", fake_summary)
     monkeypatch.setattr(lesson, "extract_lessons", fake_extract)
     monkeypatch.setattr(lesson, "save_lessons", lambda _: 0)
     monkeypatch.setattr(sp, "promote_durable", fake_promote)
@@ -131,7 +119,6 @@ def test_empty_session_skips_save_reflect_summary(monkeypatch):
 
     assert "save" not in calls
     assert "reflect" not in calls
-    assert "summary" not in calls
     assert "extract" in calls, "记忆收割不受 assistant 存在条件约束"
     assert "promote" in calls, "钉板转存不受 assistant 存在条件约束"
 
@@ -141,8 +128,8 @@ def test_empty_session_skips_save_reflect_summary(monkeypatch):
 # ═══════════════════════════════════════════════════════════════
 
 
-def test_reflect_failure_does_not_block_summary(monkeypatch):
-    """reflect_on_session 抛异常 → summary 仍被调用。"""
+def test_reflect_failure_does_not_block_lessons(monkeypatch):
+    """reflect_on_session 抛异常 → extract_lessons 仍被调用。"""
     calls = []
 
     def fake_save(messages, sid):
@@ -153,17 +140,12 @@ def test_reflect_failure_does_not_block_summary(monkeypatch):
         calls.append("reflect")
         raise RuntimeError("reflect crash")
 
-    def fake_summary(messages, sid):
-        calls.append("summary")
-        return "summary.md"
-
     def fake_extract(messages):
         calls.append("extract")
         return []
 
     monkeypatch.setattr(main, "save_session", fake_save)
     monkeypatch.setattr(tracker, "reflect_on_session", fake_reflect)
-    monkeypatch.setattr(ssum, "write_session_summary", fake_summary)
     monkeypatch.setattr(lesson, "extract_lessons", fake_extract)
     monkeypatch.setattr(lesson, "save_lessons", lambda _: 0)
     monkeypatch.setattr(sp, "promote_durable", lambda: 0)
@@ -172,42 +154,7 @@ def test_reflect_failure_does_not_block_summary(monkeypatch):
     main._finalize_session(ctx, None)
 
     assert "reflect" in calls
-    assert "summary" in calls, "reflect 抛异常不能阻断 summary"
     assert "extract" in calls, "reflect 抛异常不能阻断记忆收割"
-
-
-def test_summary_failure_does_not_block_lessons(monkeypatch):
-    """write_session_summary 抛异常 → extract_lessons 仍被调用。"""
-    calls = []
-
-    def fake_save(messages, sid):
-        calls.append("save")
-        return "sid"
-
-    def fake_reflect(sid):
-        calls.append("reflect")
-        return None
-
-    def fake_summary(messages, sid):
-        calls.append("summary")
-        raise RuntimeError("summary crash")
-
-    def fake_extract(messages):
-        calls.append("extract")
-        return []
-
-    monkeypatch.setattr(main, "save_session", fake_save)
-    monkeypatch.setattr(tracker, "reflect_on_session", fake_reflect)
-    monkeypatch.setattr(ssum, "write_session_summary", fake_summary)
-    monkeypatch.setattr(lesson, "extract_lessons", fake_extract)
-    monkeypatch.setattr(lesson, "save_lessons", lambda _: 0)
-    monkeypatch.setattr(sp, "promote_durable", lambda: 0)
-
-    ctx = _ctx_with_assistant()
-    main._finalize_session(ctx, None)
-
-    assert "summary" in calls
-    assert "extract" in calls, "summary 抛异常不能阻断记忆收割"
 
 
 def test_lessons_failure_does_not_block_pins(monkeypatch):
@@ -222,17 +169,12 @@ def test_lessons_failure_does_not_block_pins(monkeypatch):
         calls.append("reflect")
         return None
 
-    def fake_summary(messages, sid):
-        calls.append("summary")
-        return "summary.md"
-
     def fake_extract(messages):
         calls.append("extract")
         raise RuntimeError("extract crash")
 
     monkeypatch.setattr(main, "save_session", fake_save)
     monkeypatch.setattr(tracker, "reflect_on_session", fake_reflect)
-    monkeypatch.setattr(ssum, "write_session_summary", fake_summary)
     monkeypatch.setattr(lesson, "extract_lessons", fake_extract)
     monkeypatch.setattr(sp, "promote_durable", lambda: calls.append("promote"))
 
@@ -258,9 +200,6 @@ def test_lessons_saved_when_found(monkeypatch):
     def fake_reflect(sid):
         return None
 
-    def fake_summary(messages, sid):
-        return "summary.md"
-
     def fake_extract(messages):
         return [{"fingerprint": "test", "content": "test lesson"}]
 
@@ -269,7 +208,6 @@ def test_lessons_saved_when_found(monkeypatch):
 
     monkeypatch.setattr(main, "save_session", fake_save)
     monkeypatch.setattr(tracker, "reflect_on_session", fake_reflect)
-    monkeypatch.setattr(ssum, "write_session_summary", fake_summary)
     monkeypatch.setattr(lesson, "extract_lessons", fake_extract)
     monkeypatch.setattr(lesson, "save_lessons", fake_save_lessons)
     monkeypatch.setattr(sp, "promote_durable", lambda: 0)
@@ -287,11 +225,10 @@ def test_lessons_saved_when_found(monkeypatch):
 
 
 def test_no_turn_skips_everything(monkeypatch):
-    """turn_ran=False → 早退，save/reflect/summary/extract/promote 全不调（不白烧 LLM）。"""
+    """turn_ran=False → 早退，save/reflect/extract/promote 全不调（不白烧 LLM）。"""
     calls = []
     monkeypatch.setattr(main, "save_session", lambda m, s: calls.append("save") or "sid")
     monkeypatch.setattr(tracker, "reflect_on_session", lambda s: calls.append("reflect"))
-    monkeypatch.setattr(ssum, "write_session_summary", lambda m, s: calls.append("summary"))
     monkeypatch.setattr(lesson, "extract_lessons", lambda m: calls.append("extract") or [])
     monkeypatch.setattr(sp, "promote_durable", lambda: calls.append("promote") or 0)
 

@@ -107,9 +107,10 @@ def test_harvest_calls_backend_isolated_and_cleans(monkeypatch, iso_mem):
     from src import llm
     captured: dict = {}
 
-    def fake(messages, _cb, tools=None):
+    def fake(messages, _cb, tools=None, max_tokens=None):
         captured["messages"] = messages
         captured["tools"] = tools
+        captured["max_tokens"] = max_tokens
         return ("```\n## 沟通\n- 偏好简洁中文\n```", None)
 
     monkeypatch.setattr(llm.AVAILABLE_MODELS["pro"], "chat_non_stream", fake)

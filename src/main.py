@@ -451,7 +451,7 @@ def _reload_dispatch():
 # ── 主入口 ──
 
 def _finalize_session(ctx: CacheContext, session_id: str | None) -> list[str]:
-    """会话收尾：落盘 → 反思 → L1 摘要 → 记忆收割 → 用户理解收割 → pin 转存。
+    """会话收尾：落盘 → 反思 → 记忆收割 → 用户理解收割 → pin 转存。
 
     本进程没真跑过一轮（空会话 / 加载后未改动就退出）则直接退出，不触发任何
     反思/摘要/收割——那些是 LLM 调用，对没新内容的会话纯属白烧。
@@ -459,50 +459,65 @@ def _finalize_session(ctx: CacheContext, session_id: str | None) -> list[str]:
     lines: list[str] = []
     if not _session_state["turn_ran"]:
         return ["退出"]
+    timings: list[tuple[str, float]] = []
+
+    def _timed(label: str, fn):
+        t0 = time.perf_counter()
+        try:
+            return fn()
+        finally:
+            timings.append((label, time.perf_counter() - t0))
+
     if any(m["role"] == "assistant" for m in ctx.all):
-        session_id = save_session(ctx.all, session_id)
+        session_id = _timed("保存", lambda: save_session(ctx.all, session_id))
         lines.append(f"会话已保存: [{session_id}]")
         try:
             from .tracker import reflect_on_session
-            if reflect_on_session(session_id):
+            if _timed("反思", lambda: reflect_on_session(session_id)):
                 lines.append("已写入会话反思。")
         except Exception as e:
             logger.warning("会话反思失败: %s", e)
-    if any(m["role"] == "assistant" for m in ctx.all):
-        try:
-            from .session_summary import write_session_summary
-            filename = write_session_summary(ctx.all, session_id)
-            if filename:
-                lines.append(f"已写入会话摘要: knowledge/sessions/{filename}")
-        except Exception as e:
-            logger.warning("会话摘要失败: %s", e)
     try:
         from .lesson import extract_lessons, save_lessons
-        lessons = extract_lessons(ctx.all)
+        lessons = _timed("教训", lambda: extract_lessons(ctx.all))
         if lessons:
             n = save_lessons(lessons)
             lines.append(f"已自动收割 {n} 条记忆。")
     except Exception as e:
         logger.warning("记忆收割失败: %s", e)
     if any(m["role"] == "assistant" for m in ctx.all):
+        # 用户档案 + 项目知识都是阻塞 LLM 调用。两者各写不同记忆文件，但 _remember
+        # 末尾会重建共享索引 MEMORY.md（并发写同一文件会互相截断）——故 LLM 调用并发跑、
+        # 落盘串行做：把退出等待从 串行(64+44s) 砍到 并发(≈max)。
+        import concurrent.futures as _cf
+
+        from .project_model import harvest_project_knowledge, save_project_knowledge
+        from .user_model import harvest_user_profile, save_user_profile
+        log_all = ctx.all
+
+        def _harvest_both() -> tuple[str | None, str | None]:
+            with _cf.ThreadPoolExecutor(max_workers=2) as ex:
+                fu = ex.submit(harvest_user_profile, log_all)
+                fp = ex.submit(harvest_project_knowledge, log_all)
+                return fu.result(), fp.result()
+
+        user_body = proj_body = None
         try:
-            from .user_model import harvest_and_save
-            note = harvest_and_save(ctx.all)
-            if note:
-                lines.append(note)
+            user_body, proj_body = _timed("收割(并发)", _harvest_both)
         except Exception as e:
-            logger.warning("用户理解收割失败: %s", e)
-        try:
-            from .project_model import harvest_and_save as _harvest_project
-            note = _harvest_project(ctx.all)
-            if note:
-                lines.append(note)
-        except Exception as e:
-            logger.warning("项目知识收割失败: %s", e)
+            logger.warning("收割失败: %s", e)
+        if user_body and save_user_profile(user_body):
+            lines.append("已更新用户理解档案（下次会话自动注入）。")
+        if proj_body and save_project_knowledge(proj_body):
+            lines.append("已更新项目知识档案（下次会话索引可见，recall 取详情）。")
     from .session_pins import promote_durable
-    promoted = promote_durable()
+    promoted = _timed("pin转存", promote_durable)
     if promoted:
         lines.append(f"已把 {promoted} 条耐久 pin 转存进记忆。")
+    if timings:
+        slow = sorted(timings, key=lambda kv: kv[1], reverse=True)
+        brief = " ".join(f"{k}{v:.1f}s" for k, v in slow if v >= 0.05)
+        lines.append(f"收尾耗时: {brief or '全部<0.05s'}")
     lines.append("退出")
     return lines
 

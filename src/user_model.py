@@ -117,7 +117,9 @@ def harvest_user_profile(log: list[dict]) -> str | None:
     last_err: Exception | None = None
     for attempt in range(USER_MODEL.harvest_retries + 1):
         try:
-            content, _ = backend.chat_non_stream(messages, lambda _t: None, tools=None)
+            content, _ = backend.chat_non_stream(
+                messages, lambda _t: None, tools=None,
+                max_tokens=USER_MODEL.max_profile_chars * 2)
             return _clean_output(content or "") or None
         except RETRYABLE as e:
             last_err = e

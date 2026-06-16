@@ -57,9 +57,10 @@ def test_harvest_isolated_and_cleans(monkeypatch, iso_mem):
     from src import llm
     captured: dict = {}
 
-    def fake(messages, _cb, tools=None):
+    def fake(messages, _cb, tools=None, max_tokens=None):
         captured["messages"] = messages
         captured["tools"] = tools
+        captured["max_tokens"] = max_tokens
         return ("```markdown\n## 资源\n- 科研用 DATASET_XYZ\n```", None)
 
     monkeypatch.setattr(llm.AVAILABLE_MODELS["pro"], "chat_non_stream", fake)
