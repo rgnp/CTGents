@@ -123,24 +123,52 @@ def _delta(label: str, a, b, changed_note: str = "") -> str:
     return f"{label} ⚠{a}→{b}{changed_note}"
 
 
-def _verdict(prev_msgs, cur_msgs, k, prev_prompt, hit) -> str:
-    """判决：尾部浮动 / 纯追加 / 服务端吃掉 / 真改历史（沿用真公共前缀对账逻辑）。"""
-    prev_tail = _trailing_system_count(prev_msgs)
-    conv_boundary = len(prev_msgs) - prev_tail
-    tail_est = _est_tokens_msgs(prev_msgs[conv_boundary:]) if prev_tail else 0
+def _client_prefix_status(prev_msgs, cur_msgs, prev_rec, cur_rec) -> tuple[str, int]:
+    """纯结构地（只看字节/哈希，不掺 token 数）判断客户端这一轮对前缀做了什么。
 
+    返回 (status, k)，status ∈：
+      tools_changed   —— tools 表变了，DeepSeek 前缀里 tools 排在 messages 前，整段前缀作废。
+      history_mutated —— first_diff 落在对话中段（messages[0..conv_boundary-1]），旧消息被原地改/删。
+      tail_only_changed —— 对话部分逐字节相同，只有末尾浮动的 system 尾部牙不同。
+      pure_append     —— 上一轮整个 payload 是这一轮的逐字节前缀，只追加、没动任何旧内容。
+    优先级：tools > history > tail > pure（前者一旦成立就盖过后者）。
+    """
+    pth, cth = prev_rec.get("tools_hash"), cur_rec.get("tools_hash")
+    k = _common_prefix_msgs(prev_msgs, cur_msgs)
+    if pth and cth and pth != cth:
+        return "tools_changed", k
+    conv_boundary = len(prev_msgs) - _trailing_system_count(prev_msgs)
     if k < conv_boundary:
-        return f"❌真改历史@对话第{k}条"
+        return "history_mutated", k
+    if k == len(prev_msgs):
+        return "pure_append", k
+    return "tail_only_changed", k
+
+
+def _verdict(status, prev_msgs, k, prev_prompt, hit) -> str:
+    """据 client_prefix_status 出判词。关键纪律：
+    - 「服务端缓存未命中」**只在 pure_append 下**判（结构最干净、任何超出追加尾的 miss 都无客户端解释）；
+    - 缺口 token **是估算不是事实**——基准「上轮 prompt」本身会随 cache hit/miss 漂移（见报告第四节），
+      故文案点名「按上轮prompt估算」「缺口≈」，不写「服务端吃掉=N」这种硬数字。
+    """
+    if status == "tools_changed":
+        return "⚠客户端tools表变化(前缀整体作废,命中掉属预期,非服务端)"
+    if status == "history_mutated":
+        return f"❌客户端改历史@对话第{k}条(命中掉因前缀被改,非服务端)"
     if prev_prompt <= 0:
         return "(上次无 usage，无法对账)"
-    floating = prev_tail > 0 and k < len(prev_msgs)
-    expected = prev_prompt - (tail_est if floating else 0)
+    if status == "tail_only_changed":
+        tail_est = _est_tokens_msgs(prev_msgs[len(prev_msgs) - _trailing_system_count(prev_msgs):])
+        return (f"✅对话前缀未变(尾部浮动{tail_est:,}est/轮);命中异常不在此判服务端"
+                "(浮动尾部本身造成部分 miss,归因不干净)")
+    # pure_append：唯一干净判服务端的场景
+    expected = prev_prompt  # 估算基准：上轮可复用前缀 ≈ 上轮 prompt（注意此基准会漂移）
     gap = expected - hit
     slack = max(64, int(expected * 0.05))
-    tag = f"尾部浮动{tail_est:,}est/轮" if floating else "纯追加"
     if gap <= slack:
-        return f"✅一致({tag},本该≈{expected:,})"
-    return f"⚡服务端吃掉~{gap:,}({tag};本该命中{expected:,}/实{hit:,})"
+        return f"✅命中正常(纯追加,按上轮prompt估算可复用≈{expected:,},实命中{hit:,})"
+    return (f"⚡旧前缀未全命中：纯追加，按上轮prompt估算可复用≈{expected:,}，"
+            f"实命中{hit:,}，缺口≈{gap:,}（缺口为估算,非精确事实）")
 
 
 def main() -> int:
@@ -165,13 +193,13 @@ def main() -> int:
         prev_prompt = pu.get("prompt_tokens", 0)
         req = cur.get("req", i + 1)
 
-        k = _common_prefix_msgs(pmsgs, cmsgs)
+        status, k = _client_prefix_status(pmsgs, cmsgs, prev, cur)
         hitpct = f"{hit / prompt * 100:4.0f}%" if prompt else "  - "
-        verdict = _verdict(pmsgs, cmsgs, k, prev_prompt, hit)
+        verdict = _verdict(status, pmsgs, k, prev_prompt, hit)
 
-        # 判决行
-        print(f"  #{req:<3d} 条数 {len(pmsgs)}→{len(cmsgs)}  前{k}条同  "
-              f"命中 {hit:>7,}/{prompt:<7,}({hitpct})  {verdict}")
+        # 判决行：先报 client_prefix_status（纯结构、可证伪），再报命中与判词
+        print(f"  #{req:<3d} 条数 {len(pmsgs)}→{len(cmsgs)}  前{k}条同  [{status}]")
+        print(f"       命中 {hit:>7,}/{prompt:<7,}({hitpct})  {verdict}")
 
         # 取证行：full_lcp_ratio + 各 hash/fingerprint/尾部 delta
         pstr = json.dumps(pmsgs, sort_keys=True, ensure_ascii=False)
@@ -187,12 +215,11 @@ def main() -> int:
         tail_d = f"尾部tok {tail_pt}→{tail_ct}" + ("" if tail_pt == tail_ct else " ⚠")
         print(f"       full_lcp {full_lcp_ratio:.3f} | {msgs_d} | {tools_d} | {fp_d} | {tail_d}")
 
-        # first_diff：路径 + 前后内容（仅在判决非「纯追加一致」或有 hash/节点变化时展开细节）
+        # first_diff：路径 + 前后内容（status 非纯追加、或有疑似服务端缺口、或 tools/节点变化时展开）
         field = "role" if (k < len(pmsgs) and k < len(cmsgs)
                            and pmsgs[k].get("role") != cmsgs[k].get("role")) else "content"
         path = f"messages[{k}].{field}" if k < min(len(pmsgs), len(cmsgs)) else f"messages[{k}](追加尾)"
-        interesting = ("✅一致(纯追加" not in verdict
-                       or prev.get("tools_hash") != cur.get("tools_hash")
+        interesting = (status != "pure_append" or "⚡" in verdict
                        or prev.get("system_fingerprint") != cur.get("system_fingerprint"))
         print(f"       first_diff @ {path}")
         if interesting:
@@ -201,11 +228,15 @@ def main() -> int:
             print(f"         新: {_window(cstr, lcp_chars)}")
         print()
 
-    print("读法（归因决策树，详见 CACHE_SPIKE_DIAGNOSIS.md）：")
-    print("  tools_hash ⚠     → 工具表变了,前缀整体作废,锅在 tools 不在 messages。")
-    print("  sysfp ⚠          → 请求路由到别的后端节点,那节点没这段缓存=服务端未命中,非客户端。")
-    print("  full_lcp 高但命中低 → 客户端发的前缀字节相同、服务端却没命中 = 服务端淘汰(客户端无责)。")
-    print("  ❌真改历史        → 对话内某条被原地改/删,first_diff 那条就是根因,往生产路径查。")
+    print("读法（先看 client_prefix_status，再谈命中；详见 CACHE_SPIKE_DIAGNOSIS.md）：")
+    print("  client_prefix_status = 纯结构判断（只看字节/哈希，可证伪、可信）：")
+    print("    tools_changed   → 工具表变了,前缀作废,命中掉属预期,锅在客户端 tools。")
+    print("    history_mutated → 对话内某条被原地改/删,first_diff 那条即根因,往生产路径查。")
+    print("    tail_only_changed → 对话前缀未变,只浮动尾部牙不同;命中异常不在此判服务端(归因不干净)。")
+    print("    pure_append     → 只追加,没动旧内容;此时 hit 远低于上轮可复用前缀 = 服务端未命中。")
+    print("  sysfp ⚠ → 路由到别的后端节点,那节点没这段缓存=服务端未命中佐证(DeepSeek 常不返回此字段)。")
+    print("  注意：「服务端未命中」判定可信,但「缺口 N token」是按上轮 prompt 估算、非精确事实——")
+    print("        DeepSeek 的 prompt_tokens 本身随 cache hit/miss 漂移(见报告第四节)。")
     return 0
 
 

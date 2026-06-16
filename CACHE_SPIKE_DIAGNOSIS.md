@@ -26,31 +26,29 @@ python scripts/payload_diff.py    # 相邻对账（自动挑最新会话）
 
 ## 二、归因决策树
 
-`payload_diff.py` 每对相邻请求输出三行：**判决行**（真公共前缀 + 命中 + 判决）、
+`payload_diff.py` 每对相邻请求输出：**判决行**（`client_prefix_status` + 命中 + 判词）、
 **取证行**（full_lcp_ratio + 各哈希/指纹/尾部 delta）、**first_diff**（分叉点路径 + 前后内容）。
 
-按以下顺序看，第一个命中的就是责任归属：
+**核心纪律：先看 `client_prefix_status`（纯结构、可证伪），再谈命中。** 这个分类**只看字节/哈希、
+不掺任何 token 数**，所以可信；命中的「缺口 token」是次级估算、**不精确**（见 §三补充）。
 
-### ① `tools_hash ⚠`（变了）
-工具表变了。tools 在 DeepSeek 前缀里排在 messages **之前**，它一变、后面 messages 再相同也
-**整体作废**。→ **锅在客户端的 tools 构造**（get_tools 应字节确定，若变了说明有非确定性，往那查）。
+### client_prefix_status —— 客户端这一轮对前缀做了什么（按优先级，前者盖后者）
 
-### ② `sysfp ⚠`（system_fingerprint 变了）
-请求被路由到**另一个后端节点**，那节点没有这段前缀的 KV 缓存。→ **服务端未命中、客户端无责**。
-这是把"服务端淘汰"精确成"节点路由"的关键信号。（DeepSeek 不返回此字段时这条线断，看 ③。）
+| status | 判据（纯字节/哈希） | 责任 |
+|---|---|---|
+| `tools_changed` | `tools_hash` 变了 | **客户端**。tools 在前缀里排 messages 前，一变整段前缀作废，命中掉属预期。查 get_tools 非确定性。 |
+| `history_mutated` | `first_diff` 落在对话中段 messages[0..N-1] | **客户端 bug**。某条旧消息被原地改/删。看 first_diff 旧/新，定位那条的生产路径。 |
+| `tail_only_changed` | 对话部分逐字节相同，只末尾浮动 system 牙不同 | **设计成本**，非 bug。命中异常**不在此判服务端**（浮动尾部本身造成部分 miss、归因不干净）。`CTG_NO_VOLATILE_TAIL=1` 可消除浮动但丢行为牙 recency。 |
+| `pure_append` | 上一轮整个 payload 是这一轮的逐字节前缀 | 只追加、没动旧内容。**唯一能干净判服务端的场景**，见下。 |
 
-### ③ `full_lcp` 高（如 >0.9）但命中率低
-客户端发的前缀**字节相同**（full_lcp 高 = payload 没变），服务端却没命中。
-→ **服务端 best-effort 淘汰，客户端无责**。佐证：若伴随大 `g`（间隔）疑容量/TTL；
-**`g=0.0s` 背靠背仍塌 = 纯容量/LRU**，连 TTL 都排除。
+### 命中异常的归因（**只在 `pure_append` 下**判服务端）
 
-### ④ `❌真改历史 @ 对话第 k 条`
-`first_diff` 落在对话中段（不是追加尾、不是尾部牙边界）= **某条旧消息被原地改/删**。
-→ **客户端 bug**。看 first_diff 的"旧/新"内容，定位那条消息的生产路径去修。
-
-### ⑤ `✅尾部浮动`
-对话部分逐字节相同，只是尾部 system 牙每轮飘到末尾、重发 ~N est token。
-→ **设计成本，非 bug**。开 `CTG_NO_VOLATILE_TAIL=1` 可消除（但会丢行为牙的 recency 摆位）。
+`pure_append` 且 `hit` 远低于上轮可复用前缀 → **服务端 best-effort 缓存未命中，客户端无责**。
+- **判定可信**：纯追加时任何超出「追加尾」的 miss 都没有客户端解释。
+- **缺口 token 数不精确**：基准「上轮 prompt」本身会随 cache hit/miss 漂移（见报告第四节），
+  故判词写「按上轮prompt估算可复用≈X，实命中Y，缺口≈Z（估算）」，**不写「服务端吃掉=Z」这种硬数字**。
+- 佐证：`sysfp ⚠`（路由到别的节点、那节点没缓存）；`g=0.0s` 背靠背仍塌 = 纯容量/LRU（连 TTL 都排除）。
+  （DeepSeek 常不返回 system_fingerprint，此佐证线可能为空。）
 
 ## 三、已知结论（2026-06，本仓实测）
 
