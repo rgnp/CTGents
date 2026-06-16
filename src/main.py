@@ -102,15 +102,12 @@ def _make_prefix_msgs() -> list[dict]:
     记忆索引放这里而非尾部：① 它进了缓存前缀，每个请求(含工具循环)都命中、都看得到，
     不再每轮首因排在增长的对话之后而重新 miss；② 会话中途 remember 不会(也不能)改前缀——
     新记忆靠对话上下文带过本会话、落盘后下次会话开始重建前缀时才进索引。记忆是参考资料、
-    不靠 recency，进前缀合适（行为牙 _inject_*_stance 仍留尾部，靠 recency 压默认）。
+    不靠 recency，进前缀合适。
     """
     msgs = [_make_date_message(), _make_agents_message(), _make_mechanisms_message()]
     mem = _make_memory_context()
     if mem:
         msgs.append(mem)
-    # 固定 stance：常量文本进前缀，缓存零成本（曾每轮放尾部白白 miss）
-    msgs.append({"_volatile": True, "role": "system", "content": _THINKING_NUDGE})
-    msgs.append({"_volatile": True, "role": "system", "content": _EVIDENCE_NUDGE})
     return msgs
 
 
@@ -146,43 +143,6 @@ def _inject_citation_audit(ctx: CacheContext) -> None:
         ctx.log.append(
             {"role": "system", "content": nudge, "_volatile": True, "_citation_audit": True}
         )
-
-
-_THINKING_NUDGE = (
-    "[提醒] 检索 / recall / 读到的内容是线索，不是答案。"
-    "问方向 / 取舍 / \"怎么看\"时，先想清楚，给出你的判断 + 理由 + 你会怎么做，"
-    "别把搜到的摆出来让用户挑；问事实就直接答、不必长。"
-)
-
-
-def _inject_thinking_stance(ctx: CacheContext) -> None:
-    """每轮在 log 尾挂一句"检索命中是线索、不是答案"的常驻提醒。"""
-    ctx.log[:] = [m for m in ctx.log if not m.get("_thinking_stance")]
-    ctx.log.append(
-        {"role": "system", "content": _THINKING_NUDGE,
-         "_volatile": True, "_thinking_stance": True}
-    )
-
-
-_EVIDENCE_NUDGE = (
-    "[提醒] 下结论前先核证据够不够：这个判断依赖哪些条件？我这一轮真读/grep/搜过，"
-    "还是凭印象？条件不全就先补（read/grep/search）；补不全就把信心收住、明说还差什么——"
-    "别拿不全的输入给满分结论。"
-)
-
-
-def _inject_evidence_stance(ctx: CacheContext) -> None:
-    """每轮在 log 尾挂一句"信心要匹配证据"的常驻提醒：没看够别下定论。
-
-    治 ④可信 最大的一类——条件不全却满分自信下结论（不是编造，是"没看就断言"）。
-    与 _inject_thinking_stance 互补：那条管"检索≠答案"，这条管"证据不全≠可下结论"。
-    挂尾靠 recency 扭默认；不设门（强制"先调查"=已删的 auto-plan，过度触发）。
-    """
-    ctx.log[:] = [m for m in ctx.log if not m.get("_evidence_stance")]
-    ctx.log.append(
-        {"role": "system", "content": _EVIDENCE_NUDGE,
-         "_volatile": True, "_evidence_stance": True}
-    )
 
 
 # ── 记忆触发：中→英翻译扩展表（触发专用，补 _TRANSLITERATE 未覆盖的词）──
@@ -342,7 +302,7 @@ def process_turn(
     on_progress: Callable[[], None] | None = None,
     session_id: str = "",
 ) -> str:
-    """一轮对话的数据管线：思考牙 → 证据牙 → 记忆触发 → 预读 → run_conversation → 收尾审计。
+    """一轮对话的数据管线：记忆触发 → 预读 → run_conversation → 收尾审计。
 
     记忆每轮已由 _append_volatile_context 的记忆索引全文注入（约 20 条全给）；
     曾经的 auto_recall（embedding 每轮再搜 top-3 注入）与之重叠、且拖一个未声明的
@@ -372,7 +332,7 @@ def run_agent_turn(ctx: CacheContext, user_input: str,
                    session_id: str | None) -> str | None:
     """主干：一次 agent 驱动。所有入口都走这里，保证不管从哪进、循环都是同一圈。
 
-    对话分支(process_turn：思考牙→预读→run_conversation→完成/引用审计) →
+    对话分支(process_turn：预读→run_conversation→完成/引用审计) →
     若本轮推进了 current.md 则升级到任务分支(run_task_continuation 自主续跑)。
 
     曾经 /retry 和中断"指导"直接调 run_conversation、绕过 process_turn 的审计与任务

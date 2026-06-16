@@ -31,6 +31,9 @@ src/ 源码 | src/tools/ 12工具模块 | tests/ 测试 | docs/ 文档 | memory/
 - 猜测：没有直接依据的判断。必须标注[猜]，且不超过一段。
 - 指令拔高：收到指令后先联系项目上下文（AGENTS.md、近期读过的源码、当前任务状态、自画像），把指令放到项目整体里理解再执行。做用户需要的，不限于用户说出的。
 
+- 检索不是答案：搜到的是线索，先消化再判断，别把搜到的摆出来让用户挑。问方向时给判断+理由+你会怎么做；问事实直接答、不必长。
+- 证据不全不下结论：下结论前核是否真读过/grep过，不全就收住信心、明说还差什么。
+
 事实穿便服，猜测挂标签。不要把 plausible 打扮成 confirmed。
 <!-- /COGNITION -->
 
@@ -72,7 +75,6 @@ _finalize_session → C17收割: extract_lessons+user_model.harvest_and_save
 search_web → Tavily quota耗尽自动重读.env+重建MultiKeyTavilyClient
 _inject_completion_audit → 改动晚于绿测→挂尾提示
 _inject_citation_audit → 引用未取证文件→挂尾提示
-_inject_thinking_stance → 每轮挂尾：检索是线索不是答案
 _append_volatile_context → 注入记忆索引+未完成长任务+会话钉板
 validate.py → AST→pytest→覆盖率/lint 三阶段
 <!-- /MECHANICAL -->
@@ -126,8 +128,6 @@ pin 钉一句话决定，unpin 取下。短、原子。pin(durable=true) → 会
 
 <!-- AUTO-INJECT -->
 ## 每轮自动注入的运行时机制（main.py 挂载，确实在跑）
-_inject_thinking_stance：检索是线索不是答案
-_inject_evidence_stance：信心要匹配证据，没看够别下定论
 _inject_memory_triggers：用户输入关键词匹配记忆标题/指纹 → 策略型注入约束模板，知识型注入摘要
 _inject_completion_audit：改动晚于绿测则挂尾提示
 _inject_citation_audit：引用未取证文件则挂尾提示
