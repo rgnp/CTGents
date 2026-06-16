@@ -3,7 +3,7 @@
 单测全绿、真实路径却散，是因为 bug 不在单元里、在**缝里**：preread × 长度触发、
 volatile 信号在 ctx.log 上互相挤、缓存前缀被某个 feature 顺手碰坏。这里只 mock
 唯一的网络接缝 `llm._invoke_llm`，prefix 用真实 AGENTS.md，按 main() 每轮管线
-顺序真跑 思考牙 → preread → run_conversation → 两审计。
+顺序真跑 记忆触发 → preread → run_conversation → 两审计。
 
 网即权威：`_drive_turn` 直接调 `main.process_turn()`——与 main 的 REPL 同一个
 管线定义，不是副本。改了管线两边同步，杜绝"测试对着旧副本继续绿、真实行为已变"
@@ -23,13 +23,12 @@ from src.cache_context import CacheContext
 pytestmark = pytest.mark.slow
 
 
-
-
-
 def _prefix_ctx() -> CacheContext:
     """真实 AGENTS.md 前缀 + 空 log（镜像 main 的会话起步）。"""
+def _prefix_ctx() -> CacheContext:
+    """真实 _make_prefix_msgs() 前缀（含 AGENTS.md + stance 常量）。"""
     ctx = CacheContext()
-    ctx.rebuild_prefix([main._make_agents_message()])
+    ctx.rebuild_prefix(main._make_prefix_msgs())
     return ctx
 
 
@@ -149,38 +148,33 @@ def test_send_wellformed_no_orphan_tool(monkeypatch):
             assert m.get("tool_call_id") in seen, "孤儿 tool 消息 → API 会 400"
 
 
-# ── 思考牙：每轮常驻尾部、不累积 ──────────────────────────────
+# ── 固定 stance 已搬前缀，缓存零成本 ──────────────────────────
 
-def test_thinking_stance_rides_tail_once(monkeypatch):
-    """每轮恒挂一句"检索是线索不是答案"的提醒在 log 尾，多轮不累积。
+def test_thinking_stance_lives_in_prefix(monkeypatch):
+    """检索是线索不是答案的提醒在缓存前缀中, 常量文本放前缀缓存零成本。
 
-    同义 bullet 放 AGENTS.md 前缀实测翻不动复读（前缀离生成点太远），故这颗行为牙
-    必须挂尾靠 recency。strip-then-append 失灵则逐轮累积、撑爆尾部。
+    原挂尾靠 recency, 但同义文本每轮完全一样, recency 无差异, 白付 miss token。
+    搬进前缀后 send() 仍含此提醒, 落 API payload 时复用前缀缓存, 零 miss。
     """
     ctx = _prefix_ctx()
-    _mock_llm(monkeypatch, ("好", []), ("好", []))
+    _mock_llm(monkeypatch, ("好", []))
     _drive_turn(ctx, "随便说点")
-    _drive_turn(ctx, "再说点")
-    assert sum(1 for m in ctx.log if m.get("_thinking_stance")) == 1
     api = ctx.send()
-    tail = "\n".join(m.get("content") or "" for m in api if m["role"] == "system")
-    assert "线索" in tail, "思考提醒必须出现在尾部系统块"
+    prefix_text = "\n".join(m.get("content") or "" for m in api if m["role"] == "system")
+    assert "线索" in prefix_text, "思考提醒应在前缀中"
 
 
-def test_evidence_stance_rides_tail_once(monkeypatch):
-    """每轮恒挂一句"信心要匹配证据/没看够别下定论"在 log 尾，多轮不累积。
+def test_evidence_stance_lives_in_prefix(monkeypatch):
+    """信心要匹配证据的提醒在缓存前缀中, 常量文本放前缀缓存零成本。
 
-    治"条件不全还满分自信下结论"。同思考牙：前缀散文翻不动根深蒂固默认，必须挂尾
-    靠 recency；strip-then-append 失灵则逐轮累积撑爆尾部。
+    原挂尾靠 recency, 同思考牙: 搬进前缀后 send() 仍含此提醒, 零 miss。
     """
     ctx = _prefix_ctx()
-    _mock_llm(monkeypatch, ("好", []), ("好", []))
+    _mock_llm(monkeypatch, ("好", []))
     _drive_turn(ctx, "随便说点")
-    _drive_turn(ctx, "再说点")
-    assert sum(1 for m in ctx.log if m.get("_evidence_stance")) == 1
     api = ctx.send()
-    tail = "\n".join(m.get("content") or "" for m in api if m["role"] == "system")
-    assert "证据" in tail, "证据提醒必须出现在尾部系统块"
+    prefix_text = "\n".join(m.get("content") or "" for m in api if m["role"] == "system")
+    assert "证据" in prefix_text, "证据提醒应在前缀中"
 
 
 # ── 任务闭环:worker 走真实管线,评分隔离,差距回灌 ─────────────

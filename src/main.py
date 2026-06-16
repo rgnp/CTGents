@@ -108,6 +108,9 @@ def _make_prefix_msgs() -> list[dict]:
     mem = _make_memory_context()
     if mem:
         msgs.append(mem)
+    # 固定 stance：常量文本进前缀，缓存零成本（曾每轮放尾部白白 miss）
+    msgs.append({"_volatile": True, "role": "system", "content": _THINKING_NUDGE})
+    msgs.append({"_volatile": True, "role": "system", "content": _EVIDENCE_NUDGE})
     return msgs
 
 
@@ -345,10 +348,6 @@ def process_turn(
     曾经的 auto_recall（embedding 每轮再搜 top-3 注入）与之重叠、且拖一个未声明的
     80MB sentence-transformers 依赖，已删。需要深挖某条记忆用 recall 工具。
     """
-    # 思考牙：检索命中是线索不是答案
-    _inject_thinking_stance(ctx)
-    # 证据牙：信心要匹配证据，没看够别下定论
-    _inject_evidence_stance(ctx)
     # 记忆触发：用户输入关键词匹配记忆标题 → 策略型注入约束模板，知识型注入摘要
     _inject_memory_triggers(ctx, user_input)
     # 预读优化：用户提到了文件路径，先读入上下文
