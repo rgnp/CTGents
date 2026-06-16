@@ -111,6 +111,48 @@ def test_payload_fingerprint_gap_grows(monkeypatch):
     assert g2 >= 0.0
 
 
+def test_payload_fingerprint_detects_tools_change(monkeypatch):
+    """工具表变化要被 th_chg 抓到（lcpr 只看 messages 会漏）。首次无基准→False。"""
+    monkeypatch.setattr(llm, "_last_req_time", None)
+    monkeypatch.setattr(llm, "_prev_tools_hash", None)
+    msgs = [{"role": "user", "content": "Q"}]
+    monkeypatch.setattr(llm, "_last_canonical_request",
+                        {"messages": msgs, "tools": [{"function": {"name": "a"}}]})
+    fp1 = llm._payload_fingerprint(msgs)
+    assert fp1["th_chg"] is False           # 首次没有上次 tools 可比
+    # tools 不变 → 仍 False
+    fp2 = llm._payload_fingerprint(msgs)
+    assert fp2["th_chg"] is False
+    # tools 变了 → True
+    monkeypatch.setattr(llm, "_last_canonical_request",
+                        {"messages": msgs, "tools": [{"function": {"name": "a"}},
+                                                     {"function": {"name": "b"}}]})
+    fp3 = llm._payload_fingerprint(msgs)
+    assert fp3["th_chg"] is True
+
+
+def test_dump_payload_writes_canonical_and_hashes(monkeypatch, tmp_path):
+    """CTG_DUMP_PAYLOADS 开时落盘 canonical_request + 三个哈希 + system_fingerprint。"""
+    monkeypatch.setattr(llm, "_DUMP_PAYLOADS", True)
+    monkeypatch.setattr(llm, "_PAYLOAD_DIR", tmp_path)
+    msgs = [{"role": "system", "content": "P"}, {"role": "user", "content": "hi"}]
+    tools = [{"type": "function", "function": {"name": "read_file"}}]
+    monkeypatch.setattr(llm, "_last_canonical_request",
+                        {"model": "m", "messages": msgs, "tools": tools, "max_tokens": 8192})
+    monkeypatch.setattr(llm, "_last_system_fingerprint", "fp_nodeA")
+    usage = {"prompt_tokens": 100, "cache_hit_tokens": 0, "cache_miss_tokens": 100,
+             "completion_tokens": 5}
+    llm._dump_payload("sess1", 7, msgs, usage)
+
+    import json
+    rec = json.loads((tmp_path / "sess1" / "req_0007.json").read_text(encoding="utf-8"))
+    assert rec["canonical_request"]["tools"] == tools
+    assert rec["system_fingerprint"] == "fp_nodeA"
+    assert rec["tools_hash"] == llm._hash_obj(tools)
+    assert rec["messages_hash"] == llm._hash_obj(msgs)
+    assert "request_hash" in rec
+
+
 def test_reset_turn_accum_zeroes(monkeypatch):
     monkeypatch.setattr(llm, "_current_session_id", "")
     monkeypatch.setattr(llm, "_CACHE_STATS", {"pro": dict(llm._EMPTY_STATS)})

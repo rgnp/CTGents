@@ -393,6 +393,8 @@ def _append_cache_section(lines: list[str], ctx, _sid: str | None) -> None:
             c = e.get("c")
             out = f" 出{c:>5,}" if c is not None else ""
             extra = f" g{e.get('g', 0)}s n{e.get('n', 0)}" if "fe" in e else ""
+            if e.get("th_chg"):
+                extra += " ⚠tools变"  # 工具表变了→前缀整体作废，突刺锅在 tools 不在 messages
             verdict = _spike_verdict(e, prev, p, h, pct)
             lines.append(
                 f"    #{i:<3}[{kind}] 输入{p:>7,} 命中{h:>7,} miss{m:>7,} ({pct:>3.0f}%)"

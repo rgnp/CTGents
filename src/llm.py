@@ -173,7 +173,11 @@ class DeepSeekBackend(LLMBackend):
         }
         if tools and self.info.supports_tools:
             kwargs["tools"] = tools
+        extra_body = _build_extra_body()
+        if extra_body:
+            kwargs["extra_body"] = extra_body
 
+        _set_canonical_request(kwargs)  # 取证：快照真实 wire 请求
         stream = self.client.chat.completions.create(**kwargs)
 
         try:
@@ -187,6 +191,7 @@ class DeepSeekBackend(LLMBackend):
                 # 每个 chunk 都检查 usage（末 chunk 带真实缓存统计，其他 chunk 为 None）
                 if hasattr(chunk, "usage") and chunk.usage:
                     _set_api_usage(self.info.name.lower(), chunk.usage)
+                _set_system_fingerprint(getattr(chunk, "system_fingerprint", None))
 
                 if not chunk.choices:
                     continue
@@ -251,12 +256,17 @@ class DeepSeekBackend(LLMBackend):
         }
         if tools and self.info.supports_tools:
             kwargs["tools"] = tools
+        extra_body = _build_extra_body()
+        if extra_body:
+            kwargs["extra_body"] = extra_body
 
+        _set_canonical_request(kwargs)  # 取证：快照真实 wire 请求
         response = self.client.chat.completions.create(**kwargs)
 
         # 捕获 API 返回的真实 usage（含 cache hit/miss）
         if hasattr(response, "usage") and response.usage:
             _set_api_usage(self.info.name.lower(), response.usage)
+        _set_system_fingerprint(getattr(response, "system_fingerprint", None))
 
         msg = response.choices[0].message
 
@@ -361,12 +371,23 @@ def auto_select_model(user_input: str) -> LLMBackend:
 # 统计持久化目录：agent/stats/{session_id}.json
 _STATS_DIR = Path(__file__).resolve().parent.parent / "stats"
 
-# 取证开关：CTG_DUMP_PAYLOADS=1 时把每次真实发给 API 的 messages 原样落盘，
-# 供 tools/payload_diff.py 逐消息算相邻请求真公共前缀（字符/token），与服务端
-# 报的 cache_hit 对账，一锤定音「命中塌陷是代码改了历史还是服务端吃了缓存」。
-# 默认关：正常运行零落盘、零开销。
+# 取证开关：CTG_DUMP_PAYLOADS=1 时把每次真实发给 API 的 canonical_request（完整请求字段：
+# model/messages/tools/max_tokens/stream/stream_options/extra_body）+ usage + system_fingerprint
+# + messages_hash/tools_hash/request_hash 一起落盘，供 scripts/payload_diff.py 相邻对账：
+# 一锤定音「命中塌陷是客户端 payload 变了，还是 DeepSeek 服务端缓存未命中」。默认关：零落盘零开销。
 _DUMP_PAYLOADS = os.getenv("CTG_DUMP_PAYLOADS", "").strip().lower() not in ("", "0", "false", "no")
 _PAYLOAD_DIR = _STATS_DIR / "payloads"
+
+# KVCache 隔离实验（实验性，premise 未证）：CTG_KVCACHE_USER_ID=1 时给每次请求加
+# extra_body={"user_id": "ctgents-<session>"}。DeepSeek 前缀缓存文档上按 prefix 内容、
+# 未说按 user_id 分区——此旋钮仅用于测「多进程共用 key 是否互挤缓存」假设，别当答案。
+# 注意：若 DeepSeek 不接受 extra_body 可能 400，故默认关。
+_KVCACHE_USER_ID = os.getenv("CTG_KVCACHE_USER_ID", "").strip().lower() not in ("", "0", "false", "no")
+
+# 取证用运行时快照（与 _last_api_usage 同模式：请求时写、落盘时读）。
+_last_canonical_request: dict | None = None      # 上次真实 wire 请求字段
+_last_system_fingerprint: str | None = None      # 上次响应的后端节点指纹（DeepSeek 可能不返回）
+_prev_tools_hash: str | None = None              # 上次 tools schema 哈希（识别 tools 变化）
 
 # 空统计模板
 _EMPTY_STATS = {"requests": 0, "prompt_tokens": 0, "completion_tokens": 0,
@@ -422,12 +443,15 @@ def _payload_fingerprint(messages: list[dict]) -> dict:
              这就是「本该命中」的上限——前缀缓存对未变的前缀必命中。
              实命中率 << lcpr = 我们发过、之前缓存过的前缀被服务端吃了（不是新内容 miss，
              答得了"纯追加为何命中反降"）；实命中率 ≈ lcpr = miss 全在新追加后缀，预期内。
+      th_chg = tools schema 相比上一条是否变了。lcpr 只看 messages，会漏掉「工具表变了
+             导致前缀整体作废」这类——tools 在 DeepSeek 前缀里排在 messages 前，它一变、
+             后面 messages 再相同也全 miss。正常恒为 False；一旦 True，突刺锅在 tools 不在 messages。
     用比例而非绝对值：抵消 estimate_tokens 与真实 token 的系统性尺度差（两边同尺度相除）。
     """
     import time
 
     from .tools.tokens import estimate_tokens
-    global _last_req_time, _prev_payload_sig
+    global _last_req_time, _prev_payload_sig, _prev_tools_hash
     nonsys = [m for m in messages if m.get("role") != "system"]
     front = "\x00".join((m.get("content") or "")[:500] for m in nonsys[:3])
     fe = hashlib.sha256(front.encode("utf-8", "ignore")).hexdigest()[:8] if nonsys else "-"
@@ -450,10 +474,16 @@ def _payload_fingerprint(messages: list[dict]) -> dict:
     _prev_payload_sig = sig
     lcpr = round(lcp / total_est, 3)
 
+    # tools/request 变化识别（lcpr 只看 messages，这里补上 tools 表变化）
+    th = _hash_obj(_last_canonical_request.get("tools")) if _last_canonical_request else None
+    th_chg = bool(_prev_tools_hash and th and th != _prev_tools_hash)
+    if th:
+        _prev_tools_hash = th
+
     now = time.monotonic()
     gap = 0.0 if _last_req_time is None else round(now - _last_req_time, 1)
     _last_req_time = now
-    return {"n": len(nonsys), "fe": fe, "g": gap, "lcpr": lcpr}
+    return {"n": len(nonsys), "fe": fe, "g": gap, "lcpr": lcpr, "th_chg": th_chg}
 
 # 当前会话 ID 和内存中的统计（切换会话时自动读写文件）
 _current_session_id: str = ""
@@ -500,18 +530,31 @@ def _save_cache_stats(session_id: str) -> None:
 
 
 def _dump_payload(session_id: str, req_idx: int, messages: list[dict], usage: dict | None) -> None:
-    """把本次真实发给 API 的 messages 原样落盘（CTG_DUMP_PAYLOADS 开时）。
+    """把本次真实发给 API 的 canonical_request 完整落盘（CTG_DUMP_PAYLOADS 开时）。
 
-    存 stats/payloads/<session>/req_<NNNN>.json，含真实 usage（p/h/miss/c），
-    供 payload_diff.py 算真公共前缀并与服务端命中对账。这是不带任何估算的地面真相：
-    相邻 payload 字节相同的前缀 = 前缀缓存「本该命中」的硬上限。
+    存 stats/payloads/<session>/req_<NNNN>.json，含：
+      canonical_request  = 真实 wire 请求字段（model/messages/tools/max_tokens/...）；
+      usage              = 真实 p/h/miss/c；
+      system_fingerprint = 后端节点指纹（变化=请求路由到了别的节点，可能就是缓存未命中主因）；
+      messages_hash / tools_hash / request_hash = 供 payload_diff 一眼看出到底哪部分变了。
+    这是不带任何估算的地面真相：相邻 canonical_request 字节相同的前缀 = 前缀缓存「本该命中」的硬上限。
     """
     if not _DUMP_PAYLOADS:
         return
     with contextlib.suppress(Exception):
+        canonical = _last_canonical_request or {"messages": messages}
+        msgs = canonical.get("messages", messages)
+        rec = {
+            "req": req_idx,
+            "usage": usage,
+            "system_fingerprint": _last_system_fingerprint,
+            "messages_hash": _hash_obj(msgs),
+            "tools_hash": _hash_obj(canonical.get("tools")),
+            "request_hash": _hash_obj(canonical),
+            "canonical_request": canonical,
+        }
         d = _PAYLOAD_DIR / (session_id or "_nameless")
         d.mkdir(parents=True, exist_ok=True)
-        rec = {"req": req_idx, "usage": usage, "messages": messages}
         (d / f"req_{req_idx:04d}.json").write_text(
             json.dumps(rec, ensure_ascii=False, indent=2), encoding="utf-8")
 
@@ -557,6 +600,37 @@ def _set_api_usage(model_key: str, usage: object | None) -> None:
         }
 
 
+def _hash_obj(obj: object) -> str:
+    """对任意可 JSON 化对象做稳定短哈希（键排序，供 messages/tools/request 变化识别）。"""
+    return hashlib.sha256(
+        json.dumps(obj, sort_keys=True, ensure_ascii=False, default=str).encode("utf-8", "ignore")
+    ).hexdigest()[:16]
+
+
+def _build_extra_body() -> dict | None:
+    """KVCache 隔离实验：开关开时返回带 user_id 的 extra_body，否则 None。"""
+    if _KVCACHE_USER_ID and _current_session_id:
+        return {"user_id": f"ctgents-{_current_session_id[:32]}"}
+    return None
+
+
+def _set_canonical_request(kwargs: dict) -> None:
+    """落盘取证：快照本次真实发出的 wire 请求字段（kwargs 即 canonical_request）。"""
+    global _last_canonical_request
+    _last_canonical_request = {
+        k: kwargs.get(k) for k in
+        ("model", "messages", "tools", "max_tokens", "stream", "stream_options", "extra_body")
+        if k in kwargs
+    }
+
+
+def _set_system_fingerprint(fp: object) -> None:
+    """记录响应的 system_fingerprint（后端节点指纹；DeepSeek 可能不返回则保持 None）。"""
+    global _last_system_fingerprint
+    if fp:
+        _last_system_fingerprint = str(fp)
+
+
 def _update_cache_stats(model_key: str, messages: list[dict], session_id: str = "") -> None:
     """每次 API 请求后更新当前会话的缓存统计，并持久化。
 
@@ -587,7 +661,8 @@ def _update_cache_stats(model_key: str, messages: list[dict], session_id: str = 
         hist.append({"p": usage["prompt_tokens"], "h": usage["cache_hit_tokens"],
                      "c": usage["completion_tokens"],
                      "t": _trailing_system_tokens(messages),
-                     "n": fp["n"], "fe": fp["fe"], "g": fp["g"], "lcpr": fp["lcpr"]})
+                     "n": fp["n"], "fe": fp["fe"], "g": fp["g"], "lcpr": fp["lcpr"],
+                     "th_chg": fp.get("th_chg", False)})
         if len(hist) > _HISTORY_LIMIT:
             del hist[:-_HISTORY_LIMIT]
         _dump_payload(_current_session_id, stats["requests"], messages, usage)
