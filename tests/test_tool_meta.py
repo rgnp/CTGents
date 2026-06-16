@@ -69,7 +69,7 @@ class TestMetaStripping:
     def test_get_tools_has_all_names(self):
         tools = get_tools()
         names = {t["function"]["name"] for t in tools}
-        assert len(tools) == 54, f"预期 54 个工具，实际 {len(tools)}"
+        assert len(tools) == 51, f"预期 51 个工具，实际 {len(tools)}"
         assert "read_file" in names
         assert "write_file" in names
         assert "self" in names
@@ -106,7 +106,7 @@ class TestHotReloadPreservesMeta:
         from src.tools import reload_tools
         reload_tools()
         labels, psafe, skip, dedup, no_dedup = _derive()
-        assert len(labels) == 55
+        assert len(labels) == 52
         assert len(psafe) == 30
         assert "poll" in no_dedup, "poll 是时变读，必须在 no_dedup 集合"
 

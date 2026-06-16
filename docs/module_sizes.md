@@ -21,25 +21,22 @@
 | `src/tools/lint.py` | 1,142 | 项目规范检查 |
 | `src/tools/git.py` | 973 | Git 操作工具 |
 | `src/tools/file.py` | 791 | 文件操作工具 |
-| `src/commands.py` | 701 | 指令系统（/help, /evolve 等） |
+| `src/commands.py` | 654 | 指令系统（/help, /context, /organs 等） |
 | `src/main.py` | 650 | 主入口：REPL 循环、Esc 监听、会话管理 |
 | `src/tools/analyzer.py` | 607 | 静态分析：死代码/圈复杂度/bare except |
 | `src/lesson.py` | 555 | 失败模式学习 → 策略记忆 |
 | `src/tools/research.py` | 554 | 科研工具：论文扫描、批量读取、评分归档 |
 | `src/tools/project.py` | 521 | 项目结构扫描：语言/框架/依赖检测 |
 | `src/tools/memory.py` | 460 | 记忆系统：remember/recall/forget |
-| `src/tools/evolve.py` | 435 | 进化系统工具：查询/验证/状态 |
 | `src/tools/exec.py` | 427 | 命令执行：run_python/run_command/run_async/poll |
 | `src/tools/self.py` | 407 | 自我认知系统：架构知识 + 运行时数据 |
 | `src/validate.py` | 381 | 三阶段验证：AST → pytest → 覆盖率/lint |
-| `src/evolution_runner.py` | 362 | 进化运行器：持久化 run/state/patch |
 | `src/tools/web.py` | 358 | Web 工具：search_web + read_page，带 TTL 缓存 |
 | `src/gaps.py` | 327 | 知识缺口管理 |
 | `src/diagnostics.py` | 325 | 诊断层：tracker 异常 → 可行动诊断 |
 | `src/tracker.py` | 314 | 工具调用性能追踪（被动进化感知层唯一数据入口） |
 | `src/tasks.py` | 304 | 长任务状态：current.md 读取/判活/注入/归档 |
 | `src/tools/repo.py` | 287 | 仓库管理：clone/list/status |
-| `src/evolve.py` | 285 | 进化档案（JSONL）读写/查询 |
 | `src/cache_context.py` | 225 | 三段式上下文管理器：prefix/log/scratch |
 | `src/tools/__init__.py` | 210 | 工具注册/调度/热加载入口 |
 | `src/params.py` | 177 | 集中可调旋钮（frozen dataclass，按域分组） |

@@ -10,7 +10,7 @@ from src.tools.self import build_self_portrait
 
 def test_params_scope_lists_all_domains():
     out = build_self_portrait("params")
-    for domain in ("CONTEXT", "RAG", "EVOLUTION", "RUNTIME"):
+    for domain in ("CONTEXT", "RAG", "RUNTIME"):
         assert domain in out
     assert "compact_threshold = 0.65" in out
     assert "compact_keep_ratio = 0.5" in out

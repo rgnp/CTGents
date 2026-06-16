@@ -7,7 +7,7 @@ from dotenv import load_dotenv
 from tavily import InvalidAPIKeyError, TavilyClient, UsageLimitExceededError
 from tavily.errors import ForbiddenError
 
-from .params import CONTEXT, EVOLUTION, RUNTIME
+from .params import CONTEXT, RUNTIME
 
 load_dotenv(Path(__file__).parent.parent / ".env")
 
@@ -42,7 +42,6 @@ S2_API_KEY: str = os.getenv("S2_API_KEY", "")
 # -- 行为旋钮（真值在 params.py 按域分组；此处仅绑定本地名保持 import 兼容）--
 TOOL_LOOP_THRESHOLD: float = CONTEXT.tool_loop_threshold
 MAX_CONTEXT_TOKENS: int = CONTEXT.max_context_tokens
-EVOLVE_REQUIRE_CLEAN: bool = EVOLUTION.require_clean  # 仍由 EVOLVE_REQUIRE_CLEAN env 覆盖
 MAX_RETRIES: int = RUNTIME.max_retries
 RETRY_BASE_DELAY: float = RUNTIME.retry_base_delay
 MAX_EXEC_TIMEOUT: int = RUNTIME.max_exec_timeout

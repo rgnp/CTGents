@@ -34,24 +34,18 @@ def test_config_and_llm_source_from_params():
     assert params.CONTEXT.compact_keep_ratio == llm._COMPACT_KEEP_RATIO
 
 
-def test_rag_and_evolution_defaults():
+def test_rag_defaults():
     assert params.RAG.default_top_k == 5
     assert params.RAG.weight_name == 3.0
     assert params.RAG.max_file_size == 512 * 1024
-    assert params.EVOLUTION.git_timeout_seconds == 10
-    assert params.EVOLUTION.require_clean is False
 
 
-def test_rag_and_evolution_wired_to_modules():
-    """rag.py / evolution_runner.py / config 的旧名 == params 单一来源。"""
-    import src.config as config
-    import src.evolution_runner as er
+def test_rag_wired_to_modules():
+    """rag.py 的旧名 == params 单一来源。"""
     import src.tools.rag as rag
     assert params.RAG.default_top_k == rag.DEFAULT_TOP_K
     assert params.RAG.weight_name == rag.WEIGHT_NAME
     assert params.RAG.max_file_size == rag.MAX_FILE_SIZE
-    assert params.EVOLUTION.git_timeout_seconds == er.GIT_TIMEOUT_SECONDS
-    assert params.EVOLUTION.require_clean == config.EVOLVE_REQUIRE_CLEAN
 
 
 def test_runtime_defaults_and_wiring():

@@ -493,6 +493,13 @@ def _cmd_pulse(r: CmdResult, _ctx, _args, _sid) -> None:
     r.save = True
 
 
+@builtin("/organs", description="器官生命体征：各内部机制上次跳动/疑似衰竭（只读，派生自产物）",
+         usage="/organs — 扫各器官产物 mtime，列出哪个器官几个会话没跳了")
+def _cmd_organs(r: CmdResult, _ctx, _args, _sid) -> None:
+    from .organs import render_census
+    r.message = render_census()
+
+
 @builtin("/reload", description="热加载代码改动（指令+工具），无需重启")
 def _cmd_reload(r: CmdResult, _ctx, _args, _sid) -> None:
     r.message = "reload 由 main.py 拦截处理，此 handler 仅供 /help 注册。"
@@ -525,7 +532,6 @@ def _append_arch_section(parts: list[str]) -> None:
     parts.append("  cache_context.py  — 三段式上下文 CacheContext（prefix/log/scratch）")
     parts.append("  session.py        — 会话持久化（保存/加载/列表）")
     parts.append("  guard.py          — 自我修改分级：不可变核/核心业务(安全带)/自由")
-    parts.append("  evolution_runner.py — 自进化运行器：run/state/patch/验证回写")
     parts.append("  tools/")
     parts.append("    __init__.py     — 工具注册表、execute_tool() 调度、热加载")
     parts.append("    file.py         — 文件类：read_file/write_file/edit_file_lines...")
@@ -540,7 +546,6 @@ def _append_arch_section(parts: list[str]) -> None:
     parts.append("    storm.py        — 去重引擎：同轮工具调用滑动窗口去重")
     parts.append("    lint.py         — 检查引擎：check_project（六维军规检查）")
     parts.append("    self.py         — 自我认知：self（结构化架构+运行时状态）")
-    parts.append("    evolve.py       — 进化工具：evolve_query/evolve_validate...")
     parts.append("docs/")
     parts.append("  AGENTS.md         — AI 操作手册")
     parts.append("tests/              — pytest 测试")
@@ -640,54 +645,6 @@ def _cmd_lesson(r: CmdResult, ctx, args, _sid) -> None:
 
 
 
-@builtin("/evolve", description="启动自进化 runner：后台记录，agent 正常执行任务",
-         usage="/evolve <目标描述>  |  /evolve revert（回滚放弃当前进化）")
-def _cmd_evolve(r: CmdResult, ctx, args, session_id) -> None:
-    """启动自进化 runner，把目标作为普通消息交给 agent。
-
-    agent 不需要知道自己在"进化模式"里——像正常任务一样读代码、
-    想方案、改文件、跑测试、提交。runner 在后台默默记录。
-    `/evolve revert` 放弃当前 run：回滚其改动到启动前 + 归档为 partial。
-    """
-    if args and args[0].lower() == "revert":
-        from .evolution_runner import abort_active_run
-        summary = abort_active_run()
-        if summary is None:
-            r.message = "无 active evolution run 可回滚。"
-            return
-        parts = [f"已回滚并归档进化 run {summary['run_id']}（partial）。"]
-        if summary["reverted"]:
-            parts.append(f"还原到启动前: {', '.join(summary['reverted'])}")
-        if summary["removed"]:
-            parts.append(f"删除本轮新建: {', '.join(summary['removed'])}")
-        if summary["errors"]:
-            parts.append(f"⚠️ 回滚失败项: {'; '.join(summary['errors'])}")
-        if not summary["reverted"] and not summary["removed"]:
-            parts.append("（本轮无 owned 改动可回滚）")
-        r.message = "\n".join(parts)
-        return
-    if not args:
-        r.message = (
-            "用法: /evolve <目标描述>\n"
-            "例如:\n"
-            "  /evolve 优化文件搜索性能\n"
-            "  /evolve 给 read_file 添加缓存命中率统计\n"
-            "  /evolve 重构 llm.py 中的错误处理逻辑\n"
-        )
-        return
-    goal = " ".join(args)
-    from .evolution_runner import start_evolution_run
-    try:
-        start = start_evolution_run(goal)
-    except RuntimeError as exc:
-        r.message = f"进化未启动: {exc}"
-        return
-    ctx.log.append({"role": "user", "content": goal})
-    r.retry = True
-    r.save = True
-    r.message = start.summary + "\n\nAgent 将从 runner 状态继续推进。按 Esc 可中断。"
-
-
 @builtin("/ambition", description="查看/管理野心清单（自己发现想做的事）",
          usage="/ambition [done <标题关键词>]")
 def _cmd_ambition(r: CmdResult, _ctx, args, _sid) -> None:
@@ -778,9 +735,6 @@ _INTENT_ROUTES: list[tuple[str, str, str]] = [
     ("记教训", "/lesson save", ""), ("记下教训", "/lesson save", ""),
     ("存教训", "/lesson save", ""), ("提取教训", "/lesson", ""),
     ("学了什么", "/lesson", ""),
-    # 进化
-    ("开进化", "/evolve", ""), ("启动进化", "/evolve", ""),
-    ("进化这个", "/evolve", ""),
     # 任务
     ("清空任务", "/task clear", ""), ("归档任务", "/task archive", ""),
     ("看任务", "/task", ""),

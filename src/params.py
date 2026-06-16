@@ -79,21 +79,6 @@ RAG = RagParams()
 
 
 @dataclass(frozen=True)
-class EvolutionParams:
-    """自进化 runner 旋钮（run 目录/状态文件名等结构性细节留在 evolution_runner.py）。"""
-
-    # git 子命令超时（秒）
-    git_timeout_seconds: int = _env_int("CTG_EVOLVE_GIT_TIMEOUT", 10)
-    # 写入 run 事件的 git status 预览最大字符数
-    prompt_status_limit: int = _env_int("CTG_EVOLVE_STATUS_LIMIT", 1600)
-    # 干净基线闸：开启后脏树拒绝启动进化（默认关）
-    require_clean: bool = _env_bool("EVOLVE_REQUIRE_CLEAN", False)
-
-
-EVOLUTION = EvolutionParams()
-
-
-@dataclass(frozen=True)
 class RuntimeParams:
     """运行时旋钮：LLM 重试、代码执行、token 预算/估算。"""
 

@@ -33,41 +33,7 @@ class TestGuardCoverageGate:
         assert isinstance(result, bool)
 
 # ═══════════════════════════════════════════════════════════════
-# 3. 进化系统 → 进化档案
-# ═══════════════════════════════════════════════════════════════
-
-class TestEvolveSystem:
-    """进化系统的工具和档案必须可以写入和查询。"""
-
-    def test_evolve_record_and_query(self, tmp_path, monkeypatch):
-        import src.evolve
-        monkeypatch.setattr(src.evolve, "EVOLVE_DIR", tmp_path)
-        monkeypatch.setattr(src.evolve, "EVOLVE_LOG", tmp_path / "evolution.jsonl")
-        from src.evolve import EvolutionRecord, query, record_attempt
-        record = EvolutionRecord(
-            id="test-001", goal="测试进化目标", outcome="merged",
-            files_changed=["src/test.py"], diff_summary="test",
-            tags=["test"], duration_total_ms=1000,
-        )
-        record_attempt(record)
-        results = query(goal_keywords=["测试"], limit=5)
-        assert len(results) == 1
-        assert results[0]["goal"] == "测试进化目标"
-
-    def test_evolve_find_similar(self, tmp_path, monkeypatch):
-        import src.evolve
-        monkeypatch.setattr(src.evolve, "EVOLVE_DIR", tmp_path)
-        monkeypatch.setattr(src.evolve, "EVOLVE_LOG", tmp_path / "evolution.jsonl")
-        from src.evolve import EvolutionRecord, find_similar, record_attempt
-        record_attempt(EvolutionRecord(
-            id="sim-001", goal="优化文件搜索性能", outcome="merged",
-            tags=["performance"], duration_total_ms=100,
-        ))
-        results = find_similar("文件搜索优化", top_n=3)
-        assert isinstance(results, list)
-
-# ═══════════════════════════════════════════════════════════════
-# 4. 粘性模型
+# 3. 粘性模型
 # ═══════════════════════════════════════════════════════════════
 
 class TestStickyModel:
@@ -90,13 +56,6 @@ class TestStickyModel:
 class TestToolRegistry:
     """关键工具必须在注册表中且可执行。"""
 
-    def test_evolve_tools_registered(self):
-        from src.tools import get_tools
-        tools = get_tools()
-        names = [t["function"]["name"] for t in tools]
-        for name in ["evolve_query", "evolve_validate", "evolve_status"]:
-            assert name in names, f"{name} 未注册"
-
     def test_memory_tools_registered(self):
         from src.tools import get_tools
         tools = get_tools()
@@ -112,25 +71,6 @@ class TestToolRegistry:
             assert name in names, f"{name} 未注册"
 
     """关键命令必须可执行且正确接线。"""
-
-    def test_evolve_command_injects_prompt(self, tmp_path, monkeypatch):
-        import src.evolution_runner as runner
-        from src.cache_context import CacheContext
-        from src.commands import dispatch
-
-        run_root = tmp_path / "evolution"
-        monkeypatch.setattr(runner, "RUN_ROOT", run_root)
-        monkeypatch.setattr(runner, "RUNS_DIR", run_root / "runs")
-        monkeypatch.setattr(runner, "ACTIVE_RUN_FILE", run_root / "active.json")
-
-        ctx = CacheContext()
-        ctx.log = []
-        result = dispatch("/evolve 测试目标", ctx, "test-session")
-        assert result.retry is True
-        user_msgs = [m for m in ctx.log if m.get("role") == "user"]
-        assert len(user_msgs) == 1
-        assert "测试目标" in user_msgs[0]["content"]
-        assert runner.load_active_evolution_run() is not None
 
     def test_model_command_switches(self):
         from src.cache_context import CacheContext

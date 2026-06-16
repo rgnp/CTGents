@@ -36,8 +36,6 @@ CORE_FILES: frozenset[str] = frozenset({
     str(_SRC_DIR / "validate.py"),              # 验证流水线
     str(_SRC_DIR / "cache_context.py"),         # 缓存上下文
     str(_SRC_DIR / "llm.py"),                   # LLM 调用
-    str(_SRC_DIR / "evolve.py"),                # 进化档案
-    str(_SRC_DIR / "evolution_runner.py"),      # 进化运行态
     str(_SRC_DIR / "tools" / "__init__.py"),    # 工具注册表
 })
 

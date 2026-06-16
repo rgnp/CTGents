@@ -86,14 +86,12 @@ SYSTEM_MAP = {
     "commands": {
         "name": "指令系统",
         "files": "src/commands.py",
-        "what": "/help /evolve /model /self 等终端命令",
+        "what": "/help /model /self 等终端命令",
         "why": "@builtin 装饰器注册模式，CmdResult 控制后续行为（retry/save/clear）",
         "tools": [],
         "connections": {
-            "evolution_runner": "/evolve 创建 run/state/patch，并注入本轮运行契约",
             "llm": "/model 切换模型，/clear 重置",
             "self": "/self 调用 build_self_portrait()",
-            "evolve": "/stats 读取进化统计",
         },
     },
     "guard": {
@@ -106,24 +104,6 @@ SYSTEM_MAP = {
         "tools": [],
         "connections": {
             "tools/file": "write/edit/delete 前查 is_immutable(硬拦)/is_core(走安全带 _post_write_check)",
-        },
-    },
-    "evolution": {
-        "name": "进化系统",
-        "files": "src/evolution_runner.py + src/evolve.py + src/validate.py",
-        "what": "runner 管理 run/state/patch，研究→综合→生成→验证→合入/修复 闭环。JSONL 档案支持相似搜索",
-        "why": "agent 的自修改需要可追踪运行态，而不是只靠一次性 prompt；runner 记录基线、验证和收口状态",
-        "tools": [
-            "evolve_query",
-            "evolve_status",
-            "evolve_validate",
-        ],
-        "connections": {
-            "validate": "三阶段验证（AST→pytest→覆盖率/lint）",
-            "git": "git_commit 使用具体文件暂存，提交前强制 ruff + pytest",
-            "evolution_runner": "/evolve 启动 active run，evolve_validate/git_commit 回写状态",
-            "evolve": "每次尝试写入 JSONL 进化档案",
-            "llm": "委托 LLM 执行代码修改",
         },
     },
     "memory": {
@@ -164,10 +144,6 @@ CONNECTION_GRAPH = [
     ("llm", "cache_context", "ctx.send() 序列化消息 → API 调用"),
     ("llm", "tools/__init__", "get_tools() → API tool definitions"),
     ("tools/__init__", "storm", "同轮重复调用 → 返回缓存结果"),
-    ("evolution", "validate", "改完后跑三阶段验证"),
-    ("evolution", "evolve", "结果记录到 JSONL 档案"),
-    ("evolution", "git", "成功提交后关闭 active runner"),
-    ("commands", "evolution_runner", "/evolve → run/state/patch + 进化 prompt"),
     ("commands", "self", "/self → build_self_portrait()"),
 ]
 
@@ -329,14 +305,6 @@ def _runtime_section() -> str:
     except Exception:
         pass
 
-    # 进化
-    try:
-        from ..evolve import get_stats
-        stats = get_stats()
-        lines.append(f"进化: {stats.get('total', 0)} 条记录 | 成功率 {stats.get('success_rate', 0):.0%}")
-    except Exception:
-        pass
-
     # 记忆
     try:
         from .memory import get_context as mem_ctx
@@ -361,7 +329,6 @@ def _params_section() -> str:
     domains = [
         ("上下文 CONTEXT", params.CONTEXT),
         ("RAG", params.RAG),
-        ("进化 EVOLUTION", params.EVOLUTION),
         ("运行时 RUNTIME", params.RUNTIME),
     ]
     lines = ["## 可调旋钮（params.py）", ""]
@@ -373,7 +340,7 @@ def _params_section() -> str:
 
     overrides = sorted(
         k for k in os.environ
-        if k.startswith("CTG_") or k == "EVOLVE_REQUIRE_CLEAN"
+        if k.startswith("CTG_")
     )
     lines.append(f"env 覆盖中: {', '.join(overrides) if overrides else '无（全部默认）'}")
     lines.append("用 CTG_<NAME> 环境变量可覆盖任意旋钮（改完需重启生效）。")

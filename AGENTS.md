@@ -134,7 +134,7 @@ tasks/            任务追踪（current.md + archive/）
 | 拦截层 | 文件 | 保障的规则 |
 |---|---|---|
 | 工具边界 | `tool_guard.py` → `check()` | **C3** 文件修改限 cwd, **C10** 读后写, **C14** 文件放对目录 + src/tools/ 禁新建 .py, **P1** 禁 `git add -A`, **P2** 禁 force-push 到 main/master |
-| 文件层 | `file.py` → `is_immutable()` / `is_core()`（见 `guard.py`） | **不可变核**（guard/tool_guard/gate_audit/pre-commit 共 4 个）拒写；**核心业务**（main/commands/validate/cache_context/llm/evolve/evolution_runner/tools.__init__）可写但走 import 冒烟安全带，挂了自动回滚 |
+| 文件层 | `file.py` → `is_immutable()` / `is_core()`（见 `guard.py`） | **不可变核**（guard/tool_guard/gate_audit/pre-commit 共 4 个）拒写；**核心业务**（main/commands/validate/cache_context/llm/tools.__init__）可写但走 import 冒烟安全带，挂了自动回滚 |
 | 提交闸 | `scripts/git-hooks/pre-commit` | **C1** 裸 except (ruff), **C2** 密钥格式扫描, **C6** 类型注解 (ruff), **C7** 函数行数 (ruff), **C13** lint 零错误 + 全量 pytest |
 | 管线硬节点 | `_finalize_session` | **C17** 会话关闭机械收割：`extract_lessons`+`save_lessons`(失败模式) + `user_model.harvest_and_save`(用户理解→user-profile) |
 | 管线硬节点 | `search_web` → `_try_self_heal` | Tavily quota 耗尽自动重读 .env + 重建 MultiKeyTavilyClient → 跨会话修复自动加载 |
@@ -142,7 +142,7 @@ tasks/            任务追踪（current.md + archive/）
 | 事后审计 | `_inject_citation_audit` | 引用未取证文件的 `path:line` → 挂尾提示 |
 | 运行时反射 | `_inject_thinking_stance` | 每轮挂尾：「检索是线索不是答案」 |
 | 任务续做 | `_append_volatile_context` | 启动时检测 `current.md` 未完成步骤 → 自动注入上下文 |
-| 进化验证 | `validate.py` | AST → pytest → 覆盖率/lint 三阶段 |
+| 验证流水线 | `validate.py` | AST → pytest → 覆盖率/lint 三阶段 |
 
 ---
 

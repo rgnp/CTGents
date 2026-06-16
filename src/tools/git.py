@@ -285,33 +285,6 @@ def _changed_paths_for_stage(workdir: str) -> list[str]:
     return sorted(set(paths))
 
 
-def _scope_paths_to_active_run(paths: list[str]) -> list[str]:
-    """进化 run 进行中时，把暂存范围限定为本轮真正改动的文件。
-
-    排除"启动前就已脏"的无关文件，避免一锅端（见 7da964e：补 docstring 的提交
-    把启动前已脏的 evolution_runner.py 砍了 82 行）。无 active run 时原样返回。
-    """
-    try:
-        from ..evolution_runner import (
-            append_run_event,
-            load_active_evolution_run,
-            run_owned_paths,
-        )
-        run = load_active_evolution_run()
-        if run is None:
-            return paths
-        owned = set(run_owned_paths(run))
-        scoped = [p for p in paths if p in owned]
-        skipped = [p for p in paths if p not in owned]
-        if skipped:
-            append_run_event(run.run_id, "commit_scoped", {
-                "committed": scoped, "skipped_preexisting_dirty": skipped,
-            })
-        return scoped
-    except Exception:
-        return paths  # 任何异常都不阻断正常提交
-
-
 def _filter_gitignored(workdir: str, paths: list[str]) -> list[str]:
     """过滤 .gitignore 覆盖的路径，避免 git add 暂存时因被忽略文件报错。"""
     if not paths:
@@ -337,7 +310,6 @@ def _filter_gitignored(workdir: str, paths: list[str]) -> list[str]:
 def _stage_changed_files(workdir: str) -> str | None:
     paths = _changed_paths_for_stage(workdir)
     paths = _filter_gitignored(workdir, paths)
-    paths = _scope_paths_to_active_run(paths)
     if not paths:
         return None
     r = _git(["add", "--", *paths], workdir)
@@ -645,21 +617,7 @@ def git_commit(message: str | None = None, auto_stage: bool = True, path: str | 
     # 提交后触发变更追踪：提醒需要同步的文档
     from .file import _track_changes
     track = _track_changes("(git_commit)")
-    runner_note = _complete_active_runner_after_commit(message)
-    return f"✅ 提交成功\n\n{message}\n\n{r2['stdout'].strip()}{track}{runner_note}"
-
-
-def _complete_active_runner_after_commit(message: str) -> str:
-    """Close the active evolution runner after a successful commit."""
-    try:
-        from ..evolution_runner import RunnerStatus, complete_evolution_run, load_active_evolution_run
-        run = load_active_evolution_run()
-        if run is None:
-            return ""
-        complete_evolution_run(run.run_id, RunnerStatus.PASSED, note=message)
-        return f"\n\nEvolution runner: {run.run_id} marked passed."
-    except Exception as e:
-        return f"\n\nEvolution runner close failed: {e}"
+    return f"✅ 提交成功\n\n{message}\n\n{r2['stdout'].strip()}{track}"
 
 
 def _generate_commit_message(repo_path: str) -> str:

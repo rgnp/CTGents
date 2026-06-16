@@ -319,7 +319,7 @@ def format_diagnostics(anomalies: list[dict]) -> str:
             lines.append(f"     → {d.suggested_action}")
 
     lines.append(
-        "如果需要修复，可以说 '处理这些' 或 '看看第一个'。"
-        "我会用 /evolve 机制分析、修改、测试、提交。"
+        "如果需要修复，可以说 '处理这些' 或 '看看第一个'，"
+        "我会分析、修改、测试、提交。"
     )
     return "\n".join(lines)

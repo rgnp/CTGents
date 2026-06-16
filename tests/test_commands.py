@@ -89,23 +89,6 @@ class TestDispatch:
         assert len(ctx.log) < before
         assert any("归档" in (m.get("content") or "") for m in ctx.log)
 
-    def test_evolve_needs_args(self):
-        r = cmds.dispatch("/evolve", self.ctx, None)
-        assert "用法" in r.message
-
-    def test_evolve_with_goal(self, tmp_path, monkeypatch):
-        import src.evolution_runner as runner
-        run_root = tmp_path / "evolution"
-        monkeypatch.setattr(runner, "RUN_ROOT", run_root)
-        monkeypatch.setattr(runner, "RUNS_DIR", run_root / "runs")
-        monkeypatch.setattr(runner, "ACTIVE_RUN_FILE", run_root / "active.json")
-
-        r = cmds.dispatch("/evolve 优化性能", self.ctx, "test")
-        assert r.retry is True
-        assert r.save is True
-        assert "runner" in r.message
-        assert runner.load_active_evolution_run() is not None
-
 
 class TestGoalCommand:
     """/goal 指令:只收文本递给 main,缺标准给用法提示。"""
