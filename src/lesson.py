@@ -408,12 +408,18 @@ def inject_lesson_context(log: list[dict], tool_name: str, args: dict) -> None:
     if not tool_name:
         return
 
-    desc_parts = [tool_name]
-    if tool_name in ("write_file", "edit_file_lines", "delete_file"):
-        desc_parts.append(args.get("path", ""))
-    elif tool_name in ("run_command",):
-        desc_parts.append(args.get("command", "")[:80])
-    desc = " ".join(desc_parts)
+    # args["desc"] 优先：run_conversation 每轮首部用当前 user_input 当 desc
+    # （原占位传 "_task" 时这里读不到它，desc 退化为裸 "_task" → 匹配近乎失效）。
+    # 工具执行前调用则走 tool_name + 参数分支。
+    if args.get("desc"):
+        desc = str(args["desc"])
+    else:
+        desc_parts = [tool_name]
+        if tool_name in ("write_file", "edit_file_lines", "delete_file"):
+            desc_parts.append(args.get("path", ""))
+        elif tool_name in ("run_command",):
+            desc_parts.append(args.get("command", "")[:80])
+        desc = " ".join(desc_parts)
 
     matches = match_lessons_for_action(desc)
     if not matches:
