@@ -182,6 +182,109 @@ def _inject_evidence_stance(ctx: CacheContext) -> None:
     )
 
 
+# ── 记忆触发：中→英翻译扩展表（触发专用，补 _TRANSLITERATE 未覆盖的词）──
+_MEMORY_TRIGGER_TRANSLATIONS: dict[str, list[str]] = {
+    "自进化": ["self evolution", "self-evolution"],
+    "进化": ["evolution"],
+    "闭环": ["loop", "closed loop"],
+    "触发": ["trigger"],
+    "越用越懂": ["understanding growth"],
+    "路线": ["roadmap"],
+    "差距": ["gap"],
+    "诊断": ["diagnosis", "gaps"],
+    "收割": ["harvest"],
+    "反思": ["reflection"],
+    "壁纸": ["wallpaper"],
+    "宁缺毋滥": ["precision"],
+}
+
+# 记忆名中属于噪音的部分（日期、纯数字）
+_MEMORY_NOISE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$|^\d+$")
+
+
+def _inject_memory_triggers(ctx: CacheContext, user_input: str) -> None:
+    """记忆触发：用户输入关键词匹配记忆标题/指纹时，提亮一行提醒。宁缺毋滥。
+
+    扫描 memory/*.md 的全部非 lesson 记忆，从 name + fingerprint 提取内容词，
+    与用户输入（含中→英翻译扩展）做交匹配。≥2 个词命中才触发，最多 3 条。
+    只提亮一行摘要，不注入全文——需要深挖用 recall 工具。
+    """
+    from .tools.memory import _dir, _split_frontmatter, _tokenize
+
+    # 清除上一轮触发
+    ctx.log[:] = [m for m in ctx.log if not m.get("_memory_trigger")]
+
+    mem_dir = _dir()
+    if not mem_dir.is_dir():
+        return
+
+    # 翻译扩展用户输入
+    user_lower = user_input.lower()
+    for cn, en_list in _MEMORY_TRIGGER_TRANSLATIONS.items():
+        if cn in user_input:
+            user_lower += " " + " ".join(en_list)
+    user_tokens = _tokenize(user_lower)
+
+    triggers: list[tuple[str, str, int]] = []  # (name, desc_short, match_count)
+
+    for f in sorted(mem_dir.glob("*.md")):
+        if f.name == "MEMORY.md":
+            continue
+        try:
+            meta, _ = _split_frontmatter(f.read_text(encoding="utf-8"))
+            if meta.get("severity"):
+                continue
+            name = meta.get("name", f.stem)
+            fp = meta.get("fingerprint", "")
+
+            # 从 name 和 fingerprint 提取内容词
+            keywords: set[str] = set()
+            for part in name.replace("-", " ").replace("_", " ").split():
+                part = part.strip().lower()
+                if _MEMORY_NOISE_RE.match(part):
+                    continue
+                if len(part) >= 2:
+                    keywords.add(part)
+            for part in fp.replace("_", " ").split():
+                part = part.strip().lower()
+                if len(part) >= 2:
+                    keywords.add(part)
+
+            if not keywords:
+                continue
+
+            # 匹配：关键词是否出现在用户 token 集或翻译后的文本中
+            matches = sum(
+                1 for kw in keywords
+                if kw in user_tokens or kw in user_lower
+            )
+            if matches >= 2:
+                desc = meta.get("description", "")
+                triggers.append((name, desc[:40] if desc else "", matches))
+        except Exception:
+            continue
+
+    if not triggers:
+        return
+
+    triggers.sort(key=lambda x: x[2], reverse=True)
+    triggers = triggers[:3]
+
+    parts = []
+    for name, desc, _ in triggers:
+        if desc:
+            parts.append(f"{name}（{desc}）")
+        else:
+            parts.append(name)
+    line = (
+        f"[记忆触发] 以下记忆可能与本轮相关，需要时用 recall 搜索详情："
+        f" {', '.join(parts)}"
+    )
+    ctx.log.append(
+        {"role": "system", "content": line, "_volatile": True, "_memory_trigger": True}
+    )
+
+
 def process_turn(
     ctx: CacheContext,
     user_input: str,
@@ -190,7 +293,7 @@ def process_turn(
     on_progress: Callable[[], None] | None = None,
     session_id: str = "",
 ) -> str:
-    """一轮对话的数据管线：思考牙 → 预读 → run_conversation → 收尾审计。
+    """一轮对话的数据管线：思考牙 → 证据牙 → 记忆触发 → 预读 → run_conversation → 收尾审计。
 
     记忆每轮已由 _append_volatile_context 的记忆索引全文注入（约 20 条全给）；
     曾经的 auto_recall（embedding 每轮再搜 top-3 注入）与之重叠、且拖一个未声明的
@@ -200,6 +303,8 @@ def process_turn(
     _inject_thinking_stance(ctx)
     # 证据牙：信心要匹配证据，没看够别下定论
     _inject_evidence_stance(ctx)
+    # 记忆触发：用户输入关键词匹配记忆标题 → 提亮一行
+    _inject_memory_triggers(ctx, user_input)
     # 预读优化：用户提到了文件路径，先读入上下文
     pre_msgs = _preread_files(user_input, ctx)
     if pre_msgs:
