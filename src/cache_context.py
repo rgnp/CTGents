@@ -137,10 +137,9 @@ class CacheContext:
         for m in self.prefix:
             api.append({"role": "system", "content": m.get("content", "")})
 
-        # log 中的非 system 消息
-        for m in self.log:
-            if m.get("role") != "system":
-                api.append(self._clean_log_msg(m))
+        # log 中的非 system 消息（修复 tool_calls/tool 配对不变量，防 400 卡死）
+        nonsys = [self._clean_log_msg(m) for m in self.log if m.get("role") != "system"]
+        api.extend(self._repair_tool_pairing(nonsys))
 
         # log 中的 system 消息放末尾
         for m in self.log:
@@ -172,6 +171,36 @@ class CacheContext:
         if m.get("tool_call_id"):
             clean["tool_call_id"] = m["tool_call_id"]
         return clean
+
+    @staticmethod
+    def _repair_tool_pairing(msgs: list[dict]) -> list[dict]:
+        """焊死 OpenAI/DeepSeek 协议不变量，防 400 卡死整个会话。
+
+        协议要求：带 tool_calls 的 assistant 消息后必须紧跟每个 tool_call_id
+        对应的 tool 结果消息。工具执行中途被中断（KeyboardInterrupt 不被 llm.py
+        的 except Exception 捕获）、异常、或进程崩溃，都可能在 log 里留下"光杆
+        tool_calls"（缺结果），落盘后每轮重发都 400、重启加载也照炸——会话彻底卡死。
+
+        这里在唯一咽喉 send() 处兜底：缺失的 tool 结果补占位消息（紧跟 assistant
+        之后）。健康 log 不增不删、字节不变（零缓存影响），只有坏 log 被修复。
+        （只补缺失结果，不动孤儿 tool 消息——后者是另一类、非中断所致，不在此处臆测处理。）
+        """
+        has_result = {m.get("tool_call_id") for m in msgs if m.get("role") == "tool"}
+        out: list[dict] = []
+        for m in msgs:
+            out.append(m)
+            if m.get("role") == "assistant" and m.get("tool_calls"):
+                for tc in m["tool_calls"]:
+                    tcid = tc.get("id")
+                    if tcid and tcid not in has_result:
+                        out.append({
+                            "role": "tool",
+                            "tool_call_id": tcid,
+                            "content": json.dumps(
+                                {"error": "工具结果缺失（中断/异常/崩溃），已占位"},
+                                ensure_ascii=False),
+                        })
+        return out
 
     def clear_log(self) -> None:
         """清空 log，保持 prefix 不变。"""

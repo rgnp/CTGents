@@ -104,6 +104,61 @@ class TestSendMethod:
         assert api[1]["tool_call_id"] == "abc"
 
 
+class TestToolPairingRepair:
+    """tool_calls/tool 配对修复：防中断/异常留下光杆 tool_calls 致 API 400 卡死。"""
+
+    def test_dangling_tool_calls_backfilled(self):
+        """中断遗留：带 tool_calls 的 assistant 缺 tool 结果 → send() 补占位，不破坏协议。"""
+        ctx = CacheContext(
+            prefix_msgs=[{"role": "system", "content": "sys"}],
+            log_msgs=[
+                {"role": "user", "content": "Q"},
+                {"role": "assistant", "content": None,
+                 "tool_calls": [{"id": "call_1", "function": {"name": "run"}}]},
+                # 中断：缺 call_1 的 tool 结果
+            ],
+        )
+        api = ctx.send()
+        # 协议不变量：每个 tool_calls 后必须有对应 tool 结果
+        assistant = next(m for m in api if m["role"] == "assistant")
+        tool_msgs = [m for m in api if m["role"] == "tool"]
+        assert assistant["tool_calls"][0]["id"] == "call_1"
+        assert any(t["tool_call_id"] == "call_1" for t in tool_msgs), "缺失结果应被占位补齐"
+
+    def test_partial_results_backfilled(self):
+        """多 tool_calls 只回了一部分 → 缺的那个被补齐。"""
+        ctx = CacheContext(
+            prefix_msgs=[{"role": "system", "content": "sys"}],
+            log_msgs=[
+                {"role": "assistant", "content": None, "tool_calls": [
+                    {"id": "a", "function": {"name": "f"}},
+                    {"id": "b", "function": {"name": "g"}},
+                ]},
+                {"role": "tool", "tool_call_id": "a", "content": "done"},
+                # 缺 b
+            ],
+        )
+        api = ctx.send()
+        ids = {m["tool_call_id"] for m in api if m["role"] == "tool"}
+        assert ids == {"a", "b"}
+
+    def test_healthy_log_unchanged(self):
+        """配对完整的健康 log → send() 不增不删、字节不变（保前缀缓存）。"""
+        log = [
+            {"role": "user", "content": "Q"},
+            {"role": "assistant", "content": None,
+             "tool_calls": [{"id": "x", "function": {"name": "run"}}]},
+            {"role": "tool", "tool_call_id": "x", "content": "ok"},
+            {"role": "assistant", "content": "答案"},
+        ]
+        ctx = CacheContext(prefix_msgs=[{"role": "system", "content": "sys"}],
+                           log_msgs=log)
+        api = ctx.send()
+        # prefix(1) + log(4)，无额外占位
+        assert len(api) == 5
+        assert [m["role"] for m in api] == ["system", "user", "assistant", "tool", "assistant"]
+
+
 class TestPrefixIntegrity:
     """前缀完整性校验测试。"""
 
