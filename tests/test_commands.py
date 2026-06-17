@@ -88,23 +88,3 @@ class TestDispatch:
         assert "已压缩" in r.message
         assert len(ctx.log) < before
         assert any("归档" in (m.get("content") or "") for m in ctx.log)
-
-
-class TestGoalCommand:
-    """/goal 指令:只收文本递给 main,缺标准给用法提示。"""
-
-    def setup_method(self):
-        from src.cache_context import CacheContext
-        self.ctx = CacheContext()
-
-    def test_goal_sets_field(self):
-        import src.commands as cmds
-        r = cmds.dispatch("/goal 写文档 || 含示例 | 100字以上", self.ctx, None)
-        assert r.goal == "写文档 || 含示例 | 100字以上"
-        assert not r.message
-
-    def test_goal_without_criteria_shows_usage(self):
-        import src.commands as cmds
-        r = cmds.dispatch("/goal 只有目标", self.ctx, None)
-        assert not r.goal
-        assert "用法" in r.message and "标准" in r.message

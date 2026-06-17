@@ -14,7 +14,7 @@ agent 临场想起）+ 从真实会话提炼（用拉出来的、非 agent 手�
 （头号指标）。knowledge → memory._build_context 注入一行摘要，agent 需要时 recall 深读。
 
 为什么单文件演进而非每会话散 N 条：记忆 bloat 是已记隐患。维护单一 project-knowledge，
-LLM 累积精炼、合并去重。隔离调用（同 user_model / outcome 的干净上下文）不碰前缀缓存。
+LLM 累积精炼、合并去重。隔离调用（同 user_model 的干净上下文）不碰前缀缓存。
 
 防编造：严格 system prompt——只写对话里有证据的 durable 事实、保留旧的除非本次推翻、
 没新东西原样返回。v1 已知限制：digest 走对话（用户话+助手最终回复），不含工具原始输出，

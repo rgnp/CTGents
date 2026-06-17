@@ -1,9 +1,8 @@
 """差距检测框架 — 多信号源汇聚，统一为可排序的改进方向。
 
-三层递进：
+两层递进：
   Layer 1 (diagnostics.py)  — 单信号->翻译
   Layer 2 (gaps.py)         — 多信号汇聚->去噪->排序->优选方向   <- 本模块
-  Layer 3 (outcome.py)      — 收到方向后，搜标准->定标准->执行闭环
 """
 
 from __future__ import annotations

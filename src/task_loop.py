@@ -1,7 +1,6 @@
 """长任务自主续跑：agent 推进 current.md 后，由 REPL 自主驱动下一步，直到它自己停。
 
-与 outcome.py（/goal 闭环）并列的第二种任务循环：那个按"完成标准语义评分"驱动，
-这个按 current.md 的"步骤标记"驱动（不评分——用户选定）。
+按 current.md 的"步骤标记"驱动的长任务自主续跑（不评分——用户选定：让 agent 自己判断做不做）。
 
 设计要点（见对话 2026-06-13，用户："让他自己判断做不做"）：
   - 续跑条件 = agent 这一轮【自己推进了】current.md，不是"任务还有未完成步骤"。
@@ -11,7 +10,7 @@
   - 停由 agent 的判断触发，系统只 honor、不 puppet：
       停止推进（这一步没改 current.md）/ 标 [!][r]（要你拍板）/ 全 [x]（完成）。
     预算是兜底上限，不是主停因。
-  - 不 import main：drive_turn 由调用方注入（同 run_outcome），避免环依赖。
+  - 不 import main：drive_turn 由调用方注入，避免环依赖。
 """
 
 from __future__ import annotations

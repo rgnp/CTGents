@@ -267,3 +267,48 @@ def test_miss_attribution_credits_cold_and_caps_tail_per_request():
     tail_val = int(tail_line.split("尾部注入")[1].split()[0].replace(",", ""))
     assert tail_val <= 601
     assert "4,607" in text or "对话增量" in text             # 工具输出进对话增量
+
+
+def test_isolated_single_shot_not_called_cold_start():
+    """隔离单发(会话收割等:n=1、独立上下文)不得被喊成主会话冷启动。
+
+    回归用户实测 #45：对话中段突然 n1、7,524 全 miss，被旧 verdict 标"冷启动"
+    吓成"惊天异常"。它其实是另一份上下文串进同一统计流(必 miss、一次性)，主对话
+    前缀没丢(前后 n=202/204 连续、100% 命中)。
+    """
+    from src.commands import _is_isolated_single_shot, _spike_verdict
+
+    iso = {"n": 1, "fe": "z", "lcpr": 0.0}
+    main_prev = {"n": 202, "fe": "a"}
+    assert _is_isolated_single_shot(iso, main_prev)
+    v = _spike_verdict(iso, main_prev, 7524, 0, 0.0)
+    assert "隔离单发" in v and "冷启动" not in v
+    # 真·主会话冷启动(prev=None)仍判冷启动，不被新分支吞掉
+    assert "冷启动" in _spike_verdict({"n": 1, "lcpr": 0.0}, None, 7524, 0, 0.0)
+    # 压缩后(n 缩到几十、非 1~2)不误判为隔离单发
+    assert not _is_isolated_single_shot({"n": 30}, {"n": 202})
+
+
+def test_miss_attribution_isolates_single_shot_call():
+    """隔离单发的 miss 进『隔离单发』桶，不污染『对话增量』。"""
+    from unittest.mock import patch
+
+    from src import llm
+    from src.commands import _append_cache_section
+    # #1 主对话(大 n) + #2 隔离评分(n=1 全 miss 7524) + #3 主对话回到大 n
+    hist = [
+        {"p": 151236, "h": 151000, "t": 600, "n": 202, "fe": "a", "g": 3.0},
+        {"p": 7524, "h": 0, "t": 0, "n": 1, "fe": "z", "g": 28.8},        # 隔离评分
+        {"p": 151308, "h": 151168, "t": 600, "n": 204, "fe": "a", "g": 2.8},
+    ]
+    fake = {"total": {"requests": 3, "prompt_tokens": 310068, "cache_hit_tokens": 302168},
+            "models": {"pro": {"history": hist}}}
+    lines: list = []
+    with patch.object(llm, "get_cache_stats", lambda _s: fake):
+        _append_cache_section(lines, None, "sid")
+    text = "\n".join(lines)
+    assert "隔离单发" in text and "7,524" in text
+    # 7,524 不得落进对话增量
+    body_line = next(ln for ln in lines if "对话增量" in ln)
+    body_val = int(body_line.split("对话增量")[1].split()[0].replace(",", ""))
+    assert body_val < 7524

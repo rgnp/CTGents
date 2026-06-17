@@ -40,7 +40,6 @@
 | `src/cache_context.py` | 225 | 三段式上下文管理器：prefix/log/scratch |
 | `src/tools/__init__.py` | 210 | 工具注册/调度/热加载入口 |
 | `src/params.py` | 177 | 集中可调旋钮（frozen dataclass，按域分组） |
-| `src/outcome.py` | 176 | 任务闭环：目标→执行→评分→修订 |
 | `src/tools/_tool_meta.py` | 163 | 工具元数据派生（唯一真相源） |
 | `src/tools/tool_guard.py` | 162 | 工具调用边界防护 |
 | `src/tools/storm.py` | 157 | 工具调用去重 + 结果缓存 |

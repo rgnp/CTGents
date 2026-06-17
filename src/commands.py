@@ -25,7 +25,6 @@ class CmdResult:
     clear: bool = False
     load: str = ""
     retry: bool = False
-    goal: str = ""   # /goal 的原始参数文本,由 main 驱动任务闭环(与 retry 同模式)
 
 
 @dataclass
@@ -70,18 +69,6 @@ def builtin_multi(names: list[str], description: str = "", usage: str = ""):
 # ═══════════════════════════════════════════════════════════════
 # 内置指令
 # ═══════════════════════════════════════════════════════════════
-
-@builtin("/goal", description="任务闭环:交付 - 独立评分 - 修订,直到达标",
-         usage="/goal 目标 || 标准1 | 标准2 [>> 交付文件路径]")
-def _cmd_goal(r: CmdResult, _ctx, args, _sid) -> None:
-    """指令层只收文本;解析与循环在 outcome.py / main.py(指令系统不养业务逻辑)。"""
-    text = " ".join(args).strip()
-    if not text or "||" not in text:
-        r.message = ("用法: /goal 目标 || 标准1 | 标准2 [>> 交付文件路径]\n"
-                     "完成标准不可省略——评分步逐条对照它打分,这是闭环的牙。")
-        return
-    r.goal = text
-
 
 @builtin_multi(["/exit", "/quit", "/q"], description="退出程序")
 def _cmd_exit(r: CmdResult, _ctx, _args, _sid) -> None:
@@ -347,20 +334,29 @@ def _append_cache_section(lines: list[str], ctx, _sid: str | None) -> None:
     # ── miss 归因（逐请求拆分，不在聚合层估算）──
     # 尾部在 payload 末尾：一条只要有 miss，尾部整段必落在 miss 区，故 tail_miss=min(t,miss)；
     # 残差=对话增量（工具输出/读文件/生成，新内容只付一次）。首请求大面积未命中=冷启动(一次性)。
-    cold = tail_total = body = 0
+    cold = tail_total = body = isolated = 0
+    prev = None
     for idx, e in enumerate(history):
         mi = e.get("p", 0) - e.get("h", 0)
+        if _is_isolated_single_shot(e, prev):  # 会话收割等独立上下文，必 miss、非主会话冷启动
+            isolated += mi
+            prev = e
+            continue
         if idx == 0 and e.get("h", 0) < e.get("p", 0) * 0.5:  # 首请求大半没命中 = 冷启动
             cold += mi
+            prev = e
             continue
         ti = min(e.get("t", 0), mi)
         tail_total += ti
         body += mi - ti
+        prev = e
     n_tail = sum(1 for e in history if e.get("t", 0) > 0)
     lines.append("")
     lines.append("  miss 归因:")
     if cold:
         lines.append(f"    冷启动    {cold:>9,}  (首请求无缓存，一次性)")
+    if isolated:
+        lines.append(f"    隔离单发  {isolated:>9,}  (会话收割等独立上下文调用，必 miss、一次性)")
     lines.append(f"    尾部注入  {tail_total:>9,}  ({n_tail}/{len(history)} 请求带尾部，循环内其余跳过)")
     lines.append(f"    对话增量  {body:>9,}  (工具输出/读文件/生成，新内容只付一次)")
 
@@ -412,6 +408,17 @@ def _append_cache_section(lines: list[str], ctx, _sid: str | None) -> None:
         lines.append("  每请求明细：本次更新后开始记录（旧会话仅有汇总）。")
 
 
+def _is_isolated_single_shot(e: dict, prev: dict | None) -> bool:
+    """隔离单发调用（如会话收割：system + 单条 user、tools=None、独立上下文）。
+
+    这类调用走同一 record() 落进同一统计流，但它是另一份上下文：全新前缀服务端
+    没见过，必然 0% 命中。判据 = payload 只 1~2 条非 sys 消息(n<=2) 且上一条是大对话
+    (prev.n>=10)。主对话不可能从几百条消息塌回 1 条再弹回——压缩也只缩到几十条、不会到 2。
+    区别于真·主会话冷启动(首请求、prev 为 None)，免得把合法隔离调用喊成"惊天异常"。
+    """
+    return e.get("n", 99) <= 2 and prev is not None and prev.get("n", 0) >= 10
+
+
 def _spike_verdict(e: dict, prev: dict | None, p: int, h: int, pct: float) -> str:
     """突刺取证判词，靠 lcpr（与上条 payload 公共前缀比 = 本该命中的上限）定因：
 
@@ -421,6 +428,8 @@ def _spike_verdict(e: dict, prev: dict | None, p: int, h: int, pct: float) -> st
       实命中率 ≈ lcpr 但偏低    → miss 全在新追加后缀（工具输出/读文件），预期内、非异常。
     旧格式 history（无 lcpr）退回 fe/间隔 粗判。命中率≥70% 视作健康、不标。
     """
+    if _is_isolated_single_shot(e, prev):  # 独立上下文(评分者等)，必 miss、非主会话冷启动
+        return "  隔离单发(独立上下文·必miss·一次性)"
     if h <= p * 0.05 or (prev is None and pct < 70):  # 首请求大半没命中也是冷启动
         return "  冷启动"
     # 前沿（最早 3 条非 sys）变 = 旧消息被改写。但前 3 条尚未填满时 fe 本就随追加变化，

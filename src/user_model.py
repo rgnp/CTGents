@@ -4,14 +4,14 @@
 "对用户的理解"（type=user）。两者都在 main._finalize_session 接线，都不阻塞退出。
 
 为什么用 LLM 而非机械正则：用户的沟通风格 / 讲解口味 / 知识背景 / 在意的目标是语义信号，
-正则只能抓"我要简洁"这种显式表态，抓不到"理解你的想法"。隔离调用（同 outcome.grade
-的干净上下文模式）独立 messages，不碰 DeepSeek 前缀缓存。
+正则只能抓"我要简洁"这种显式表态，抓不到"理解你的想法"。隔离调用（独立 messages 的
+干净上下文模式，同 project_model）不碰 DeepSeek 前缀缓存。
 
 为什么单文件演进而非每会话散 N 条：记忆 bloat 是已记隐患。维护单一 user-profile，
 累积精炼；type=user → memory._build_context 每轮全文注入（_FULLBODY_TYPES），且无
 severity 不会被当 lesson 跳过。用户随时可见 / 可改 / 可删（就是一个 md 文件）。
 
-防编造：严格 system prompt（同 outcome 评分者的纪律）——只写对话里有证据的、保留旧的
+防编造：严格 system prompt（只依据证据的评审纪律）——只写对话里有证据的、保留旧的
 除非本次推翻、没新东西原样返回。已知 v1 风险：单文件交 LLM 重写，坏会话可能漏旧事实；
 靠"绝不无故删旧事实"指令 + 用户可见可纠正兜底。真用一阵看是否需要更强的合并保护。
 """
