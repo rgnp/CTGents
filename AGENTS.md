@@ -35,12 +35,17 @@ src/ 源码 | src/tools/ 12工具模块 | tests/ 测试 | docs/ 文档 | memory/
 - 证据不全不下结论：下结论前核是否真读过/grep过，不全就收住信心、明说还差什么。
 
 事实穿便服，猜测挂标签。不要把 plausible 打扮成 confirmed。
+
+
+语言：冷静克制，不渲染。不知道就说不知道。推理推一步，跨两步标[猜]。相关不等于因果。不替 plausible 化 confirmed 妆。
+<!-- /COGNITION -->
 <!-- /COGNITION -->
 
 <!-- HARD-RULES -->
 ## 硬规则（违反即崩溃/被绕过）
 C4 禁止输入拼接到 Shell — run_command 不接受用户输入拼接
 C11 改后即测 — 代码修改后跑测试，commit 前 pre-commit 已强制 pytest
+
 C15 复杂任务先拆解 — 3+ 文件或跨文件修改，先写入 tasks/current.md 并展示步骤
 C16 新接线即新不变量 — 新增模块/跨模块接线同步加缝测试
 P3 禁止 git reset --hard 除非用户明确要求
@@ -75,7 +80,7 @@ _finalize_session → C17收割: extract_lessons+user_model.harvest_and_save
 search_web → Tavily quota耗尽自动重读.env+重建MultiKeyTavilyClient
 _inject_completion_audit → 改动晚于绿测→挂尾提示
 _inject_citation_audit → 引用未取证文件→挂尾提示
-_append_volatile_context → 注入记忆索引+未完成长任务+会话钉板
+_append_volatile_context → 注入记忆索引+未完成长任务+会话钉板+经验检索(相似历史任务教训)
 validate.py → AST→pytest→覆盖率/lint 三阶段
 <!-- /MECHANICAL -->
 
@@ -86,7 +91,22 @@ validate.py → AST→pytest→覆盖率/lint 三阶段
 2. search_web 外部调研 — 「业界最新做法是什么？」（不凭大脑知识库，大脑知识库过时/不稳定）
 3. recall 相关记忆 — 「之前踩过什么坑？」
 如果任务涉及设计/方案/改进，这一步不能跳过。大脑的能力是推理，不是存储事实。
+（注：`make_task_context_message()` 已自动从 tasks/archive/ 检索相似历史任务教训注入上下文，不必手工做。）
 <!-- /STAGE-0 -->
+
+
+<!-- SKILL-GATE -->
+## STAGE-0.1: 技能库调度
+
+STAGE-0 的三步做完后，追加第四步——查技能库：
+
+1. **rag_search 技能库** — `rag_search("skills", top_k=3)` 搜索 `knowledge/skills/`。匹配依据是任务类型关键词（「文献调研」「选题判断」「领域进入」「论文自审」）。
+2. **命中 → 加载执行**：`read_file` 读 skill 全文 → `pin("skill:{name}, phase:1")` 钉到上下文 → 严格按 skill 内步骤执行。skill 内的 phase gate 是硬约束（如"Phase 3 必须读全文，摘要不算"），不得跳过。
+3. **未命中 → 跳过**：直接进入 STAGE-1，不额外操作。
+4. **完成后 unpin**：skill 所有 phase 执行完毕，`unpin` 取下。
+
+skill 文件格式：`knowledge/skills/{name}.md`，含 `## 触发`（匹配关键词）、`## 步骤`（可执行序列）、`## 硬约束`（不可跳过的规则）。
+<!-- /SKILL-GATE -->
 
 <!-- STAGE-1: 设计/分析 -->
 ## STAGE-1: 设计与拆解
@@ -131,5 +151,5 @@ pin 钉一句话决定，unpin 取下。短、原子。pin(durable=true) → 会
 _inject_memory_triggers：用户输入关键词匹配记忆标题/指纹 → 策略型注入约束模板，知识型注入摘要
 _inject_completion_audit：改动晚于绿测则挂尾提示
 _inject_citation_audit：引用未取证文件则挂尾提示
-_append_volatile_context：注入记忆索引 + 未完成长任务 + 会话钉板
+_append_volatile_context：注入记忆索引 + 未完成长任务 + 会话钉板 + 经验检索(相似历史任务教训)
 <!-- /AUTO-INJECT -->
