@@ -28,13 +28,16 @@ _ANCHOR_HEADING = "# 目标锚点"
 _gaps_reported = False
 # 建任务建议：同会话只提示一次，避免每轮唠叨
 _task_suggested = False
+# 经验检索：同会话只检索一次，避免重复注入
+_experience_reported = False
 
 
 def reset_gaps_cache() -> None:
-    """新会话开始时重置会话级一次性缓存（方向发现 + 建任务建议）。"""
-    global _gaps_reported, _task_suggested
+    """新会话开始时重置会话级一次性缓存（方向发现 + 建任务建议 + 经验检索）。"""
+    global _gaps_reported, _task_suggested, _experience_reported
     _gaps_reported = False
     _task_suggested = False
+    _experience_reported = False
 
 
 def maybe_suggest_task_nudge(requests_made: int, threshold: int) -> str | None:
@@ -168,8 +171,8 @@ def is_all_done() -> bool:
 
 
 def make_task_context_message() -> dict | None:
-    """生成 volatile 上下文消息：方向发现 + 长期目标 + 未完成长任务 + 被动进化反思。"""
-    global _gaps_reported
+    """生成 volatile 上下文消息：经验检索 + 方向发现 + 长期目标 + 未完成长任务 + 被动进化反思。"""
+    global _gaps_reported, _experience_reported
     parts: list[str] = []
 
     # ── 会话启动一次性检查：门通行证审计 + 方向发现（~5s）──
@@ -192,6 +195,16 @@ def make_task_context_message() -> dict | None:
             "📋 你们共同的长期目标（tasks/ambitions.md），"
             "所有决策的弱方向参考：\n\n" + read_ambitions()
         )
+
+    # ── 经验检索：有未完成任务时，搜索相似历史任务注入教训 ──
+    if not _experience_reported and has_unfinished():
+        _experience_reported = True
+        from .experience import format_experience_context, search_similar_tasks
+        task_text = read_current()
+        similar = search_similar_tasks(task_text, top_k=3)
+        exp_ctx = format_experience_context(similar)
+        if exp_ctx:
+            parts.append(exp_ctx)
 
     # ── 全完成自动归档（B 方案：下游兜底）──
     if is_all_done():
