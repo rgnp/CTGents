@@ -380,11 +380,11 @@ _STATS_DIR = Path(__file__).resolve().parent.parent / "stats"
 _DUMP_PAYLOADS = os.getenv("CTG_DUMP_PAYLOADS", "").strip().lower() not in ("", "0", "false", "no")
 _PAYLOAD_DIR = _STATS_DIR / "payloads"
 
-# KVCache 隔离实验（实验性，premise 未证）：CTG_KVCACHE_USER_ID=1 时给每次请求加
-# extra_body={"user_id": "ctgents-<session>"}。DeepSeek 前缀缓存文档上按 prefix 内容、
-# 未说按 user_id 分区——此旋钮仅用于测「多进程共用 key 是否互挤缓存」假设，别当答案。
-# 注意：若 DeepSeek 不接受 extra_body 可能 400，故默认关。
-_KVCACHE_USER_ID = os.getenv("CTG_KVCACHE_USER_ID", "").strip().lower() not in ("", "0", "false", "no")
+# 每次请求带恒定 user_id（默认开）：extra_body={"user_id": "ctgents"}，对所有请求/会话
+# 恒定不变。若 DeepSeek 按 user_id 做缓存亲和/分区，恒定 key 才能让前缀缓存跨请求稳定复用；
+# 旧版按 <session> 取 key——session_id 一变就换 key、缓存断片（用户要求"每次 user_id 必须相同"）。
+# CTG_KVCACHE_USER_ID=0 可关（万一 DeepSeek 拒收 extra_body 报 400 时降级用）。
+_KVCACHE_USER_ID = os.getenv("CTG_KVCACHE_USER_ID", "1").strip().lower() not in ("0", "false", "no")
 
 # 取证用运行时快照（与 _last_api_usage 同模式：请求时写、落盘时读）。
 _last_canonical_request: dict | None = None      # 上次真实 wire 请求字段
@@ -610,9 +610,11 @@ def _hash_obj(obj: object) -> str:
 
 
 def _build_extra_body() -> dict | None:
-    """KVCache 隔离实验：开关开时返回带 user_id 的 extra_body，否则 None。"""
-    if _KVCACHE_USER_ID and _current_session_id:
-        return {"user_id": f"ctgents-{_current_session_id[:32]}"}
+    """每次请求带恒定 user_id（默认开）：跨所有请求/会话恒为 "ctgents"，绝不随 session
+    变——DeepSeek 若按 user_id 做缓存亲和，恒定 key 才能让前缀缓存稳定复用。
+    """
+    if _KVCACHE_USER_ID:
+        return {"user_id": "ctgents"}
     return None
 
 
