@@ -262,6 +262,9 @@ def _append_log_section(lines: list[str], log_msgs: list[dict]) -> None:
 
 def _append_tail_section(lines: list[str], log_msgs: list[dict]) -> None:
     """在尾部注入段追加各注入标签的命中状态。
+
+    _tail_tags 是一张扫描清单：每轮在 log 里查这几类尾部注入本轮是否触发。
+    [ ] = 本轮未触发（条件注入，条件不满足就为空，不代表功能不存在）。
     去重扫描：同一条消息多标签命中只报一次完整长度，其余标"与上同条"。
     """
     lines.append("")
@@ -269,12 +272,14 @@ def _append_tail_section(lines: list[str], log_msgs: list[dict]) -> None:
 
     from .session_pins import PINBOARD_MARKER
     _tail_tags: list[tuple[str, str]] = [
-        ("主动进化 · 方向发现", "方向发现"),
-        ("未完成的长任务", "长任务续做"),
-        ("被动进化发现", "被动反思"),
+        # completion_audit.py — 改动晚于绿测 / 改文件前没先读
+        ("本会话最后一次代码改动", "完成自检"),
+        ("本轮你修改了文件", "改前未读"),
+        # citation_audit.py — 引用了没取证过的代码文件
+        ("你在回复里给了", "引用自检·路径"),
+        ("你的回复用代码体引用了", "引用自检·标识符"),
+        # session_pins.py — 会话钉板
         (PINBOARD_MARKER, "钉板"),
-        ("[提醒] 检索", "提醒检索"),
-        ("⏪ 对话归档", "压缩归档"),
     ]
 
     seen_ids: set[int] = set()
