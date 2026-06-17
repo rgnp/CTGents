@@ -143,7 +143,7 @@ class TestTestTimeoutFloor:
 class TestRunAsync:
     def test_start_returns_job_id(self):
         result = run_async("python -c \"print('ok')\"", timeout=10)
-        assert "已启动" in result
+        assert "已后台启动" in result
         job_id = _extract_job_id(result)
         assert job_id.startswith("job-")
 
@@ -199,10 +199,43 @@ class TestRunAsync:
                 proc.kill()
 
 
+class TestDrainFinishedJobs:
+    """V1 通知模型：REPL 回合间收割已完成作业 → 通知，取代 agent poll 忙等。"""
+
+    def test_drain_returns_finished_and_removes(self):
+        exec_mod._jobs.clear()
+        result = run_async("python -c \"print('drained-ok')\"", timeout=10)
+        job_id = _extract_job_id(result)
+        time.sleep(1.0)
+        notices = exec_mod.drain_finished_jobs()
+        assert any("drained-ok" in n and job_id in n for n in notices), notices
+        assert job_id not in exec_mod._jobs, "收割后必须从 _jobs 移除"
+
+    def test_drain_skips_running(self):
+        exec_mod._jobs.clear()
+        result = run_async("python -c \"__import__('time').sleep(30)\"", timeout=60)
+        job_id = _extract_job_id(result)
+        try:
+            assert exec_mod.drain_finished_jobs() == [], "仍在跑的作业不该被收割"
+            assert job_id in exec_mod._jobs
+            assert exec_mod.running_job_count() >= 1
+        finally:
+            with contextlib.suppress(Exception):
+                exec_mod._jobs[job_id]["proc"].kill()
+            exec_mod._jobs.clear()
+
+    def test_drain_marks_failed(self):
+        exec_mod._jobs.clear()
+        run_async("python -c \"raise SystemExit(3)\"", timeout=10)
+        time.sleep(1.0)
+        notices = exec_mod.drain_finished_jobs()
+        assert any("exit=3" in n and "❌" in n for n in notices), notices
+
+
 class TestJobExecute:
     def test_run_async_via_execute(self):
         out = exec_mod.execute("run_async", {"command": "python -c \"print('x')\"", "timeout": 10})
-        assert "已启动" in out
+        assert "已后台启动" in out
 
     def test_poll_via_execute(self):
         exec_mod._jobs.clear()

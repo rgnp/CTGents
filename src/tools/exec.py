@@ -210,8 +210,8 @@ TOOLS_EXEC = [
         "function": {
             "name": "run_async",
             "description": (
-                "异步启动一个 Shell 命令（不阻塞），返回 job_id。"
-                "之后用 poll 查询状态/收结果。适合长命令（全量测试等）。"
+                "后台启动一个 Shell 命令（不阻塞），返回 job_id。适合长命令（全量测试等）。"
+                "完成后系统会自动通知，无需 poll——派发后直接结束本轮或继续别的事。"
             ),
             "parameters": {
                 "type": "object",
@@ -239,9 +239,8 @@ TOOLS_EXEC = [
         "function": {
             "name": "poll",
             "description": (
-                "查询异步命令的状态。返回 running/done。"
-                "done 时返回完整 stdout/stderr + exit_code。"
-                "先调 run_async 获取 job_id。"
+                "（通常不需要——后台作业完成会自动通知你。）查询某个异步 job 状态，"
+                "仍在跑返回 running，完成返回 stdout/stderr + exit_code。"
             ),
             "parameters": {
                 "type": "object",
@@ -423,11 +422,58 @@ def run_async(command: str, timeout: int = 120, workdir: str | None = None) -> s
         job_id = _start_job(command, timeout, workdir)
     except ValueError as e:
         return str(e)
-    return f"🚀 已启动 job {job_id}: {command}（超时 {timeout}s）。用 poll({job_id!r}) 查状态。"
+    return (
+        f"🚀 已后台启动 job {job_id}: {command}（超时 {timeout}s）。"
+        f"完成后会自动通知你——不要 poll 轮询，本轮可直接结束或去做别的事。"
+    )
 
 
 def poll_job(job_id: str) -> str:
     return _poll_job(job_id)
+
+
+def running_job_count() -> int:
+    """当前在跑的后台作业数（状态栏只读用，廉价）。"""
+    with _jobs_lock:
+        return len(_jobs)
+
+
+def drain_finished_jobs() -> list[str]:
+    """收割所有已结束的后台作业，返回完成通知（每条一段）。
+
+    非阻塞：只 communicate 已结束的进程，未结束的留着下次收。REPL 在回合间调用
+    → 「派发即停 + 完成自动通知」模型，取代 agent 反复 poll 忙等（那是刷屏 + 把
+    216s 的活 babysit 成 10 分钟体感的根，见 [[ctgents-test-gate-speed]]）。
+    """
+    notices: list[str] = []
+    with _jobs_lock:
+        items = list(_jobs.items())
+    for job_id, job in items:
+        proc = job["proc"]
+        if proc.poll() is None:
+            continue  # 仍在运行，下次再收
+        elapsed = time.time() - job["created_at"]
+        try:
+            stdout_bytes, stderr_bytes = proc.communicate(timeout=5)
+        except Exception:
+            continue
+        with _jobs_lock:
+            _jobs.pop(job_id, None)
+        stdout = stdout_bytes.decode("utf-8", errors="replace") if stdout_bytes else ""
+        stderr = stderr_bytes.decode("utf-8", errors="replace") if stderr_bytes else ""
+        rc = proc.returncode
+        parts: list[str] = []
+        if stdout.strip():
+            parts.append(stdout.rstrip())
+        if stderr.strip():
+            parts.append(f"[stderr]\n{stderr.rstrip()}")
+        output = "\n".join(parts) if parts else "(无输出)"
+        mark = "✅" if rc == 0 else "❌"
+        notices.append(
+            f"{mark} 后台 job {job_id} 完成（exit={rc}, {elapsed:.0f}s）: {job['command']}\n"
+            + _truncate_output(output)
+        )
+    return notices
 
 
 # ── 调度 ──

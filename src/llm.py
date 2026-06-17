@@ -805,7 +805,9 @@ def _invoke_llm_eager(
 
     def on_tool_ready(idx: int, name: str, args_json: str) -> None:
         """流式线程回调：参数完整 → 若是 SAFE 工具，立即提交执行。"""
-        if name not in _PARALLEL_SAFE:
+        # poll 是阻塞的时变读：预跑它占线程 + 刷屏、且省不了延迟（后台作业已改为完成
+        # 自动通知、不靠 poll）。其余 parallel-safe 读照常 eager。
+        if name not in _PARALLEL_SAFE or name == "poll":
             return
         try:
             args = json.loads(args_json)

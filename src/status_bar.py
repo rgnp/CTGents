@@ -161,6 +161,15 @@ def _build(ctx, session_id: str):
         dlabel = f"Δmiss {_fmt_k(lt['miss'])}"
         segs.append(f"<ansired>{dlabel} 突刺</ansired>" if lt.get("spike") else dlabel)
 
+    # ── 后台作业（运行中作业数）──
+    try:
+        from .tools.exec import running_job_count
+        njobs = running_job_count()
+        if njobs:
+            segs.append(f"⏳{njobs} 后台")
+    except Exception:
+        pass
+
     # ── 当前任务 ──
     from .tasks import has_unfinished, read_current
     if has_unfinished():

@@ -662,8 +662,17 @@ def main() -> None:
             else:
                 pass
 
+    _pending_job_notices: list[str] = []
     try:
         while True:
+            # 收割已完成的后台作业 → 打印通知 + 缓存到下条用户消息（取代 agent poll 忙等）
+            try:
+                from .tools.exec import drain_finished_jobs
+                for _notice in drain_finished_jobs():
+                    print(f"\n{_notice}\n")
+                    _pending_job_notices.append(_notice)
+            except Exception:
+                pass
             try:
                 if _use_rich_input:
                     from . import status_bar
@@ -721,6 +730,12 @@ def main() -> None:
                         session_id = run_agent_turn(ctx, last_user, session_id)
                 continue
 
+            if _pending_job_notices:
+                user_input = (
+                    "【后台作业完成】\n" + "\n\n".join(_pending_job_notices)
+                    + "\n\n【用户消息】\n" + user_input
+                )
+                _pending_job_notices.clear()
             try:
                 session_id = run_agent_turn(ctx, user_input, session_id)
             except BaseException as e:
