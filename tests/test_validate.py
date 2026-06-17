@@ -173,10 +173,17 @@ class TestValidationReport:
 
 
 class TestValidate:
-    @pytest.mark.slow  # validate([]) 跑完整流水线(嵌套 pytest+coverage，实测 ~136s)，移出快速门
     def test_validate_no_files(self):
-        """Validate 空文件列表 — 不崩。"""
-        report = validate([])
+        """Validate 空文件列表 — 不崩。
+
+        Phase-2 沙箱跑的是嵌套全量 pytest（~120s，与"空输入"无关、不随 changed_files
+        变化），mock 掉，只验空输入下控制流产出合法报告。原版让此单测吃满 ~120s、占
+        全量套件近一半（见 ctgents-test-gate-speed item 2/9）；去利刃后回归快速门、不再标 slow。
+        """
+        from unittest.mock import MagicMock, patch
+        fake_sand = MagicMock(result=Result.PASS, details="")
+        with patch("src.validate.sandbox_tests", return_value=fake_sand):
+            report = validate([])
         assert report.overall in (Result.PASS, Result.FAIL, Result.TIMEOUT)
 
     def test_validate_syntax_error(self, tmp_path):
