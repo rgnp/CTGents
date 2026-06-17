@@ -227,8 +227,13 @@ TOOLS_GIT = [
 # ── Git 命令执行辅助 ──
 
 
-def _git(args: list[str], cwd: str | None = None) -> dict:
-    """执行 Git 命令，返回结构化结果。"""
+def _git(args: list[str], cwd: str | None = None, timeout: int = 30) -> dict:
+    """执行 Git 命令，返回结构化结果。
+
+    timeout 默认 30s（status/add/log 都够）；commit 会触发 pre-commit 钩子跑
+    pytest（80–220s），调用方必须抬高超时，否则 30s 掐断会把"慢但会成功的门禁"
+    伪装成提交失败、引发重试轮询/中断。
+    """
     workdir = Path(cwd).resolve() if cwd else Path.cwd()
     try:
         result = subprocess.run(
@@ -236,7 +241,7 @@ def _git(args: list[str], cwd: str | None = None) -> dict:
             capture_output=True,
             encoding="utf-8",
             errors="replace",
-            timeout=30,
+            timeout=timeout,
             cwd=workdir,
         )
         return {
@@ -246,7 +251,7 @@ def _git(args: list[str], cwd: str | None = None) -> dict:
             "returncode": result.returncode,
         }
     except subprocess.TimeoutExpired:
-        return {"success": False, "stdout": "", "stderr": "Git 命令执行超时（30 秒）", "returncode": -1}
+        return {"success": False, "stdout": "", "stderr": f"Git 命令执行超时（{timeout} 秒）", "returncode": -1}
     except FileNotFoundError:
         return {"success": False, "stdout": "", "stderr": "未找到 Git 命令，请确认已安装 Git", "returncode": -1}
     except OSError as e:
@@ -608,8 +613,12 @@ def git_commit(message: str | None = None, auto_stage: bool = True, path: str | 
     if not message:
         message = _generate_commit_message(str(workdir))
 
-    # 提交（pre-commit 钩子在此跑质量门禁；门禁失败输出多在 stdout）
-    r2 = _git(["commit", "-m", message], str(workdir))
+    # 提交（pre-commit 钩子在此跑质量门禁；门禁失败输出多在 stdout）。
+    # 门禁跑 pytest 可达 80–220s：commit 超时必须抬到 git_commit_timeout_floor，
+    # 否则 _git 默认 30s 会掐断门禁，把成功的慢门禁误报成提交失败（→ 重试轮询/中断）。
+    from ..params import RUNTIME
+    r2 = _git(["commit", "-m", message], str(workdir),
+              timeout=RUNTIME.git_commit_timeout_floor)
     if not r2["success"]:
         detail = (r2["stdout"] + r2["stderr"]).strip()
         return f"提交失败（可能是 pre-commit 质量门禁未通过）:\n{detail[-1800:]}"

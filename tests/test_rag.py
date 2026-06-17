@@ -7,6 +7,8 @@ documents 范围内，且 num_docs == len(documents)，否则 search() 会 Index
 import sys
 from pathlib import Path
 
+import pytest
+
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from src.tools import rag
@@ -342,11 +344,13 @@ def test_execute_unknown_tool():
     assert result is None
 
 
+@pytest.mark.slow
 def test_execute_rag_status():
     result = rag.execute("rag_status", {})
     assert isinstance(result, str)
 
 
+@pytest.mark.slow
 def test_execute_rag_index():
     """rag_index 通过 execute 正常调度。"""
     # 不传 path，用当前项目（会迅速结束因为已有索引）
@@ -354,6 +358,7 @@ def test_execute_rag_index():
     assert isinstance(result, str)
 
 
+@pytest.mark.slow
 def test_execute_rag_query():
     result = rag.execute("rag_query", {"query": "def main"})
     assert isinstance(result, str)
