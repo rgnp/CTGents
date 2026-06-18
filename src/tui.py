@@ -283,23 +283,22 @@ class SplashScreen(Screen):
 
     CSS = """
     SplashScreen { align: center middle; background: $background; }
-    #splashrow { width: auto; height: auto; align: center middle; }
-    #left_btn, #right_btn { width: auto; height: 100%; align: center middle; }
-    #logo_area { width: auto; height: auto; margin: 0 3; }
+    #splashwrap { width: auto; height: auto; align: center middle; }
+    #logo_area { width: auto; height: auto; margin-bottom: 1; }
     #logo_area > Static { width: auto; height: 1; }
-    #left_btn Button, #right_btn Button {
-        width: 10; height: 1; border: none;
+    #buttons { width: 100%; height: auto; align: center middle; margin-top: 1; }
+    #buttons Button {
+        width: 12; height: 1; border: none; margin: 0 2;
         content-align: center middle; background: $surface; color: $primary;
     }
-    #left_btn Button:hover, #right_btn Button:hover { background: $primary; color: $background; }
+    #buttons Button:hover { background: $primary; color: $background; }
     """
 
     def compose(self) -> ComposeResult:
-        # 左按钮 — Logo — 右按钮，对称分布在 CTGENT 两侧
-        with Horizontal(id="splashrow"):
-            yield Vertical(id="left_btn")
+        # Logo 在上、两个按钮并排在下方居中（对称分布在 CTGENT 中线两侧）
+        with Vertical(id="splashwrap"):
             yield Vertical(id="logo_area")
-            yield Vertical(id="right_btn")
+            yield Horizontal(id="buttons")
 
     def on_mount(self) -> None:
         self._rows = _banner_rows("CTGENT")
@@ -324,8 +323,9 @@ class SplashScreen(Screen):
             return
         self._buttons_shown = True
         with contextlib.suppress(Exception):
-            self.query_one("#left_btn").mount(Button("新游戏", id="new_game"))
-            self.query_one("#right_btn").mount(Button("继续游玩", id="load_game"))
+            btn_area = self.query_one("#buttons", Horizontal)
+            btn_area.mount(Button("新游戏", id="new_game"))
+            btn_area.mount(Button("继续游玩", id="load_game"))
             self.query_one("#new_game", Button).focus()
 
     @work(thread=True)
