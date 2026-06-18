@@ -35,9 +35,24 @@ def _fmt_tool(name: str, args: dict) -> tuple[str, str]:
     return label, detail
 
 
+def _strip_user_wrappers(content: str) -> str:
+    """剥掉 process_turn 给用户消息加的内部包裹（预读/后台作业完成），回放时只留真问题。"""
+    if "── 用户问题 ──" in content:
+        content = content.split("── 用户问题 ──", 1)[1].strip()
+    if "【用户消息】" in content:
+        content = content.split("【用户消息】", 1)[1].strip()
+    return content
+
+
 def _status_line(ctx, session_id: str) -> str:
     """底部状态条文本（纯文本版，与 status_bar._build 同源、不带 prompt_toolkit HTML）。"""
     segs: list[str] = []
+    if session_id:
+        try:
+            from .session import get_session_name
+            segs.append(f"📁 {get_session_name(session_id)}")
+        except Exception:
+            pass
     try:
         from .config import MAX_CONTEXT_TOKENS
         from .tools.tokens import count_messages_tokens
@@ -133,7 +148,7 @@ class CTGentsTUI(App):
         if self._sessions and self.session_id is None:
             self._show_picker()
         else:
-            self._echo_recent()
+            self._echo_conversation()
         self.query_one("#prompt", Input).focus()
         self.set_interval(0.08, self._drain_events)    # 排空事件 → 渲染
         self.set_interval(0.8, self._refresh_status)    # 状态条
@@ -216,8 +231,8 @@ class CTGentsTUI(App):
         from . import status_bar
         status_bar.reset()
         self.query_one("#transcript").remove_children()
-        self._echo_recent()
-        self._mount(f"已加载会话 [{target}]", "meta")
+        self._echo_conversation()
+        self._refresh_status()   # 会话名即时进状态栏（取代"已加载会话"提示）
 
     def _apply_clear(self, r) -> None:
         from .main import _append_volatile_context, _make_prefix_msgs
@@ -274,7 +289,10 @@ class CTGentsTUI(App):
 
     # ── 事件排空（UI 线程）──
     async def _drain_events(self) -> None:
-        transcript = self.query_one("#transcript", VerticalScroll)
+        try:
+            transcript = self.query_one("#transcript", VerticalScroll)
+        except Exception:
+            return  # 拆屏/退出途中定时器仍可能触发，#transcript 已不在 → 静默跳过
         changed = False
         while True:
             try:
@@ -319,22 +337,33 @@ class CTGentsTUI(App):
 
     # ── 辅助 ──
     def _mount(self, text: str, cls: str) -> None:
-        w = Static(text, classes=cls)
-        self.query_one("#transcript", VerticalScroll).mount(w)
-        self.query_one("#transcript", VerticalScroll).scroll_end(animate=False)
+        t = self.query_one("#transcript", VerticalScroll)
+        t.mount(Static(text, classes=cls))
+        t.scroll_end(animate=False)
 
-    def _echo_recent(self, count: int = 4) -> None:
-        msgs = [m for m in self.ctx.all if m.get("role") != "system"]
-        if not msgs:
-            return
-        for m in msgs[-count * 2:]:
-            content = (m.get("content") or "")
-            if len(content) > 300:
-                content = content[:300] + "…"
-            if m["role"] == "user":
-                self._mount("你 " + content, "user")
-            else:
-                self._mount(content, "meta")
+    def _mount_md(self, text: str) -> None:
+        t = self.query_one("#transcript", VerticalScroll)
+        t.mount(Markdown(text, classes="agent"))
+        t.scroll_end(animate=False)
+
+    def _echo_conversation(self) -> None:
+        """加载会话后回放【完整原对话】：用户消息 + assistant 文字回复(markdown)。
+
+        只放对话本身——跳过 tool 结果 / system 注入 / 空的 tool-call 消息，
+        那些是用户说的"加载后好多之前没有的信息"噪声（原本不在可见对话里）。
+        """
+        t = self.query_one("#transcript", VerticalScroll)
+        for m in self.ctx.log:
+            role = m.get("role")
+            content = (m.get("content") or "").strip()
+            if role == "user":
+                text = _strip_user_wrappers(content)
+                if text:
+                    self._mount("你 " + text, "user")
+            elif role == "assistant" and content:
+                self._mount_md(content)
+            # tool / system / 空 assistant(纯 tool_calls) → 跳过
+        t.scroll_end(animate=False)
 
     def _refresh_status(self) -> None:
         import contextlib

@@ -6,7 +6,48 @@
 """
 
 from src.cache_context import CacheContext
-from src.tui import CTGentsTUI, _fmt_tool, _status_line
+from src.tui import CTGentsTUI, _fmt_tool, _status_line, _strip_user_wrappers
+
+
+class TestStripUserWrappers:
+    def test_strips_preread_wrapper(self):
+        assert _strip_user_wrappers("[预读]x\n── 用户问题 ──\n真问题") == "真问题"
+
+    def test_strips_job_notice_wrapper(self):
+        assert _strip_user_wrappers("【后台作业完成】d\n\n【用户消息】\n继续") == "继续"
+
+    def test_plain_unchanged(self):
+        assert _strip_user_wrappers("普通消息") == "普通消息"
+
+
+class TestEchoConversation:
+    """加载会话只回放干净对话：跳过 tool 结果 / system 注入 / 空 tool-call 消息。"""
+
+    def test_skips_tool_and_system_noise(self):
+        import asyncio
+
+        from textual.widgets import Markdown
+
+        async def go():
+            ctx = CacheContext()
+            app = CTGentsTUI(ctx, None, [])
+            async with app.run_test() as pilot:
+                await pilot.pause()
+                ctx.log = [
+                    {"role": "system", "content": "内部注入"},
+                    {"role": "user", "content": "问题A"},
+                    {"role": "assistant", "content": None,
+                     "tool_calls": [{"id": "1", "function": {"name": "x"}}]},
+                    {"role": "tool", "tool_call_id": "1", "content": "TOOLDUMP巨量"},
+                    {"role": "assistant", "content": "**回复B**"},
+                ]
+                app.query_one("#transcript").remove_children()
+                app._echo_conversation()
+                await pilot.pause()
+                assert len(list(app.query(".user"))) == 1, "只 1 条用户消息"
+                assert len(list(app.query(Markdown))) == 1, "只有有文字的 assistant 渲染"
+
+        asyncio.run(go())
 
 
 class TestFmtTool:
