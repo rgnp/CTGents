@@ -51,26 +51,50 @@ NES_THEME = Theme(
     dark=True,
 )
 
-# ── 像素大字 banner：斜体 + 镂空（box-drawing 轮廓 + 缓和右倾）──
+# ── 像素大字 banner：斜体 + 实心立体（实心粗笔 + 右下投影 3D + 右倾）──
 _FONT = {
-    "C": ["╔════", "║    ", "║    ", "║    ", "╚════"],
-    "T": ["═════", "  ║  ", "  ║  ", "  ║  ", "  ║  "],
-    "G": ["╔════", "║    ", "║ ══╗", "║   ║", "╚═══╝"],
-    "E": ["╔════", "║    ", "╠═══ ", "║    ", "╚════"],
-    "N": ["║╲  ║", "║ ╲ ║", "║ ╲ ║", "║  ╲║", "║   ║"],
-    "S": ["╔════", "║    ", "╚═══╗", "    ║", "════╝"],
+    "C": ["██████", "██    ", "██    ", "██    ", "██████"],
+    "T": ["██████", "  ██  ", "  ██  ", "  ██  ", "  ██  "],
+    "G": ["██████", "██    ", "██ ███", "██  ██", "██████"],
+    "E": ["██████", "██    ", "█████ ", "██    ", "██████"],
+    "N": ["██  ██", "███ ██", "██████", "██ ███", "██  ██"],
+    "S": ["██████", "██    ", "██████", "    ██", "██████"],
 }
-# 2-step 斜体：上两行右移 2、中两行右移 1、底行 0 → 右倾而竖笔不拉成楼梯
-_BANNER_LEAD = [2, 2, 1, 1, 0]
+_BANNER_LEAD = [3, 2, 2, 1, 0]   # 斜体右倾
+_BANNER_GAP = 3
+_BANNER_MAIN = "#5cc8ff"         # 亮青字身
+_BANNER_SHADOW = "#1a5276"       # 暗青投影（立体）
 
 
 def _banner(text: str) -> str:
+    """返回带 Rich 颜色标记的斜体立体大字：字身亮青、右下投影暗青。"""
     rows = ["", "", "", "", ""]
     for ch in text:
-        glyph = _FONT.get(ch, ["     "] * 5)
+        glyph = _FONT.get(ch, ["      "] * 5)
         for i in range(5):
-            rows[i] += glyph[i] + "  "
-    return "\n".join(" " * _BANNER_LEAD[i] + rows[i].rstrip() for i in range(5))
+            rows[i] += glyph[i] + " " * _BANNER_GAP
+    rows = [" " * _BANNER_LEAD[i] + rows[i] for i in range(5)]
+    w = max(len(r) for r in rows)
+    grid = [list(r.ljust(w)) for r in rows]
+    out = [[" "] * w for _ in range(5)]
+    for r in range(5):                       # 先铺右下投影
+        for c in range(w):
+            if grid[r][c] == "█" and r + 1 < 5 and c + 1 < w:
+                out[r + 1][c + 1] = "░"
+    for r in range(5):                       # 再铺字身（盖住投影）
+        for c in range(w):
+            if grid[r][c] == "█":
+                out[r][c] = "█"
+    lines = []
+    for row in out:
+        parts = [
+            f"[{_BANNER_MAIN}]█[/]" if ch == "█"
+            else f"[{_BANNER_SHADOW}]░[/]" if ch == "░"
+            else " "
+            for ch in row
+        ]
+        lines.append("".join(parts).rstrip())
+    return "\n".join(lines)
 
 
 # ── 纯函数辅助 ──
@@ -141,11 +165,11 @@ def _status_line(ctx, session_id: str) -> str:
 # 开屏
 # ═══════════════════════════════════════════════════════
 class SplashScreen(Screen):
-    MIN_SECONDS = 1.2   # 开屏至少显示这么久（动画感）；测试可调 0
+    MIN_SECONDS = 2.5   # 开屏至少显示这么久（动画感）；测试可调 0
 
     CSS = """
     SplashScreen { align: center middle; background: $background; }
-    #logo { color: $primary; text-style: bold; content-align: center middle; }
+    #logo { content-align: center middle; }
     #boot { color: $accent; content-align: center middle; margin-top: 2; }
     """
 
@@ -173,6 +197,8 @@ class SplashScreen(Screen):
             _main._append_volatile_context(self.app.ctx)
         except Exception:
             pass
+        with contextlib.suppress(Exception):
+            import src.llm  # noqa: F401  # 预热重栈（已秒显，后台加载，第一轮不卡）
         elapsed = time.monotonic() - self._t0
         if elapsed < self.MIN_SECONDS:    # 开屏动画感：至少显示一会
             time.sleep(self.MIN_SECONDS - elapsed)
@@ -185,9 +211,11 @@ class SplashScreen(Screen):
 class SaveSelectScreen(Screen):
     CSS = """
     SaveSelectScreen { align: center middle; background: $background; }
+    #selectwrap { width: auto; height: auto; align: center top; }
+    #logo { content-align: center middle; width: 100%; margin-bottom: 1; }
     #savebox { border: round $primary; padding: 1 2; width: 56; height: auto; background: $surface; }
     #savetitle { color: $accent; text-style: bold; content-align: center middle; margin-bottom: 1; }
-    #saves { height: auto; max-height: 16; background: $surface; }
+    #saves { height: auto; max-height: 14; background: $surface; }
     #saves > ListItem { padding: 0 1; color: $foreground; }
     #saves > ListItem.--highlight { background: $primary; color: $background; text-style: bold; }
     #savehint { color: $primary-darken-1; content-align: center middle; margin-top: 1; }
@@ -199,10 +227,12 @@ class SaveSelectScreen(Screen):
         for sid in self.app.sessions:
             items.append(ListItem(Label(get_session_name(sid)), name=sid))
         items.append(ListItem(Label("+ NEW GAME"), name="__new__"))
-        with Vertical(id="savebox"):
-            yield Static("◆ SELECT  SAVE ◆", id="savetitle")
-            yield ListView(*items, id="saves")
-            yield Static("↑↓ 选择   ·   Enter 进入   ·   Ctrl+C 退出", id="savehint")
+        with Vertical(id="selectwrap"):
+            yield Static(_banner("CTGENTS"), id="logo")   # 开屏大字延续到存档页
+            with Vertical(id="savebox"):
+                yield Static("◆ SELECT  SAVE ◆", id="savetitle")
+                yield ListView(*items, id="saves")
+                yield Static("↑↓ 选择   ·   Enter 进入   ·   Ctrl+C 退出", id="savehint")
 
     def on_mount(self) -> None:
         self.query_one("#saves", ListView).focus()

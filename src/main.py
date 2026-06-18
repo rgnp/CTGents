@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import logging
 import os
 import re
@@ -8,12 +10,16 @@ import traceback
 from collections.abc import Callable
 from datetime import datetime
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from .cache_context import CacheContext
 from .commands import dispatch as dispatch_cmd
-from .llm import TokenCallback, clear_interrupt, request_interrupt, run_conversation
 from .session import list_sessions, load_session, save_session
-from .tools._tool_meta import TOOL_LABELS
+
+# 重模块（llm→openai/tools ~1.1s、tools._tool_meta→trafilatura/tavily）延迟到使用处 import，
+# 让 `import src.main`（程序入口）从 ~1.3s 降到 ~0.2s → TUI 开屏秒显。第一轮真用时再加载。
+if TYPE_CHECKING:
+    from .llm import TokenCallback
 
 logging.basicConfig(
     level=logging.WARNING,
@@ -37,6 +43,8 @@ def _start_esc_listener() -> None:
         return
 
     import msvcrt  # Windows 专用
+
+    from .llm import clear_interrupt, request_interrupt
 
     _esc_listener_active = True
     clear_interrupt()
@@ -317,6 +325,7 @@ def process_turn(
     曾经的 auto_recall（embedding 每轮再搜 top-3 注入）与之重叠、且拖一个未声明的
     80MB sentence-transformers 依赖，已删。需要深挖某条记忆用 recall 工具。
     """
+    from .llm import run_conversation
     # 记忆触发：用户输入关键词匹配记忆标题 → 策略型注入约束模板，知识型注入摘要
     _inject_memory_triggers(ctx, user_input)
     # 预读优化：用户提到了文件路径，先读入上下文
@@ -442,6 +451,7 @@ def _make_display() -> tuple[TokenCallback, Callable[[], bool]]:
 
 def _on_tool(name: str, args: dict) -> None:
     from . import ui
+    from .tools._tool_meta import TOOL_LABELS
     label = TOOL_LABELS.get(name, name)
     detail = " ".join(f"{k}={v}" for k, v in args.items())
     if len(detail) > 80:
