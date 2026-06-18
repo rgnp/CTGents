@@ -285,15 +285,13 @@ class SplashScreen(Screen):
     SplashScreen { align: center middle; background: $background; }
     #logo_area { width: auto; height: auto; align: center middle; margin-bottom: 1; }
     #logo_area > Static { content-align: center middle; width: 100%; }
-    #hint { color: $primary-darken-1; content-align: center middle; margin-top: 1; height: 1; }
-    #buttons { width: auto; height: auto; align: center middle; margin-top: 1; }
-    #buttons > Button { margin: 0 2; min-width: 16; }
+    #buttons { width: auto; height: auto; align: center middle; margin-top: 2; }
+    #buttons > Button { margin: 0 2; }
     """
 
     def compose(self) -> ComposeResult:
         with Vertical():
             yield Vertical(id="logo_area")
-            yield Static("", id="hint")
             yield Horizontal(id="buttons")
 
     def on_mount(self) -> None:
@@ -308,12 +306,10 @@ class SplashScreen(Screen):
         if self._revealed < len(self._rows):
             row_text = self._rows[self._revealed]
             with contextlib.suppress(Exception):
-                self.query_one("#logo_area").mount(Static(row_text))
+                self.query_one("#logo_area").mount(Static(row_text, markup=True))
             self._revealed += 1
         if self._revealed >= len(self._rows):
             self._timer.stop()
-            with contextlib.suppress(Exception):
-                self.query_one("#hint", Static).update("◆ 选择操作 ◆")
             self._try_show_buttons()
 
     def _try_show_buttons(self) -> None:
@@ -322,8 +318,8 @@ class SplashScreen(Screen):
         self._buttons_shown = True
         with contextlib.suppress(Exception):
             btn_area = self.query_one("#buttons", Horizontal)
-            btn_area.mount(Button("新存档", id="new_game", variant="primary"))
-            btn_area.mount(Button("继续游玩", id="load_game", variant="default"))
+            btn_area.mount(Button("  新游戏  ", id="new_game"))
+            btn_area.mount(Button("  继续游玩  ", id="load_game"))
             btn_area.focus()
 
     @work(thread=True)
@@ -353,7 +349,6 @@ class SaveSelectScreen(Screen):
     CSS = """
     SaveSelectScreen { align: center middle; background: $background; }
     #selectwrap { width: auto; height: auto; align: center top; }
-    #logo { content-align: center middle; width: 100%; margin-bottom: 1; color: $primary; }
     #savebox { border: round $primary; padding: 1 2; width: 56; height: auto; background: $surface; }
     #savetitle { color: $accent; text-style: bold; content-align: center middle; margin-bottom: 1; }
     #saves { height: auto; max-height: 14; background: $surface; }
@@ -368,12 +363,10 @@ class SaveSelectScreen(Screen):
         for sid in self.app.sessions:
             items.append(ListItem(Label(get_session_name(sid)), name=sid))
         items.append(ListItem(Label("+ NEW GAME"), name="__new__"))
-        with Vertical(id="selectwrap"):
-            yield Static(_banner_plain("CTGENT"), id="logo")   # 开屏大字延续到存档页
-            with Vertical(id="savebox"):
-                yield Static("◆ SELECT  SAVE ◆", id="savetitle")
-                yield ListView(*items, id="saves")
-                yield Static("↑↓ 选择   ·   Enter 进入   ·   Ctrl+C 退出", id="savehint")
+        with Vertical(id="selectwrap"), Vertical(id="savebox"):
+            yield Static("◆ SELECT  SAVE ◆", id="savetitle")
+            yield ListView(*items, id="saves")
+            yield Static("↑↓ 选择   ·   Enter 进入   ·   Ctrl+C 退出", id="savehint")
 
     def on_mount(self) -> None:
         self.query_one("#saves", ListView).focus()
