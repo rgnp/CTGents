@@ -279,26 +279,24 @@ class SplashScreen(Screen):
     """
 
     MIN_SECONDS = 0.0       # 测试可调，默认 0（动画本身已有节奏）
-    ROW_INTERVAL = 0.04     # 每行间隔（秒）—— 加快，按钮早点出来
+    ROW_INTERVAL = 0.02     # 每行间隔（秒）—— 加快，按钮早点出来
 
     CSS = """
     SplashScreen { align: center middle; background: $background; }
-    #splashwrap { width: auto; height: auto; align: center middle; }
-    #logo_area { width: auto; height: auto; margin-bottom: 1; }
+    #logo_area { width: auto; height: auto; }
     #logo_area > Static { width: auto; height: 1; }
-    #buttons { width: 100%; height: auto; align: center middle; margin-top: 4; }
+    #buttons { width: auto; height: auto; margin-top: 4; }
     #buttons Button {
-        width: 16; height: 3; border: none; margin: 0 8; text-style: bold;
-        content-align: center middle; background: $surface; color: $primary;
+        width: 16; height: 1; border: none; margin: 0 12; text-style: bold;
+        background: transparent; color: $primary;
     }
-    #buttons Button:hover { background: $primary; color: $background; }
+    #buttons Button:hover { color: $accent; text-style: bold underline; }
     """
 
     def compose(self) -> ComposeResult:
-        # Logo 在上、两个按钮并排在下方居中（对称分布在 CTGENT 中线两侧）
-        with Vertical(id="splashwrap"):
-            yield Vertical(id="logo_area")
-            yield Horizontal(id="buttons")
+        # Logo 与按钮行各自被屏幕 align 居中；按钮行 auto 宽（含间距）→ 整体居中、两边拉开
+        yield Vertical(id="logo_area")
+        yield Horizontal(id="buttons")
 
     def on_mount(self) -> None:
         self._rows = _banner_rows("CTGENT")
@@ -319,7 +317,8 @@ class SplashScreen(Screen):
             self._try_show_buttons()
 
     def _try_show_buttons(self) -> None:
-        if self._buttons_shown or not self._ctx_ready or self._revealed < len(self._rows):
+        # 按钮只等 Logo 动画完成——不等 ctx（ctx 在后台建好，进聊天前足够完成）。
+        if self._buttons_shown or self._revealed < len(self._rows):
             return
         self._buttons_shown = True
         with contextlib.suppress(Exception):
@@ -331,15 +330,16 @@ class SplashScreen(Screen):
     @work(thread=True)
     def _init_ctx(self) -> None:
         from . import main as _main
-        try:
-            self.app.ctx.rebuild_prefix(_main._make_prefix_msgs())
-            _main._append_volatile_context(self.app.ctx)
-        except Exception:
-            pass
-        self._ctx_ready = True                                # 按钮不等重栈预热（~1s）
-        self.app.call_from_thread(self._try_show_buttons)
         with contextlib.suppress(Exception):
-            import src.llm  # noqa: F401  # 预热挪到按钮之后、后台继续，第一轮不卡
+            self.app.ctx.rebuild_prefix(_main._make_prefix_msgs())
+        self._ctx_ready = True                                # 按钮只需 prefix（~0.02s）即可显
+        self.app.call_from_thread(self._try_show_buttons)
+        # 较慢的部分挪到按钮之后、后台补（volatile ~0.2s / llm 预热 ~1s）——
+        # 用户点按钮到真正发第一轮之间足够它们跑完，不卡按钮出现。
+        with contextlib.suppress(Exception):
+            _main._append_volatile_context(self.app.ctx)
+        with contextlib.suppress(Exception):
+            import src.llm  # noqa: F401
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
         if event.button.id == "new_game":
@@ -546,6 +546,11 @@ class ChatScreen(Screen):
     def _agent_worker(self, text: str) -> None:
         from . import main as _main
         from . import ui
+        # 兜底：开屏 ctx 后台还没建好就被点进来发了第一句 → 这里(线程内)补建，保证有 prefix。
+        if not self.app.ctx.prefix:
+            with contextlib.suppress(Exception):
+                self.app.ctx.rebuild_prefix(_main._make_prefix_msgs())
+                _main._append_volatile_context(self.app.ctx)
         ev = self._events
 
         def make_display():
