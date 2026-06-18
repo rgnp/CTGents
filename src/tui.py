@@ -283,17 +283,23 @@ class SplashScreen(Screen):
 
     CSS = """
     SplashScreen { align: center middle; background: $background; }
-    #splashwrap { width: auto; height: auto; align: center middle; }
-    #logo_area { width: auto; height: auto; margin-bottom: 1; }
+    #splashrow { width: auto; height: auto; align: center middle; }
+    #left_btn, #right_btn { width: auto; height: 100%; align: center middle; }
+    #logo_area { width: auto; height: auto; margin: 0 3; }
     #logo_area > Static { width: auto; height: 1; }
-    #buttons { width: auto; height: auto; align: center middle; margin-top: 2; }
-    #buttons > Button { margin: 0 2; }
+    #left_btn Button, #right_btn Button {
+        width: 10; height: 1; border: none;
+        content-align: center middle; background: $surface; color: $primary;
+    }
+    #left_btn Button:hover, #right_btn Button:hover { background: $primary; color: $background; }
     """
 
     def compose(self) -> ComposeResult:
-        with Vertical(id="splashwrap"):
+        # 左按钮 — Logo — 右按钮，对称分布在 CTGENT 两侧
+        with Horizontal(id="splashrow"):
+            yield Vertical(id="left_btn")
             yield Vertical(id="logo_area")
-            yield Horizontal(id="buttons")
+            yield Vertical(id="right_btn")
 
     def on_mount(self) -> None:
         self._rows = _banner_rows("CTGENT")
@@ -318,10 +324,9 @@ class SplashScreen(Screen):
             return
         self._buttons_shown = True
         with contextlib.suppress(Exception):
-            btn_area = self.query_one("#buttons", Horizontal)
-            btn_area.mount(Button("  新游戏  ", id="new_game"))
-            btn_area.mount(Button("  继续游玩  ", id="load_game"))
-            btn_area.focus()
+            self.query_one("#left_btn").mount(Button("新游戏", id="new_game"))
+            self.query_one("#right_btn").mount(Button("继续游玩", id="load_game"))
+            self.query_one("#new_game", Button).focus()
 
     @work(thread=True)
     def _init_ctx(self) -> None:
