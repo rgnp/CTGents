@@ -77,9 +77,20 @@ def test_durable_flag_persists_on_redundant_add():
 
 def test_is_pinboard_msg():
     sp.add_pin("y")
-    assert sp.is_pinboard_msg({"role": "system", "content": sp.render_tail()})
+    # 认专属标记 _pinboard：make_pinboard_msg 造出来的才算
+    assert sp.is_pinboard_msg(sp.make_pinboard_msg())
     assert not sp.is_pinboard_msg({"role": "system", "content": "别的系统消息"})
-    assert not sp.is_pinboard_msg({"role": "user", "content": sp.render_tail()})
+    # 关键：即便内容逐字是钉板渲染文案，但没有 _pinboard 标记 → 不算（不靠内容认人，删不到它）
+    assert not sp.is_pinboard_msg({"role": "system", "content": sp.render_tail()})
+
+
+def test_make_pinboard_msg_marked():
+    """make_pinboard_msg 一定带 _pinboard 标记；空钉板返回 None。"""
+    assert sp.make_pinboard_msg() is None
+    sp.add_pin("z")
+    msg = sp.make_pinboard_msg()
+    assert msg["_pinboard"] is True and msg["role"] == "system"
+    assert sp.PINBOARD_MARKER in msg["content"]
 
 
 def test_promote_only_durable(monkeypatch):

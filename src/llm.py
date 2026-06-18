@@ -682,8 +682,19 @@ def _update_cache_stats(model_key: str, messages: list[dict], session_id: str = 
 
 
 def get_cache_stats(session_id: str = "") -> dict:
-    """返回指定会话的缓存命中统计，供 /context 使用。"""
-    data = _load_cache_stats(session_id) if session_id and session_id != _current_session_id else _CACHE_STATS
+    """返回指定会话的缓存命中统计，供 /context 使用。
+
+    兜底：新会话首轮无工具循环时 _ensure_session(real_id) 未触发，_current_session_id
+    仍为 ""，文件不存在——但 _CACHE_STATS 中有真实的首请求数据。此时用内存数据并补写文件。
+    """
+    if session_id and session_id != _current_session_id:
+        data = _load_cache_stats(session_id)
+        # 文件为空但内存有数据（新会话首请求已计入 _CACHE_STATS，尚未关联到 real_id）
+        if data.get("pro", {}).get("requests", 0) == 0 and _CACHE_STATS.get("pro", {}).get("requests", 0) > 0:
+            data = dict(_CACHE_STATS)
+            _save_cache_stats(session_id)  # 补写，下次直读文件
+    else:
+        data = _CACHE_STATS
 
     if not isinstance(data, dict):
         data = {"pro": dict(_EMPTY_STATS)}
@@ -1745,15 +1756,15 @@ def run_conversation(
                 # 记忆已移入缓存前缀（会话开始快照、会话内不变），不在轮内更新——
                 # 中途 remember 的新记忆靠对话上下文带过本会话，落盘后下次会话进前缀索引。
                 # 钉板变更后刷新 ctx.log 中的钉板消息（轮内 pin/unpin 即时生效，缓存安全挂尾）
-                from .session_pins import is_pinboard_msg, render_tail
+                from .session_pins import is_pinboard_msg, make_pinboard_msg
                 pin_idx = next((i for i, m in enumerate(ctx.log) if is_pinboard_msg(m)), -1)
-                pin_content = render_tail()
-                if pin_content and pin_idx >= 0:
-                    ctx.log[pin_idx] = {"role": "system", "content": pin_content, "_volatile": True}
-                elif pin_content and pin_idx < 0:
-                    ctx.log.append({"role": "system", "content": pin_content, "_volatile": True})
-                elif not pin_content and pin_idx >= 0:
-                    ctx.log.pop(pin_idx)  # 全 unpin 后移除空钉板消息
+                new_pin = make_pinboard_msg()
+                if new_pin and pin_idx >= 0:
+                    ctx.log[pin_idx] = new_pin
+                elif new_pin and pin_idx < 0:
+                    ctx.log.append(new_pin)
+                elif not new_pin and pin_idx >= 0:
+                    ctx.log.pop(pin_idx)  # 全 unpin 后移除空钉板消息(按 _pinboard 标记定位,精确)
                 # on_progress 不在循环内调用——移到最后只调用一次
             except Exception:
                 # 异常时补上 tool 结果消息，防止下次 API 调用因缺少 tool 消息而 400

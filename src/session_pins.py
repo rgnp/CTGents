@@ -86,9 +86,25 @@ def render_tail() -> str | None:
     return "\n".join(lines)
 
 
+def make_pinboard_msg() -> dict | None:
+    """构建钉板尾部消息(带专属标记 _pinboard);空则返回 None。
+
+    所有创建钉板消息的地方都走这里,保证消息一定带 _pinboard 标记——
+    这样轮内定位/删除靠标记键(is_pinboard_msg)而非内容子串,文案怎么改都不误删。
+    """
+    content = render_tail()
+    if not content:
+        return None
+    return {"role": "system", "content": content, "_volatile": True, "_pinboard": True}
+
+
 def is_pinboard_msg(msg: dict) -> bool:
-    """判断一条 log 消息是否是钉板消息(轮内刷新定位用)。"""
-    return msg.get("role") == "system" and PINBOARD_MARKER in (msg.get("content") or "")
+    """判断一条 log 消息是否是钉板消息(轮内刷新定位/删除用)。
+
+    认专属标记键 _pinboard,不认内容——内容文案改一个字也不会误判、误删
+    (对照 _task_ctx/_completion_audit 等同款做法)。
+    """
+    return bool(msg.get("_pinboard"))
 
 
 def _promote_name(text: str) -> str:
