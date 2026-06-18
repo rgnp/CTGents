@@ -71,12 +71,10 @@ class TestScreenFlow:
         async def go():
             app = CTGentsApp(CacheContext(), None, ["a", "b"])
             async with app.run_test() as pilot:
-                # 等动画完成 + 按钮出现
-                for _ in range(40):
+                for _ in range(20):
                     await pilot.pause(0.1)
                     if app.screen.query("#load_game"):
                         break
-                # 点击「继续游玩」
                 from textual.widgets import Button
                 btn = app.screen.query_one("#load_game", Button)
                 btn.press()
@@ -116,7 +114,7 @@ class TestSaveSelect:
         async def go():
             app = CTGentsApp(CacheContext(), None, ["x"])
             async with app.run_test() as pilot:
-                for _ in range(40):
+                for _ in range(20):
                     await pilot.pause(0.1)
                     if app.screen.query("#load_game"):
                         break
@@ -141,7 +139,7 @@ class TestChatScreen:
 
     async def _enter_chat(self, app, pilot):
         """等开屏按钮出现 → 点「新存档」→ 进聊天屏。"""
-        for _ in range(40):
+        for _ in range(20):
             await pilot.pause(0.1)
             if app.screen.query("#new_game"):
                 break
