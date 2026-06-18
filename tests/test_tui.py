@@ -46,10 +46,23 @@ class TestAppConstruction:
         assert len(app._events) == 0
         assert app._busy is False
 
-    def test_compose_yields_core_widgets(self):
-        from textual.widgets import Input, Static
-        app = CTGentsTUI(CacheContext(), None)
-        widget_types = {type(w) for w in app.compose()}
-        # transcript(VerticalScroll) + 状态条(Static) + 输入(Input)
-        assert Input in widget_types
-        assert Static in widget_types
+    def test_mount_layout(self):
+        """挂载后布局：状态栏在输入框【下面】、输入框只有上下两根线（无左右框）。
+
+        run_test 仅挂载、不提交输入（不起后台线程）→ 确定性、非 flaky。
+        """
+        import asyncio
+
+        async def go():
+            app = CTGentsTUI(CacheContext(), None)
+            async with app.run_test() as pilot:
+                await pilot.pause()
+                p = app.query_one("#prompt")
+                s = app.query_one("#status")
+                assert s.region.y >= p.region.y + p.region.height, "状态栏应在输入框下面"
+                assert p.styles.border_top[0] == "solid", "输入框上边应有线"
+                assert p.styles.border_bottom[0] == "solid", "输入框下边应有线"
+                assert p.styles.border_left[0] == "", "输入框左边不应有框"
+                assert p.styles.border_right[0] == "", "输入框右边不应有框"
+
+        asyncio.run(go())

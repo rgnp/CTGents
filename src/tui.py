@@ -18,7 +18,7 @@ from typing import TYPE_CHECKING
 from textual import work
 from textual.app import App, ComposeResult
 from textual.binding import Binding
-from textual.containers import VerticalScroll
+from textual.containers import Vertical, VerticalScroll
 from textual.widgets import Input, Markdown, Static
 
 if TYPE_CHECKING:
@@ -84,8 +84,22 @@ class CTGentsTUI(App):
     .tool { color: $text-muted; margin: 0 0 0 2; }
     .meta { color: $text-muted; margin: 0 0 0 2; }
     .err  { color: $error; margin: 0 0 0 2; }
-    #status { dock: bottom; height: 1; color: $text-muted; background: $panel; padding: 0 1; }
-    #prompt { dock: bottom; }
+    #bottombar { dock: bottom; height: auto; }
+    /* 输入框：去掉左右框、只留上下两根线（Claude 式）；线常驻可见、聚焦更亮 */
+    #prompt {
+        border: none;
+        border-top: solid $primary-darken-1;
+        border-bottom: solid $primary-darken-1;
+        background: $surface;
+        height: 3;
+        padding: 0 1;
+    }
+    #prompt:focus {
+        border-top: solid $primary;
+        border-bottom: solid $primary;
+    }
+    /* 状态栏放在输入框【下面】 */
+    #status { height: 1; color: $text-muted; background: $panel; padding: 0 1; }
     """
 
     BINDINGS = [
@@ -108,8 +122,9 @@ class CTGentsTUI(App):
     # ── 布局 ──
     def compose(self) -> ComposeResult:
         yield VerticalScroll(id="transcript")
-        yield Static(_status_line(self.ctx, self.session_id or ""), id="status")
-        yield Input(placeholder="输入消息  ·  /help 指令  ·  Esc 中断  ·  Ctrl+C 退出", id="prompt")
+        with Vertical(id="bottombar"):   # 输入框在上、状态栏在下，整体 dock 底部
+            yield Input(placeholder="输入消息  ·  /help 指令  ·  Esc 中断  ·  Ctrl+C 退出", id="prompt")
+            yield Static(_status_line(self.ctx, self.session_id or ""), id="status")
 
     def on_mount(self) -> None:
         self._echo_recent()
