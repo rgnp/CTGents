@@ -107,10 +107,13 @@ class CTGentsTUI(App):
         Binding("ctrl+c", "quit", "退出", show=True, priority=True),
     ]
 
-    def __init__(self, ctx: CacheContext, session_id: str | None):
+    def __init__(self, ctx: CacheContext, session_id: str | None,
+                 sessions: list[str] | None = None):
         super().__init__()
         self.ctx = ctx
         self.session_id = session_id
+        self._sessions = sessions or []     # 历史会话列表，启动时在 TUI 内选（不再走老 CLI）
+        self._picking = False               # True=正在选会话，下一条输入当编号解释
         self._events: deque = deque()      # 后台线程→UI 线程的有序事件管道（单产单消）
         self._cur_md: Markdown | None = None
         self._cur_text = ""
@@ -127,16 +130,44 @@ class CTGentsTUI(App):
             yield Static(_status_line(self.ctx, self.session_id or ""), id="status")
 
     def on_mount(self) -> None:
-        self._echo_recent()
+        if self._sessions and self.session_id is None:
+            self._show_picker()
+        else:
+            self._echo_recent()
         self.query_one("#prompt", Input).focus()
         self.set_interval(0.08, self._drain_events)    # 排空事件 → 渲染
         self.set_interval(0.8, self._refresh_status)    # 状态条
         self.set_interval(1.0, self._drain_jobs)        # 后台作业完成通知
 
+    def _show_picker(self, cap: int = 20) -> None:
+        """在 TUI 内列历史会话供选择（取代启动前的老 CLI 选择）。"""
+        from .session import get_session_name
+        self._mount("历史会话（输入编号加载，直接回车=新会话）：", "meta")
+        for i, sid in enumerate(self._sessions[:cap], 1):
+            self._mount(f"  [{i}] {get_session_name(sid)}", "meta")
+        if len(self._sessions) > cap:
+            self._mount(f"  …共 {len(self._sessions)} 个，更早的进去后用 /sessions + /load", "meta")
+        self._picking = True
+
+    def _do_pick(self, text: str) -> None:
+        self._picking = False
+        try:
+            idx = int(text) - 1
+            if 0 <= idx < len(self._sessions):
+                self._apply_load(self._sessions[idx])
+                return
+        except ValueError:
+            pass
+        self.query_one("#transcript").remove_children()
+        self._mount("新会话开始，直接输入消息即可。", "meta")
+
     # ── 输入 ──
     def on_input_submitted(self, event: Input.Submitted) -> None:
         text = event.value.strip()
         event.input.value = ""
+        if self._picking:
+            self._do_pick(text)
+            return
         if not text or self._busy:
             return
         self._mount("你 " + text, "user")
@@ -321,6 +352,10 @@ class CTGentsTUI(App):
 
     # ── 动作 ──
     def action_interrupt(self) -> None:
+        if not self._busy:
+            # 空闲时 Esc 不是中断：清空输入框，不刷"已请求中断"
+            self.query_one("#prompt", Input).value = ""
+            return
         try:
             from .llm import request_interrupt
             request_interrupt()
@@ -329,11 +364,12 @@ class CTGentsTUI(App):
             pass
 
 
-def run_tui(ctx: CacheContext, session_id: str | None) -> str | None:
+def run_tui(ctx: CacheContext, session_id: str | None,
+            sessions: list[str] | None = None) -> str | None:
     """启动 TUI，阻塞直到退出；返回最终 session_id 供 main 做收尾。"""
     from . import main as _main
     _main._under_tui = True
-    app = CTGentsTUI(ctx, session_id)
+    app = CTGentsTUI(ctx, session_id, sessions)
     try:
         app.run()
     finally:

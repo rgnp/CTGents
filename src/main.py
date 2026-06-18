@@ -635,10 +635,13 @@ def main() -> None:
     _ensure_git_hooks()
     sessions = list_sessions()
     session_id: str | None = None
-    messages: list[dict] = []
     ctx: CacheContext | None = None
 
-    if sessions:
+    _tui_enabled = os.getenv("CTG_TUI", "1").strip().lower() not in ("0", "false", "no")
+    use_tui = _tui_enabled and sys.stdin.isatty() and sys.stdout.isatty()
+
+    # 行式才在启动前用 CLI 选会话；TUI 把选会话搬进界面内（避免先闪一段老命令行）。
+    if not use_tui and sessions:
         _print_sessions(sessions)
         print()
         choice = input("输入编号加载会话，或直接回车新建: ").strip()
@@ -646,8 +649,7 @@ def main() -> None:
             idx = int(choice) - 1
             if 0 <= idx < len(sessions):
                 session_id = sessions[idx]
-                messages = load_session(session_id)
-                ctx = CacheContext(log_msgs=messages)
+                ctx = CacheContext(log_msgs=load_session(session_id))
                 print(f"已加载会话 [{session_id}]，共 {len(ctx)} 条消息")
                 _print_recent(ctx.all)
                 print()
@@ -659,13 +661,11 @@ def main() -> None:
     ctx.rebuild_prefix(_make_prefix_msgs())
     _append_volatile_context(ctx)
 
-    _tui_enabled = os.getenv("CTG_TUI", "1").strip().lower() not in ("0", "false", "no")
-    use_tui = _tui_enabled and sys.stdin.isatty() and sys.stdout.isatty()
     try:
         if use_tui:
             try:
                 from .tui import run_tui
-                session_id = run_tui(ctx, session_id)
+                session_id = run_tui(ctx, session_id, sessions)
             except Exception as e:  # noqa: BLE001  # TUI 起不来 → 回退行式，别让用户卡黑屏
                 print(f"[TUI 启动失败，回退行式界面: {type(e).__name__}: {e}]")
                 session_id = _run_line_repl(ctx, session_id)

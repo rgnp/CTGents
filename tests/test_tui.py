@@ -36,6 +36,55 @@ class TestStatusLine:
         assert isinstance(s, str)
 
 
+class TestStartupPicker:
+    """会话选择搬进 TUI（不再先闪老 CLI）。"""
+
+    def test_sessions_enter_picking_mode_then_new(self):
+        import asyncio
+
+        async def go():
+            app = CTGentsTUI(CacheContext(), None, ["a", "b"])
+            async with app.run_test() as pilot:
+                await pilot.pause()
+                assert app._picking is True, "有历史会话应进选择模式"
+                await pilot.press("enter")   # 空=新会话
+                await pilot.pause()
+                assert app._picking is False
+
+        asyncio.run(go())
+
+    def test_no_sessions_no_picker(self):
+        import asyncio
+
+        async def go():
+            app = CTGentsTUI(CacheContext(), None, [])
+            async with app.run_test() as pilot:
+                await pilot.pause()
+                assert app._picking is False
+
+        asyncio.run(go())
+
+
+class TestIdleEsc:
+    """空闲按 Esc 不是中断：清输入、不刷'已请求中断'。"""
+
+    def test_idle_esc_clears_input_no_notice(self):
+        import asyncio
+
+        async def go():
+            app = CTGentsTUI(CacheContext(), None, [])
+            async with app.run_test() as pilot:
+                await pilot.pause()
+                inp = app.query_one("#prompt")
+                inp.value = "half typed"
+                assert app._busy is False
+                await pilot.press("escape")
+                await pilot.pause()
+                assert inp.value == "", "空闲 Esc 应清空输入"
+
+        asyncio.run(go())
+
+
 class TestAppConstruction:
     def test_construct_holds_ctx_and_empty_pipe(self):
         ctx = CacheContext()
