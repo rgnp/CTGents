@@ -49,10 +49,11 @@ class TestPureHelpers:
     def test_status_line_string(self):
         assert isinstance(_status_line(CacheContext(), ""), str)
 
-    def test_banner_five_rows_has_blocks(self):
+    def test_banner_five_rows_hollow(self):
         b = _banner("CTGENTS")
         assert b.count("\n") == 4          # 5 行
-        assert "█" in b
+        assert "║" in b and "═" in b       # 镂空轮廓（box-drawing）
+        assert b.startswith("  ")          # 斜体：首行有右移缩进
 
 
 # ── 多屏流程 ──
