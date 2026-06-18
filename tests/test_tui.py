@@ -49,17 +49,19 @@ class TestPureHelpers:
     def test_status_line_string(self):
         assert isinstance(_status_line(CacheContext(), ""), str)
 
-    def test_banner_five_rows_solid_3d(self):
-        b = _banner("CTGENTS")
-        assert b.count("\n") == 4          # 5 行
-        assert "█" in b                    # 实心字身
-        assert "░" in b                    # 立体右下投影
+    def test_banner_8x8_density_antialiased(self):
+        b = _banner("CTGENT")
+        assert b.count("\n") == 7          # 8 行
+        assert "█" in b                    # 实心字身（密度 3）
+        assert "▓" in b                    # 次边缘（密度 2）
+        assert "░" in b                    # 边缘过渡 + 右下投影
 
 
 # ── 多屏流程 ──
 class TestScreenFlow:
     def test_splash_to_select_to_chat(self, monkeypatch):
         monkeypatch.setattr(SplashScreen, "MIN_SECONDS", 0.0)
+        monkeypatch.setattr("src.session.get_session_name", lambda sid: f"会话-{sid}")
 
         async def go():
             app = CTGentsApp(CacheContext(), None, ["a", "b"])
@@ -92,6 +94,7 @@ class TestScreenFlow:
 class TestSaveSelect:
     def test_has_new_game_item(self, monkeypatch):
         monkeypatch.setattr(SplashScreen, "MIN_SECONDS", 0.0)
+        monkeypatch.setattr("src.session.get_session_name", lambda sid: f"会话-{sid}")
 
         async def go():
             app = CTGentsApp(CacheContext(), None, ["x"])

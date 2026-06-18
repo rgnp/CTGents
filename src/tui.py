@@ -51,49 +51,129 @@ NES_THEME = Theme(
     dark=True,
 )
 
-# ── 像素大字 banner：斜体 + 实心立体（实心粗笔 + 右下投影 3D + 右倾）──
-_FONT = {
-    "C": ["██████", "██    ", "██    ", "██    ", "██████"],
-    "T": ["██████", "  ██  ", "  ██  ", "  ██  ", "  ██  "],
-    "G": ["██████", "██    ", "██ ███", "██  ██", "██████"],
-    "E": ["██████", "██    ", "█████ ", "██    ", "██████"],
-    "N": ["██  ██", "███ ██", "██████", "██ ███", "██  ██"],
-    "S": ["██████", "██    ", "██████", "    ██", "██████"],
+# ── 像素大字 banner：密度抗锯齿 + 行渐变着色 + 投影 ──
+# 字形：8×8 密度矩阵。密度 0=空格, 1=░, 2=▓, 3=█。
+# 六字母 CTGENT，SplashScreen 和 SaveSelectScreen 两处复用。
+_GLYPHS: dict[str, list[list[int]]] = {
+    "C": [
+        [0,1,2,3,3,3,2,1],
+        [1,3,3,2,1,0,0,0],
+        [2,3,1,0,0,0,0,0],
+        [3,2,0,0,0,0,0,0],
+        [3,2,0,0,0,0,0,0],
+        [2,3,1,0,0,0,0,0],
+        [1,3,3,2,1,0,0,0],
+        [0,1,2,3,3,3,2,1],
+    ],
+    "T": [
+        [3,3,3,3,3,3,3,3],
+        [0,0,2,3,3,2,0,0],
+        [0,0,1,3,3,1,0,0],
+        [0,0,0,3,3,0,0,0],
+        [0,0,0,3,3,0,0,0],
+        [0,0,0,3,3,0,0,0],
+        [0,0,0,3,3,0,0,0],
+        [0,0,0,2,2,0,0,0],
+    ],
+    "G": [
+        [0,1,2,3,3,3,2,1],
+        [1,3,3,2,1,0,0,0],
+        [2,3,1,0,0,0,0,0],
+        [3,2,0,0,1,3,2,0],
+        [3,2,0,0,0,2,3,1],
+        [2,3,1,0,0,1,3,2],
+        [1,3,3,2,0,2,3,1],
+        [0,1,2,3,3,3,1,0],
+    ],
+    "E": [
+        [3,3,3,3,3,3,3,3],
+        [3,2,0,0,0,0,0,0],
+        [3,1,0,0,0,0,0,0],
+        [3,3,3,3,3,2,0,0],
+        [3,2,0,0,0,0,0,0],
+        [3,1,0,0,0,0,0,0],
+        [3,2,0,0,0,0,0,0],
+        [3,3,3,3,3,3,3,3],
+    ],
+    "N": [
+        [3,3,0,0,0,0,3,3],
+        [3,3,2,0,0,0,3,3],
+        [3,3,3,2,0,0,3,3],
+        [3,3,1,3,2,0,3,3],
+        [3,3,0,2,3,2,3,3],
+        [3,3,0,0,2,3,3,3],
+        [3,3,0,0,0,2,3,3],
+        [3,3,0,0,0,0,3,3],
+    ],
 }
-_BANNER_LEAD = [3, 2, 2, 1, 0]   # 斜体右倾
-_BANNER_GAP = 3
-_BANNER_MAIN = "#5cc8ff"         # 亮青字身
-_BANNER_SHADOW = "#1a5276"       # 暗青投影（立体）
+
+_GLYPH_H = 8           # 字形高度
+_GLYPH_GAP = 3         # 字母间距
+_BANNER_LEAD = [4, 3, 3, 2, 2, 1, 1, 0]  # 斜体右倾（每行缩进）
+_DENSITY_CHAR = {0: " ", 1: "░", 2: "▓", 3: "█"}
+
+# 行渐变：从上到下 8 行，亮青 → 深蓝
+_GRADIENT = [
+    "#a8e8ff", "#78d8ff", "#4dc8f8", "#38b8ee",
+    "#30a8de", "#2e98ce", "#2c88be", "#1a78b0",
+]
+_SHADOW_COLOR = "#0a1a3a"  # 投影色（深海军蓝）
 
 
 def _banner(text: str) -> str:
-    """返回带 Rich 颜色标记的斜体立体大字：字身亮青、右下投影暗青。"""
-    rows = ["", "", "", "", ""]
+    """返回带 Rich 颜色标记的像素大字：密度抗锯齿 + 行渐变 + 右下投影。
+
+    渲染管线：
+    1. 从 _GLYPHS 取各字母的密度矩阵，并排拼接
+    2. 按行铺投影（右下 1px）：密度>0 的格子，投影到 (r+1,c+1)
+    3. 从顶到底逐行：用 _GRADIENT 着色密度>0 的格子，密度越高字符越实
+    """
+    # 拼接所有字母的密度矩阵
+    rows_density: list[list[int]] = [[] for _ in range(_GLYPH_H)]
     for ch in text:
-        glyph = _FONT.get(ch, ["      "] * 5)
-        for i in range(5):
-            rows[i] += glyph[i] + " " * _BANNER_GAP
-    rows = [" " * _BANNER_LEAD[i] + rows[i] for i in range(5)]
-    w = max(len(r) for r in rows)
-    grid = [list(r.ljust(w)) for r in rows]
-    out = [[" "] * w for _ in range(5)]
-    for r in range(5):                       # 先铺右下投影
-        for c in range(w):
-            if grid[r][c] == "█" and r + 1 < 5 and c + 1 < w:
-                out[r + 1][c + 1] = "░"
-    for r in range(5):                       # 再铺字身（盖住投影）
-        for c in range(w):
-            if grid[r][c] == "█":
-                out[r][c] = "█"
+        glyph = _GLYPHS.get(ch)
+        if glyph is None:
+            continue
+        for i in range(_GLYPH_H):
+            rows_density[i].extend(glyph[i] + [0] * _GLYPH_GAP)
+
+    # 总宽度
+    w = max((len(r) for r in rows_density), default=0)
+    if w == 0:
+        return ""
+
+    # 斜体：每行左填充
+    canvas = [[" "] * (w + _BANNER_LEAD[i]) for i in range(_GLYPH_H)]
+    for i in range(_GLYPH_H):
+        offset = _BANNER_LEAD[i]
+        for j, d in enumerate(rows_density[i]):
+            canvas[i][offset + j] = ("░" if d == 1 else "▓" if d == 2 else "█" if d == 3 else " ")
+
+    # 右下投影：非空格子 → 投影到 (r+1, c+1)，不覆盖已有像素
+    for i in range(_GLYPH_H - 1):
+        limit = len(canvas[i + 1]) - 1  # 下一行较短（斜体右倾递减）
+        for j in range(limit):
+            if canvas[i][j] != " " and canvas[i + 1][j + 1] == " ":
+                canvas[i + 1][j + 1] = "·"  # 临时标记
+
+    # 逐行 Rich 着色输出
     lines = []
-    for row in out:
-        parts = [
-            f"[{_BANNER_MAIN}]█[/]" if ch == "█"
-            else f"[{_BANNER_SHADOW}]░[/]" if ch == "░"
-            else " "
-            for ch in row
-        ]
+    for i in range(_GLYPH_H):
+        body_color = _GRADIENT[i]
+        parts = []
+        for ch in canvas[i]:
+            if ch == "█":
+                parts.append(f"[{body_color}]█[/]")
+            elif ch == "▓":
+                parts.append(f"[{body_color}]▓[/]")
+            elif ch == "░":
+                parts.append(f"[{body_color}]░[/]")
+            elif ch == "·":  # 投影
+                parts.append(f"[{_SHADOW_COLOR}]░[/]")
+            else:
+                parts.append(" ")
         lines.append("".join(parts).rstrip())
+
     return "\n".join(lines)
 
 
@@ -175,7 +255,7 @@ class SplashScreen(Screen):
 
     def compose(self) -> ComposeResult:
         with Vertical():
-            yield Static(_banner("CTGENTS"), id="logo")
+            yield Static(_banner("CTGENT"), id="logo")
             yield Static("▸ loading memory", id="boot")
 
     def on_mount(self) -> None:
@@ -228,7 +308,7 @@ class SaveSelectScreen(Screen):
             items.append(ListItem(Label(get_session_name(sid)), name=sid))
         items.append(ListItem(Label("+ NEW GAME"), name="__new__"))
         with Vertical(id="selectwrap"):
-            yield Static(_banner("CTGENTS"), id="logo")   # 开屏大字延续到存档页
+            yield Static(_banner("CTGENT"), id="logo")   # 开屏大字延续到存档页
             with Vertical(id="savebox"):
                 yield Static("◆ SELECT  SAVE ◆", id="savetitle")
                 yield ListView(*items, id="saves")
@@ -270,6 +350,9 @@ class ChatScreen(Screen):
     BINDINGS = [
         Binding("escape", "interrupt", "中断", show=True),
         Binding("ctrl+c", "quit", "退出", show=True, priority=True),
+        Binding("ctrl+l", "clear_screen", "清屏", show=False),
+        Binding("up", "arrow_up", "上一条", show=False, priority=True),
+        Binding("down", "arrow_down", "下一条", show=False, priority=True),
     ]
 
     def __init__(self) -> None:
@@ -280,6 +363,10 @@ class ChatScreen(Screen):
         self._dirty = False
         self._busy = False
         self._pending_notices: list[str] = []
+        self._history: list[str] = []
+        self._history_idx: int = -1
+        self._history_draft: str = ""
+        self._status_cache: tuple[int, int, str] = (-1, -1, "")
 
     # ── 布局 ──
     def compose(self) -> ComposeResult:
@@ -292,9 +379,9 @@ class ChatScreen(Screen):
         self._load_pending()
         self._refresh_status()
         self.query_one("#prompt", Input).focus()
-        self.set_interval(0.08, self._drain_events)
-        self.set_interval(0.8, self._refresh_status)
-        self.set_interval(1.0, self._drain_jobs)
+        self.set_interval(0.03, self._drain_events)
+        self.set_interval(0.5, self._refresh_status)
+        self.set_interval(0.5, self._drain_jobs)
 
     def _load_pending(self) -> None:
         """进聊天屏时按存档选择结果加载会话（NEW=不加载，沿用 splash 初始化的空会话）。"""
@@ -316,6 +403,9 @@ class ChatScreen(Screen):
         event.input.value = ""
         if not text or self._busy:
             return
+        self._history.append(text)
+        self._history_idx = -1
+        self._history_draft = ""
         self._mount("你 " + text, "user")
         if text.startswith("/"):
             self._handle_command(text)
@@ -359,6 +449,7 @@ class ChatScreen(Screen):
         self.app.ctx.clear_log()
         self.app.ctx.log.extend(load_session(target))
         _append_volatile_context(self.app.ctx)
+        self._status_cache = (-1, -1, "")
         self.app.session_id = target
         self.app.final_session_id = target
         from . import status_bar
@@ -380,6 +471,7 @@ class ChatScreen(Screen):
             reset_gaps_cache()
             status_bar.reset()
         _append_volatile_context(self.app.ctx)
+        self._status_cache = (-1, -1, "")
         self.query_one("#transcript").remove_children()
         self._mount("上下文已清除", "meta")
 
@@ -496,8 +588,17 @@ class ChatScreen(Screen):
 
     def _refresh_status(self) -> None:
         with contextlib.suppress(Exception):
-            self.query_one("#status", Static).update(
-                _status_line(self.app.ctx, self.app.session_id or ""))
+            n_msgs = len(self.app.ctx.all)
+            sid_hash = hash(self.app.session_id or "")
+            if self._status_cache[0] != n_msgs or self._status_cache[1] != sid_hash:
+                line = _status_line(self.app.ctx, self.app.session_id or "")
+                self._status_cache = (n_msgs, sid_hash, line)
+            else:
+                line = self._status_cache[2]
+            if self._busy:
+                dot = "●" if int(time.monotonic() * 2) % 2 == 0 else "○"
+                line = f"{dot} 思考中  │  {line}"
+            self.query_one("#status", Static).update(line)
 
     def _drain_jobs(self) -> None:
         try:
@@ -519,6 +620,39 @@ class ChatScreen(Screen):
             self._mount("[已请求中断]", "meta")
         except Exception:
             pass
+
+    def action_clear_screen(self) -> None:
+        with contextlib.suppress(Exception):
+            self.query_one("#transcript", VerticalScroll).scroll_end(animate=False)
+
+    def action_arrow_up(self) -> None:
+        if self._busy or not self._history:
+            return
+        inp = self.query_one("#prompt", Input)
+        if self._history_idx == -1:
+            self._history_draft = inp.value
+            self._history_idx = len(self._history) - 1
+        elif self._history_idx > 0:
+            self._history_idx -= 1
+        else:
+            return
+        inp.value = self._history[self._history_idx]
+        inp.cursor_position = len(inp.value)
+
+    def action_arrow_down(self) -> None:
+        if self._busy or not self._history:
+            return
+        inp = self.query_one("#prompt", Input)
+        if self._history_idx == -1:
+            return
+        if self._history_idx < len(self._history) - 1:
+            self._history_idx += 1
+            inp.value = self._history[self._history_idx]
+        else:
+            self._history_idx = -1
+            inp.value = self._history_draft
+            self._history_draft = ""
+        inp.cursor_position = len(inp.value)
 
 
 # ═══════════════════════════════════════════════════════
