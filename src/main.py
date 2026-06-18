@@ -1,4 +1,5 @@
 import logging
+import os
 import re
 import sys
 import threading
@@ -25,11 +26,15 @@ logging.basicConfig(
 # ═══════════════════════════════════════════════════════════════
 
 _esc_listener_active = False
+# TUI 模式下 Textual 自己管 stdin / Esc，msvcrt 后台线程会和它抢键 → 由 TUI 置位禁用。
+_under_tui = False
 
 
 def _start_esc_listener() -> None:
-    """启动后台线程监听 Esc 键，用于中断流式回复。"""
+    """启动后台线程监听 Esc 键，用于中断流式回复。TUI 下禁用（Textual 自管 Esc）。"""
     global _esc_listener_active
+    if _under_tui:
+        return
 
     import msvcrt  # Windows 专用
 
@@ -332,8 +337,23 @@ def process_turn(
     return reply
 
 
+def _stdout_display():
+    """REPL 默认输出去向：stdout。封装成 Display 让 run_agent_turn 与 TUI 共用同一咽喉。
+
+    保留 _make_display / _on_tool 两个模块级名字（test_main 给它们打桩），默认路径仍走它们。
+    """
+    from . import ui
+    return ui.Display(
+        make_display=_make_display,
+        on_tool=_on_tool,
+        on_status=print,
+        on_footer=lambda f: (print(f) if sys.stdin.isatty() else None),
+        end_message=print,
+    )
+
+
 def run_agent_turn(ctx: CacheContext, user_input: str,
-                   session_id: str | None) -> str | None:
+                   session_id: str | None, *, display=None) -> str | None:
     """主干：一次 agent 驱动。所有入口都走这里，保证不管从哪进、循环都是同一圈。
 
     对话分支(process_turn：预读→run_conversation→完成/引用审计) →
@@ -341,48 +361,51 @@ def run_agent_turn(ctx: CacheContext, user_input: str,
 
     曾经 /retry 和中断"指导"直接调 run_conversation、绕过 process_turn 的审计与任务
     续跑——同一 agent 从不同入口跑的不是同一个循环。收敛到此函数后各入口一致、闭合。
+
+    display: 输出去向（默认 stdout=REPL；TUI 传写进 widget 的 Display）。循环不变。
     """
     from . import status_bar
     from .task_loop import made_task_progress, run_task_continuation
     from .tasks import read_current as _read_current
 
+    disp = display or _stdout_display()
     _session_state["turn_ran"] = True
     task_before = _read_current()
     sid = [session_id]
-    on_token, has_output = _make_display()
+    on_token, has_output = disp.make_display()
     status_bar.note_turn_start()
     _start_esc_listener()
     try:
         process_turn(
-            ctx, user_input, on_token, _on_tool,
+            ctx, user_input, on_token, disp.on_tool,
             on_progress=lambda: sid.__setitem__(0, save_session(ctx.all, sid[0])),
             session_id=sid[0] or "",
         )
     finally:
         _stop_esc_listener()
     if has_output():
-        print()
+        disp.end_message()
 
     # 对话分支推进了 current.md → 升级到任务分支
     if made_task_progress(task_before, _read_current()):
         def _task_drive(c, text):
-            ot, ho = _make_display()
+            ot, ho = disp.make_display()
             process_turn(
-                c, text, ot, _on_tool,
+                c, text, ot, disp.on_tool,
                 on_progress=lambda: sid.__setitem__(0, save_session(c.all, sid[0])),
                 session_id=sid[0] or "",
             )
             if ho():
-                print()
+                disp.end_message()
         _start_esc_listener()
         try:
-            run_task_continuation(ctx, _task_drive, on_status=print)
+            run_task_continuation(ctx, _task_drive, on_status=disp.on_status)
         finally:
             _stop_esc_listener()
 
     footer = status_bar.note_turn_end()
-    if footer and sys.stdin.isatty():
-        print(footer)
+    if footer:
+        disp.on_footer(footer)
     return sid[0]
 
 
@@ -636,6 +659,25 @@ def main() -> None:
     ctx.rebuild_prefix(_make_prefix_msgs())
     _append_volatile_context(ctx)
 
+    _tui_enabled = os.getenv("CTG_TUI", "1").strip().lower() not in ("0", "false", "no")
+    use_tui = _tui_enabled and sys.stdin.isatty() and sys.stdout.isatty()
+    try:
+        if use_tui:
+            try:
+                from .tui import run_tui
+                session_id = run_tui(ctx, session_id)
+            except Exception as e:  # noqa: BLE001  # TUI 起不来 → 回退行式，别让用户卡黑屏
+                print(f"[TUI 启动失败，回退行式界面: {type(e).__name__}: {e}]")
+                session_id = _run_line_repl(ctx, session_id)
+        else:
+            session_id = _run_line_repl(ctx, session_id)
+    finally:
+        for line in _finalize_session(ctx, session_id):
+            print(line)
+
+
+def _run_line_repl(ctx: CacheContext, session_id: str | None) -> str | None:
+    """行式 REPL（TUI 关闭或起不来时的兜底）。返回最终 session_id，收尾由 main 统一做。"""
     from . import ui
     ui.banner("CTGents · 输入 /help 查看指令列表")
 
@@ -655,106 +697,103 @@ def main() -> None:
                 pass
 
     _pending_job_notices: list[str] = []
-    try:
-        while True:
-            # 收割已完成的后台作业 → 打印通知 + 缓存到下条用户消息（取代 agent poll 忙等）
-            try:
-                from .tools.exec import drain_finished_jobs
-                for _notice in drain_finished_jobs():
-                    print(f"\n{_notice}\n")
-                    _pending_job_notices.append(_notice)
-            except Exception:
-                pass
-            try:
-                if _use_rich_input:
+    while True:
+        # 收割已完成的后台作业 → 打印通知 + 缓存到下条用户消息（取代 agent poll 忙等）
+        try:
+            from .tools.exec import drain_finished_jobs
+            for _notice in drain_finished_jobs():
+                print(f"\n{_notice}\n")
+                _pending_job_notices.append(_notice)
+        except Exception:
+            pass
+        try:
+            if _use_rich_input:
+                from . import status_bar
+                status_bar.refresh(ctx, session_id)
+                user_input = prompt(
+                    ui.prompt_message(), key_bindings=kb, bottom_toolbar=status_bar.text
+                ).strip()
+            else:
+                user_input = input("You: ").strip()
+        except (EOFError, KeyboardInterrupt):
+            break
+
+        if not user_input:
+            continue
+
+        if user_input.startswith("/"):
+            if user_input.lower().startswith("/reload"):
+                ok, msg = _reload_dispatch()
+                print(msg)
+                continue
+
+            r = dispatch_cmd(user_input, ctx, session_id)
+            if r.message:
+                print(r.message)
+            if r.save:
+                session_id = save_session(ctx.all, session_id)
+                print(f"会话已保存: [{session_id}]")
+            if r.load:
+                ctx.clear_log()
+                loaded_msgs = load_session(r.load)
+                ctx.log.extend(loaded_msgs)
+                _append_volatile_context(ctx)
+                session_id = r.load
+                from . import status_bar
+                status_bar.reset()  # 切会话复位 Δmiss 基线
+                _session_state["turn_ran"] = False  # 加载未改动则退出不收割
+                print(f"已加载会话 [{r.load}]，共 {len(ctx)} 条消息")
+                _print_recent(ctx.all)
+            if r.clear:
+                ctx.clear_log()
+                ctx.rebuild_prefix(_make_prefix_msgs())
+                if r.save:
+                    session_id = None
+                    from .session_pins import clear_pins
+                    clear_pins()
+                    from .tasks import reset_gaps_cache
+                    reset_gaps_cache()
                     from . import status_bar
-                    status_bar.refresh(ctx, session_id)
-                    user_input = prompt(
-                        ui.prompt_message(), key_bindings=kb, bottom_toolbar=status_bar.text
-                    ).strip()
-                else:
-                    user_input = input("You: ").strip()
-            except (EOFError, KeyboardInterrupt):
+                    status_bar.reset()  # 清空会话复位 Δmiss 基线
+                    _session_state["turn_ran"] = False  # 清空后空会话退出不收割
+                _append_volatile_context(ctx)
+            if r.retry:
+                last_user = ctx.last_user_content() or ""
+                if last_user:
+                    session_id = run_agent_turn(ctx, last_user, session_id)
+            continue
+
+        if _pending_job_notices:
+            user_input = (
+                "【后台作业完成】\n" + "\n\n".join(_pending_job_notices)
+                + "\n\n【用户消息】\n" + user_input
+            )
+            _pending_job_notices.clear()
+        try:
+            session_id = run_agent_turn(ctx, user_input, session_id)
+        except BaseException as e:
+            if isinstance(e, KeyboardInterrupt):
+                _stop_esc_listener()
+                print("\n[中断]")
+                try:
+                    guide = input("指导: ").strip()
+                except (EOFError, KeyboardInterrupt):
+                    guide = ""
+                if guide:
+                    session_id = run_agent_turn(ctx, guide, session_id)
+                continue
+
+            if isinstance(e, SystemExit) and e.code == 0:
                 break
 
-            if not user_input:
-                continue
-
-            if user_input.startswith("/"):
-                if user_input.lower().startswith("/reload"):
-                    ok, msg = _reload_dispatch()
-                    print(msg)
-                    continue
-
-                r = dispatch_cmd(user_input, ctx, session_id)
-                if r.message:
-                    print(r.message)
-                if r.save:
-                    session_id = save_session(ctx.all, session_id)
-                    print(f"会话已保存: [{session_id}]")
-                if r.load:
-                    ctx.clear_log()
-                    loaded_msgs = load_session(r.load)
-                    ctx.log.extend(loaded_msgs)
-                    _append_volatile_context(ctx)
-                    session_id = r.load
-                    from . import status_bar
-                    status_bar.reset()  # 切会话复位 Δmiss 基线
-                    _session_state["turn_ran"] = False  # 加载未改动则退出不收割
-                    print(f"已加载会话 [{r.load}]，共 {len(ctx)} 条消息")
-                    _print_recent(ctx.all)
-                if r.clear:
-                    ctx.clear_log()
-                    ctx.rebuild_prefix(_make_prefix_msgs())
-                    if r.save:
-                        session_id = None
-                        from .session_pins import clear_pins
-                        clear_pins()
-                        from .tasks import reset_gaps_cache
-                        reset_gaps_cache()
-                        from . import status_bar
-                        status_bar.reset()  # 清空会话复位 Δmiss 基线
-                        _session_state["turn_ran"] = False  # 清空后空会话退出不收割
-                    _append_volatile_context(ctx)
-                if r.retry:
-                    last_user = ctx.last_user_content() or ""
-                    if last_user:
-                        session_id = run_agent_turn(ctx, last_user, session_id)
-                continue
-
-            if _pending_job_notices:
-                user_input = (
-                    "【后台作业完成】\n" + "\n\n".join(_pending_job_notices)
-                    + "\n\n【用户消息】\n" + user_input
-                )
-                _pending_job_notices.clear()
-            try:
-                session_id = run_agent_turn(ctx, user_input, session_id)
-            except BaseException as e:
-                if isinstance(e, KeyboardInterrupt):
-                    _stop_esc_listener()
-                    print("\n[中断]")
-                    try:
-                        guide = input("指导: ").strip()
-                    except (EOFError, KeyboardInterrupt):
-                        guide = ""
-                    if guide:
-                        session_id = run_agent_turn(ctx, guide, session_id)
-                    continue
-
-                if isinstance(e, SystemExit) and e.code == 0:
-                    break
-
-                err_lines, should_break = _render_turn_error(e)
-                for ln in err_lines:
-                    print(ln)
-                if not isinstance(e, Exception):
-                    logger.error("对话出错: %s", e)
-                if should_break:
-                    break
-    finally:
-        for line in _finalize_session(ctx, session_id):
-            print(line)
+            err_lines, should_break = _render_turn_error(e)
+            for ln in err_lines:
+                print(ln)
+            if not isinstance(e, Exception):
+                logger.error("对话出错: %s", e)
+            if should_break:
+                break
+    return session_id
 
 
 if __name__ == "__main__":

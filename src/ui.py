@@ -13,10 +13,31 @@
 from __future__ import annotations
 
 import sys
+from dataclasses import dataclass
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
 
 # 启动时一次性判定：是否真接在终端上。非 TTY 时全部退回裸 print。
 _IS_TTY = sys.stdout.isatty()
 _console = None
+
+
+@dataclass
+class Display:
+    """一轮 agent 驱动的【输出去向】。
+
+    run_agent_turn 是唯一咽喉（对话/任务分支 + 审计都在里头），不能让 TUI 另起
+    一套循环（会重蹈多入口绕审计的覆辙）。所以把输出抽成可注入的 Display：
+    REPL 默认走 stdout，TUI 传一个写进 widget 的实例，循环本身一字不改。
+    """
+
+    make_display: Callable[[], tuple[Callable[[str], None], Callable[[], bool]]]
+    on_tool: Callable[[str, dict], None]
+    on_status: Callable[[str], None]   # 任务续跑的状态行
+    on_footer: Callable[[str], None]   # 每轮收尾小结
+    end_message: Callable[[], None]    # 一条消息流完后的收尾（stdout 下=换行）
 
 
 def _c():
