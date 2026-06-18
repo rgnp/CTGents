@@ -26,10 +26,10 @@ from typing import TYPE_CHECKING
 from textual import work
 from textual.app import App, ComposeResult
 from textual.binding import Binding
-from textual.containers import Vertical, VerticalScroll
+from textual.containers import Horizontal, Vertical, VerticalScroll
 from textual.screen import Screen
 from textual.theme import Theme
-from textual.widgets import Input, Label, ListItem, ListView, Markdown, Static
+from textual.widgets import Button, Input, Label, ListItem, ListView, Markdown, Static
 
 if TYPE_CHECKING:
     from .cache_context import CacheContext
@@ -120,15 +120,8 @@ _GRADIENT = [
 _SHADOW_COLOR = "#0a1a3a"  # 投影色（深海军蓝）
 
 
-def _banner(text: str) -> str:
-    """返回带 Rich 颜色标记的像素大字：密度抗锯齿 + 行渐变 + 右下投影。
-
-    渲染管线：
-    1. 从 _GLYPHS 取各字母的密度矩阵，并排拼接
-    2. 按行铺投影（右下 1px）：密度>0 的格子，投影到 (r+1,c+1)
-    3. 从顶到底逐行：用 _GRADIENT 着色密度>0 的格子，密度越高字符越实
-    """
-    # 拼接所有字母的密度矩阵
+def _build_canvas(text: str) -> list[list[str]]:
+    """共享管线：密度矩阵 → canvas（含投影标记 '·'）。"""
     rows_density: list[list[int]] = [[] for _ in range(_GLYPH_H)]
     for ch in text:
         glyph = _GLYPHS.get(ch)
@@ -137,44 +130,77 @@ def _banner(text: str) -> str:
         for i in range(_GLYPH_H):
             rows_density[i].extend(glyph[i] + [0] * _GLYPH_GAP)
 
-    # 总宽度
     w = max((len(r) for r in rows_density), default=0)
     if w == 0:
-        return ""
+        return [[""]] * _GLYPH_H
 
-    # 斜体：每行左填充
     canvas = [[" "] * (w + _BANNER_LEAD[i]) for i in range(_GLYPH_H)]
     for i in range(_GLYPH_H):
         offset = _BANNER_LEAD[i]
         for j, d in enumerate(rows_density[i]):
             canvas[i][offset + j] = ("░" if d == 1 else "▓" if d == 2 else "█" if d == 3 else " ")
 
-    # 右下投影：非空格子 → 投影到 (r+1, c+1)，不覆盖已有像素
+    # 右下投影
     for i in range(_GLYPH_H - 1):
-        limit = len(canvas[i + 1]) - 1  # 下一行较短（斜体右倾递减）
+        limit = len(canvas[i + 1]) - 1
         for j in range(limit):
             if canvas[i][j] != " " and canvas[i + 1][j + 1] == " ":
-                canvas[i + 1][j + 1] = "·"  # 临时标记
+                canvas[i + 1][j + 1] = "·"
 
-    # 逐行 Rich 着色输出
-    lines = []
+    return canvas
+
+
+def _banner_rows(text: str) -> list[str]:
+    """返回 8 行 Textual markup 的列表，供开屏逐行动画使用。
+
+    每行用紧凑标记——同色连续字符合并为一个颜色标签，大幅减少标签数。
+    """
+    canvas = _build_canvas(text)
+    result: list[str] = []
     for i in range(_GLYPH_H):
         body_color = _GRADIENT[i]
-        parts = []
-        for ch in canvas[i]:
-            if ch == "█":
-                parts.append(f"[{body_color}]█[/]")
-            elif ch == "▓":
-                parts.append(f"[{body_color}]▓[/]")
-            elif ch == "░":
-                parts.append(f"[{body_color}]░[/]")
-            elif ch == "·":  # 投影
-                parts.append(f"[{_SHADOW_COLOR}]░[/]")
-            else:
-                parts.append(" ")
-        lines.append("".join(parts).rstrip())
+        parts: list[str] = []
+        cur_color = None
+        cur_text: list[str] = []
 
-    return "\n".join(lines)
+        def _flush(out: list[str]) -> None:
+            nonlocal cur_color, cur_text
+            if cur_text:
+                out.append(f"[{cur_color}]{''.join(cur_text)}[/]")
+                cur_text = []
+                cur_color = None
+
+        for ch in canvas[i]:
+            if ch in ("█", "▓", "░"):
+                if cur_color != body_color:
+                    _flush(parts)
+                    cur_color = body_color
+                cur_text.append(ch)
+            elif ch == "·":
+                if cur_color != _SHADOW_COLOR:
+                    _flush(parts)
+                    cur_color = _SHADOW_COLOR
+                cur_text.append("░")
+            else:
+                _flush(parts)
+                parts.append(" ")
+        _flush(parts)
+        result.append("".join(parts).rstrip())
+    return result
+
+
+def _banner_plain(text: str) -> str:
+    """返回纯文本 banner（无 markup），供 SaveSelectScreen 的 Static 组件使用。
+
+    Textual Static 对超密逐字符 Rich 标记渲染异常——此函数完全剔除标记，
+    靠 CSS 的 color 属性统一着色。
+    """
+    canvas = _build_canvas(text)
+    rows = []
+    for row in canvas:
+        line = "".join(ch if ch != "·" else "░" for ch in row)
+        rows.append(line.rstrip())
+    return "\n".join(rows)
 
 
 # ── 纯函数辅助 ──
@@ -245,29 +271,60 @@ def _status_line(ctx, session_id: str) -> str:
 # 开屏
 # ═══════════════════════════════════════════════════════
 class SplashScreen(Screen):
-    MIN_SECONDS = 2.5   # 开屏至少显示这么久（动画感）；测试可调 0
+    """逐行动画展示 CTGENT Logo → 双选项按钮（新存档 / 继续游玩）。
+
+    - ctx 初始化后台线程并行跑，不阻塞动画
+    - 动画完成 + ctx 就绪后显示按钮
+    - MIN_SECONDS 可置 0（测试用）
+    """
+
+    MIN_SECONDS = 0.0       # 测试可调，默认 0（动画本身已有节奏）
+    ROW_INTERVAL = 0.10     # 每行间隔（秒）
 
     CSS = """
     SplashScreen { align: center middle; background: $background; }
-    #logo { content-align: center middle; }
-    #boot { color: $accent; content-align: center middle; margin-top: 2; }
+    #logo_area { width: auto; height: auto; align: center middle; margin-bottom: 1; }
+    #logo_area > Static { content-align: center middle; width: 100%; }
+    #hint { color: $primary-darken-1; content-align: center middle; margin-top: 1; height: 1; }
+    #buttons { width: auto; height: auto; align: center middle; margin-top: 1; }
+    #buttons > Button { margin: 0 2; min-width: 16; }
     """
 
     def compose(self) -> ComposeResult:
         with Vertical():
-            yield Static(_banner("CTGENT"), id="logo")
-            yield Static("▸ loading memory", id="boot")
+            yield Vertical(id="logo_area")
+            yield Static("", id="hint")
+            yield Horizontal(id="buttons")
 
     def on_mount(self) -> None:
-        self._t0 = time.monotonic()
-        self._dots = 0
-        self.set_interval(0.3, self._anim)
+        self._rows = _banner_rows("CTGENT")
+        self._revealed = 0
+        self._ctx_ready = False
+        self._buttons_shown = False
+        self._timer = self.set_interval(self.ROW_INTERVAL, self._reveal_row)
         self._init_ctx()
 
-    def _anim(self) -> None:
-        self._dots = (self._dots + 1) % 4
+    def _reveal_row(self) -> None:
+        if self._revealed < len(self._rows):
+            row_text = self._rows[self._revealed]
+            with contextlib.suppress(Exception):
+                self.query_one("#logo_area").mount(Static(row_text))
+            self._revealed += 1
+        if self._revealed >= len(self._rows):
+            self._timer.stop()
+            with contextlib.suppress(Exception):
+                self.query_one("#hint", Static).update("◆ 选择操作 ◆")
+            self._try_show_buttons()
+
+    def _try_show_buttons(self) -> None:
+        if self._buttons_shown or not self._ctx_ready or self._revealed < len(self._rows):
+            return
+        self._buttons_shown = True
         with contextlib.suppress(Exception):
-            self.query_one("#boot", Static).update("▸ loading memory" + "." * self._dots)
+            btn_area = self.query_one("#buttons", Horizontal)
+            btn_area.mount(Button("新存档", id="new_game", variant="primary"))
+            btn_area.mount(Button("继续游玩", id="load_game", variant="default"))
+            btn_area.focus()
 
     @work(thread=True)
     def _init_ctx(self) -> None:
@@ -278,11 +335,15 @@ class SplashScreen(Screen):
         except Exception:
             pass
         with contextlib.suppress(Exception):
-            import src.llm  # noqa: F401  # 预热重栈（已秒显，后台加载，第一轮不卡）
-        elapsed = time.monotonic() - self._t0
-        if elapsed < self.MIN_SECONDS:    # 开屏动画感：至少显示一会
-            time.sleep(self.MIN_SECONDS - elapsed)
-        self.app.call_from_thread(self.app.goto_select)
+            import src.llm  # noqa: F401
+        self._ctx_ready = True
+        self.app.call_from_thread(self._try_show_buttons)
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        if event.button.id == "new_game":
+            self.app.goto_chat(None)
+        elif event.button.id == "load_game":
+            self.app.goto_select()
 
 
 # ═══════════════════════════════════════════════════════
@@ -292,7 +353,7 @@ class SaveSelectScreen(Screen):
     CSS = """
     SaveSelectScreen { align: center middle; background: $background; }
     #selectwrap { width: auto; height: auto; align: center top; }
-    #logo { content-align: center middle; width: 100%; margin-bottom: 1; }
+    #logo { content-align: center middle; width: 100%; margin-bottom: 1; color: $primary; }
     #savebox { border: round $primary; padding: 1 2; width: 56; height: auto; background: $surface; }
     #savetitle { color: $accent; text-style: bold; content-align: center middle; margin-bottom: 1; }
     #saves { height: auto; max-height: 14; background: $surface; }
@@ -308,7 +369,7 @@ class SaveSelectScreen(Screen):
             items.append(ListItem(Label(get_session_name(sid)), name=sid))
         items.append(ListItem(Label("+ NEW GAME"), name="__new__"))
         with Vertical(id="selectwrap"):
-            yield Static(_banner("CTGENT"), id="logo")   # 开屏大字延续到存档页
+            yield Static(_banner_plain("CTGENT"), id="logo")   # 开屏大字延续到存档页
             with Vertical(id="savebox"):
                 yield Static("◆ SELECT  SAVE ◆", id="savetitle")
                 yield ListView(*items, id="saves")

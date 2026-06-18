@@ -12,7 +12,8 @@ from src.tui import (
     CTGentsApp,
     SaveSelectScreen,
     SplashScreen,
-    _banner,
+    _banner_plain,
+    _banner_rows,
     _fmt_tool,
     _status_line,
     _strip_user_wrappers,
@@ -49,25 +50,37 @@ class TestPureHelpers:
     def test_status_line_string(self):
         assert isinstance(_status_line(CacheContext(), ""), str)
 
-    def test_banner_8x8_density_antialiased(self):
-        b = _banner("CTGENT")
+    def test_banner_rows_8_lines(self):
+        rows = _banner_rows("CTGENT")
+        assert len(rows) == 8
+        assert "█" in rows[0]
+        assert "▓" in rows[0]
+
+    def test_banner_plain_no_markup(self):
+        b = _banner_plain("CTGENT")
         assert b.count("\n") == 7          # 8 行
-        assert "█" in b                    # 实心字身（密度 3）
-        assert "▓" in b                    # 次边缘（密度 2）
-        assert "░" in b                    # 边缘过渡 + 右下投影
+        assert "[" not in b                 # 无 markup 标记
+        assert "█" in b
 
 
 # ── 多屏流程 ──
 class TestScreenFlow:
     def test_splash_to_select_to_chat(self, monkeypatch):
-        monkeypatch.setattr(SplashScreen, "MIN_SECONDS", 0.0)
         monkeypatch.setattr("src.session.get_session_name", lambda sid: f"会话-{sid}")
 
         async def go():
             app = CTGentsApp(CacheContext(), None, ["a", "b"])
             async with app.run_test() as pilot:
+                # 等动画完成 + 按钮出现
+                for _ in range(40):
+                    await pilot.pause(0.1)
+                    if app.screen.query("#load_game"):
+                        break
+                # 点击「继续游玩」
+                from textual.widgets import Button
+                btn = app.screen.query_one("#load_game", Button)
+                btn.press()
                 await pilot.pause()
-                # MIN_SECONDS=0 时开屏可能已秒切，不强求当下仍在 splash
                 assert await _wait_screen(app, pilot, "SaveSelectScreen"), "应切到存档选择"
                 from textual.widgets import ListView
                 lv = app.screen.query_one("#saves", ListView)
@@ -80,25 +93,35 @@ class TestScreenFlow:
         asyncio.run(go())
 
     def test_no_sessions_skip_select(self, monkeypatch):
-        monkeypatch.setattr(SplashScreen, "MIN_SECONDS", 0.0)
-
         async def go():
             app = CTGentsApp(CacheContext(), None, [])   # 无存档
             async with app.run_test() as pilot:
+                # 等按钮出现
+                for _ in range(40):
+                    await pilot.pause(0.1)
+                    if app.screen.query("#new_game"):
+                        break
+                from textual.widgets import Button
+                app.screen.query_one("#new_game", Button).press()
                 await pilot.pause()
-                assert await _wait_screen(app, pilot, "ChatScreen"), "无存档应直接进聊天（新游戏）"
+                assert await _wait_screen(app, pilot, "ChatScreen"), "无存档→新存档→直接进聊天"
 
         asyncio.run(go())
 
 
 class TestSaveSelect:
     def test_has_new_game_item(self, monkeypatch):
-        monkeypatch.setattr(SplashScreen, "MIN_SECONDS", 0.0)
         monkeypatch.setattr("src.session.get_session_name", lambda sid: f"会话-{sid}")
 
         async def go():
             app = CTGentsApp(CacheContext(), None, ["x"])
             async with app.run_test() as pilot:
+                for _ in range(40):
+                    await pilot.pause(0.1)
+                    if app.screen.query("#load_game"):
+                        break
+                from textual.widgets import Button
+                app.screen.query_one("#load_game", Button).press()
                 await pilot.pause()
                 assert await _wait_screen(app, pilot, "SaveSelectScreen")
                 from textual.widgets import ListView
@@ -111,17 +134,27 @@ class TestSaveSelect:
 
 # ── 聊天屏 ──
 class TestChatScreen:
-    def _fresh_chat_app(self, monkeypatch):
-        monkeypatch.setattr(SplashScreen, "MIN_SECONDS", 0.0)
-        return CTGentsApp(CacheContext(), None, [])   # 无存档 → 直接进聊天
+    @staticmethod
+    def _fresh_chat_app():
+        """创建无存档的 app 实例。"""
+        return CTGentsApp(CacheContext(), None, [])
+
+    async def _enter_chat(self, app, pilot):
+        """等开屏按钮出现 → 点「新存档」→ 进聊天屏。"""
+        for _ in range(40):
+            await pilot.pause(0.1)
+            if app.screen.query("#new_game"):
+                break
+        from textual.widgets import Button
+        app.screen.query_one("#new_game", Button).press()
+        await pilot.pause()
+        assert await _wait_screen(app, pilot, "ChatScreen")
 
     def test_idle_esc_clears_no_interrupt(self, monkeypatch):
-        app = self._fresh_chat_app(monkeypatch)
-
         async def go():
+            app = self._fresh_chat_app()
             async with app.run_test() as pilot:
-                await pilot.pause()
-                assert await _wait_screen(app, pilot, "ChatScreen")
+                await self._enter_chat(app, pilot)
                 inp = app.screen.query_one("#prompt")
                 inp.value = "half typed"
                 assert app.screen._busy is False
@@ -132,13 +165,11 @@ class TestChatScreen:
         asyncio.run(go())
 
     def test_echo_conversation_skips_noise(self, monkeypatch):
-        app = self._fresh_chat_app(monkeypatch)
-
         async def go():
+            app = self._fresh_chat_app()
             from textual.widgets import Markdown
             async with app.run_test() as pilot:
-                await pilot.pause()
-                assert await _wait_screen(app, pilot, "ChatScreen")
+                await self._enter_chat(app, pilot)
                 app.ctx.log = [
                     {"role": "system", "content": "注入"},
                     {"role": "user", "content": "问题A"},
@@ -157,18 +188,16 @@ class TestChatScreen:
 
     def test_agent_turn_streams_markdown(self, monkeypatch):
         import src.main as main_mod
-        monkeypatch.setattr(SplashScreen, "MIN_SECONDS", 0.0)
         monkeypatch.setattr(
             main_mod, "run_agent_turn",
             lambda c, t, sid, *, display=None: (
                 display.make_display()[0]("**hi**"), display.end_message(), "sidX")[-1])
-        app = CTGentsApp(CacheContext(), None, [])
 
         async def go():
+            app = CTGentsApp(CacheContext(), None, [])
             from textual.widgets import Markdown
             async with app.run_test() as pilot:
-                await pilot.pause()
-                assert await _wait_screen(app, pilot, "ChatScreen")
+                await self._enter_chat(app, pilot)
                 app.screen.query_one("#prompt").value = "hello"
                 await pilot.press("enter")
                 for _ in range(20):
