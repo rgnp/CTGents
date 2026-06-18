@@ -390,6 +390,7 @@ class ChatScreen(Screen):
     CSS = """
     ChatScreen { background: $background; }
     #transcript { padding: 0 1; }
+    #transcript > * { width: 100%; }
     .user { color: $accent; text-style: bold; margin: 1 0 0 0; }
     .agent { margin: 0 0 0 2; }
     .tool { color: $secondary; margin: 0 0 0 2; }
@@ -623,7 +624,7 @@ class ChatScreen(Screen):
     # ── 辅助 ──
     def _mount(self, text: str, cls: str) -> None:
         t = self.query_one("#transcript", VerticalScroll)
-        t.mount(Static(text, classes=cls))
+        t.mount(Label(text, classes=cls, markup=False))
         t.scroll_end(animate=False)
 
     def _mount_md(self, text: str) -> None:
