@@ -400,39 +400,30 @@ def _print_recent(messages: list[dict], count: int = 4) -> None:
     if not exchanges:
         return
     recent = exchanges[-min(count * 2, len(exchanges)):]
-    print("─" * 40)
+    pairs: list[tuple[str, str]] = []
     for m in recent:
         role = "You" if m["role"] == "user" else "Agent"
         content = m["content"] or ""
         if len(content) > 200:
             content = content[:200] + "..."
-        print(f"{role}: {content}")
-    print("─" * 40)
+        pairs.append((role, content))
+    from . import ui
+    ui.recent_history(pairs)
 
 
 def _make_display() -> tuple[TokenCallback, Callable[[], bool]]:
-    """创建流式输出回调。返回 (on_token, has_output)。"""
-    started = False
-
-    def on_token(token: str) -> None:
-        nonlocal started
-        if not started:
-            print("Agent: ", end="", flush=True)
-            started = True
-        print(token, end="", flush=True)
-
-    def has_output() -> bool:
-        return started
-
-    return on_token, has_output
+    """创建流式输出回调。返回 (on_token, has_output)。样式见 ui.agent_display。"""
+    from . import ui
+    return ui.agent_display()
 
 
 def _on_tool(name: str, args: dict) -> None:
+    from . import ui
     label = TOOL_LABELS.get(name, name)
     detail = " ".join(f"{k}={v}" for k, v in args.items())
     if len(detail) > 80:
         detail = detail[:77] + "..."
-    print(f"  [{label}] {detail}")
+    ui.tool_call(label, detail)
 
 
 def _render_turn_error(e: BaseException) -> tuple[list[str], bool]:
@@ -645,7 +636,8 @@ def main() -> None:
     ctx.rebuild_prefix(_make_prefix_msgs())
     _append_volatile_context(ctx)
 
-    print("Agent 已启动，输入 /help 查看指令列表\n")
+    from . import ui
+    ui.banner("CTGents · 输入 /help 查看指令列表")
 
     _use_rich_input = sys.stdin.isatty()
     if _use_rich_input:
@@ -678,7 +670,7 @@ def main() -> None:
                     from . import status_bar
                     status_bar.refresh(ctx, session_id)
                     user_input = prompt(
-                        "You: ", key_bindings=kb, bottom_toolbar=status_bar.text
+                        ui.prompt_message(), key_bindings=kb, bottom_toolbar=status_bar.text
                     ).strip()
                 else:
                     user_input = input("You: ").strip()
