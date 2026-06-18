@@ -1,17 +1,25 @@
-"""Claude 式全屏 TUI（Textual）—— 底部常驻输入/状态条 + 上方滚动 transcript + 实时 markdown。
+"""像素游戏风全屏 TUI（Textual）：开屏 → 存档选择 → 聊天，三屏 + NES 配色主题。
 
-架构纪律：
-- 复用唯一咽喉 run_agent_turn（对话/任务分支 + 审计都在里头），TUI 只把"输出去向"
-  换成 widget——绝不另起一套 agent 循环（项目踩过多入口绕审计的坑）。
-- agent 一轮跑在后台线程（LLM 阻塞），线程只往线程安全 deque 推事件；UI 线程用
-  set_interval 排空 deque、在主线程改 widget。杜绝跨线程动 UI。
-- 纯展示层：不碰缓存/审计/落盘逻辑（落盘仍由 run_agent_turn 内部 on_progress 做）。
+流程：
+- 开屏 SplashScreen：像素大字 CTGENTS + loading 动画；后台线程做 ctx 初始化
+  （rebuild_prefix + volatile），至少显示 ~1.2s 给"开屏动画感"，完成后切存档选择。
+- 存档选择 SaveSelectScreen：居中存档列表，↑↓ 切换、Enter 选定，含 + NEW GAME；
+  无底部对话线/状态栏（只有进聊天屏后才出现）。
+- 聊天 ChatScreen：滚动 transcript + 底部输入 + 状态栏；实时 markdown 渲染。
 
-启动失败（终端不支持等）由 main 兜底回退行式 REPL，见 main.run()。
+架构纪律（不变）：
+- 复用唯一咽喉 run_agent_turn（注入 ui.Display），不另起 agent 循环。
+- agent 一轮跑线程 worker，只往线程安全 deque 推事件；UI 线程 set_interval 排空、
+  在主线程改 widget。
+- TUI 下置 main._under_tui=True 禁 msvcrt Esc 监听（Textual 自管 stdin）。
+
+启动失败由 main 兜底回退行式 REPL。
 """
 
 from __future__ import annotations
 
+import contextlib
+import time
 from collections import deque
 from typing import TYPE_CHECKING
 
@@ -19,14 +27,53 @@ from textual import work
 from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.containers import Vertical, VerticalScroll
-from textual.widgets import Input, Markdown, Static
+from textual.screen import Screen
+from textual.theme import Theme
+from textual.widgets import Input, Label, ListItem, ListView, Markdown, Static
 
 if TYPE_CHECKING:
     from .cache_context import CacheContext
 
 
+# ── 红白机 8-bit 配色主题 ──
+NES_THEME = Theme(
+    name="nes",
+    primary="#3cbcfc",      # 亮青（FC 招牌蓝）
+    secondary="#f878f8",    # 品红
+    accent="#fc9838",       # 橙
+    foreground="#fcfcfc",
+    background="#0d0d20",
+    surface="#1a1a3a",
+    panel="#202050",
+    success="#58d854",
+    warning="#f8d800",
+    error="#f83800",
+    dark=True,
+)
+
+# ── 像素大字 banner（5×5 块字）──
+_FONT = {
+    "C": [" ████", "█    ", "█    ", "█    ", " ████"],
+    "T": ["█████", "  █  ", "  █  ", "  █  ", "  █  "],
+    "G": [" ████", "█    ", "█  ██", "█   █", " ███ "],
+    "E": ["█████", "█    ", "███  ", "█    ", "█████"],
+    "N": ["█   █", "██  █", "█ █ █", "█  ██", "█   █"],
+    "S": [" ████", "█    ", " ███ ", "    █", "████ "],
+}
+
+
+def _banner(text: str) -> str:
+    rows = ["", "", "", "", ""]
+    for ch in text:
+        glyph = _FONT.get(ch, ["     "] * 5)
+        for i in range(5):
+            rows[i] += glyph[i] + " "
+    return "\n".join(r.rstrip() for r in rows)
+
+
+# ── 纯函数辅助 ──
 def _fmt_tool(name: str, args: dict) -> tuple[str, str]:
-    """工具调用 → (标签, 截断后的参数明细)，与 main._on_tool 同款。"""
+    """工具调用 → (标签, 截断后的参数明细)。"""
     from .tools._tool_meta import TOOL_LABELS
     label = TOOL_LABELS.get(name, name)
     detail = " ".join(f"{k}={v}" for k, v in args.items())
@@ -45,7 +92,7 @@ def _strip_user_wrappers(content: str) -> str:
 
 
 def _status_line(ctx, session_id: str) -> str:
-    """底部状态条文本（纯文本版，与 status_bar._build 同源、不带 prompt_toolkit HTML）。"""
+    """底部状态条文本（纯文本版，与 status_bar._build 同源）。"""
     segs: list[str] = []
     if session_id:
         try:
@@ -88,19 +135,94 @@ def _status_line(ctx, session_id: str) -> str:
     return "  │  ".join(segs) if segs else "就绪"
 
 
-class CTGentsTUI(App):
-    """全屏聊天 TUI。会话选择仍在 main() 里做完，这里只接 (ctx, session_id) 跑交互。"""
+# ═══════════════════════════════════════════════════════
+# 开屏
+# ═══════════════════════════════════════════════════════
+class SplashScreen(Screen):
+    MIN_SECONDS = 1.2   # 开屏至少显示这么久（动画感）；测试可调 0
 
     CSS = """
-    Screen { background: $surface; }
+    SplashScreen { align: center middle; background: $background; }
+    #logo { color: $primary; text-style: bold; content-align: center middle; }
+    #boot { color: $accent; content-align: center middle; margin-top: 2; }
+    """
+
+    def compose(self) -> ComposeResult:
+        with Vertical():
+            yield Static(_banner("CTGENTS"), id="logo")
+            yield Static("▸ loading memory", id="boot")
+
+    def on_mount(self) -> None:
+        self._t0 = time.monotonic()
+        self._dots = 0
+        self.set_interval(0.3, self._anim)
+        self._init_ctx()
+
+    def _anim(self) -> None:
+        self._dots = (self._dots + 1) % 4
+        with contextlib.suppress(Exception):
+            self.query_one("#boot", Static).update("▸ loading memory" + "." * self._dots)
+
+    @work(thread=True)
+    def _init_ctx(self) -> None:
+        from . import main as _main
+        try:
+            self.app.ctx.rebuild_prefix(_main._make_prefix_msgs())
+            _main._append_volatile_context(self.app.ctx)
+        except Exception:
+            pass
+        elapsed = time.monotonic() - self._t0
+        if elapsed < self.MIN_SECONDS:    # 开屏动画感：至少显示一会
+            time.sleep(self.MIN_SECONDS - elapsed)
+        self.app.call_from_thread(self.app.goto_select)
+
+
+# ═══════════════════════════════════════════════════════
+# 存档选择
+# ═══════════════════════════════════════════════════════
+class SaveSelectScreen(Screen):
+    CSS = """
+    SaveSelectScreen { align: center middle; background: $background; }
+    #savebox { border: round $primary; padding: 1 2; width: 56; height: auto; background: $surface; }
+    #savetitle { color: $accent; text-style: bold; content-align: center middle; margin-bottom: 1; }
+    #saves { height: auto; max-height: 16; background: $surface; }
+    #saves > ListItem { padding: 0 1; color: $foreground; }
+    #saves > ListItem.--highlight { background: $primary; color: $background; text-style: bold; }
+    #savehint { color: $primary-darken-1; content-align: center middle; margin-top: 1; }
+    """
+
+    def compose(self) -> ComposeResult:
+        from .session import get_session_name
+        items: list[ListItem] = []
+        for sid in self.app.sessions:
+            items.append(ListItem(Label(get_session_name(sid)), name=sid))
+        items.append(ListItem(Label("+ NEW GAME"), name="__new__"))
+        with Vertical(id="savebox"):
+            yield Static("◆ SELECT  SAVE ◆", id="savetitle")
+            yield ListView(*items, id="saves")
+            yield Static("↑↓ 选择   ·   Enter 进入   ·   Ctrl+C 退出", id="savehint")
+
+    def on_mount(self) -> None:
+        self.query_one("#saves", ListView).focus()
+
+    def on_list_view_selected(self, event: ListView.Selected) -> None:
+        name = event.item.name
+        self.app.goto_chat(None if name == "__new__" else name)
+
+
+# ═══════════════════════════════════════════════════════
+# 聊天
+# ═══════════════════════════════════════════════════════
+class ChatScreen(Screen):
+    CSS = """
+    ChatScreen { background: $background; }
     #transcript { padding: 0 1; }
-    .user { color: $success; text-style: bold; margin: 1 0 0 0; }
+    .user { color: $accent; text-style: bold; margin: 1 0 0 0; }
     .agent { margin: 0 0 0 2; }
-    .tool { color: $text-muted; margin: 0 0 0 2; }
-    .meta { color: $text-muted; margin: 0 0 0 2; }
+    .tool { color: $secondary; margin: 0 0 0 2; }
+    .meta { color: $primary-darken-1; margin: 0 0 0 2; }
     .err  { color: $error; margin: 0 0 0 2; }
     #bottombar { dock: bottom; height: auto; }
-    /* 输入框：去掉左右框、只留上下两根线（Claude 式）；线常驻可见、聚焦更亮 */
     #prompt {
         border: none;
         border-top: solid $primary-darken-1;
@@ -109,12 +231,8 @@ class CTGentsTUI(App):
         height: 3;
         padding: 0 1;
     }
-    #prompt:focus {
-        border-top: solid $primary;
-        border-bottom: solid $primary;
-    }
-    /* 状态栏放在输入框【下面】 */
-    #status { height: 1; color: $text-muted; background: $panel; padding: 0 1; }
+    #prompt:focus { border-top: solid $primary; border-bottom: solid $primary; }
+    #status { height: 1; color: $primary; background: $panel; padding: 0 1; }
     """
 
     BINDINGS = [
@@ -122,67 +240,48 @@ class CTGentsTUI(App):
         Binding("ctrl+c", "quit", "退出", show=True, priority=True),
     ]
 
-    def __init__(self, ctx: CacheContext, session_id: str | None,
-                 sessions: list[str] | None = None):
+    def __init__(self) -> None:
         super().__init__()
-        self.ctx = ctx
-        self.session_id = session_id
-        self._sessions = sessions or []     # 历史会话列表，启动时在 TUI 内选（不再走老 CLI）
-        self._picking = False               # True=正在选会话，下一条输入当编号解释
-        self._events: deque = deque()      # 后台线程→UI 线程的有序事件管道（单产单消）
+        self._events: deque = deque()
         self._cur_md: Markdown | None = None
         self._cur_text = ""
         self._dirty = False
         self._busy = False
         self._pending_notices: list[str] = []
-        self.final_session_id = session_id  # 退出时回传给 main 做收尾
 
     # ── 布局 ──
     def compose(self) -> ComposeResult:
         yield VerticalScroll(id="transcript")
-        with Vertical(id="bottombar"):   # 输入框在上、状态栏在下，整体 dock 底部
+        with Vertical(id="bottombar"):
             yield Input(placeholder="输入消息  ·  /help 指令  ·  Esc 中断  ·  Ctrl+C 退出", id="prompt")
-            yield Static(_status_line(self.ctx, self.session_id or ""), id="status")
+            yield Static("", id="status")
 
     def on_mount(self) -> None:
-        if self._sessions and self.session_id is None:
-            self._show_picker()
-        else:
-            self._echo_conversation()
+        self._load_pending()
+        self._refresh_status()
         self.query_one("#prompt", Input).focus()
-        self.set_interval(0.08, self._drain_events)    # 排空事件 → 渲染
-        self.set_interval(0.8, self._refresh_status)    # 状态条
-        self.set_interval(1.0, self._drain_jobs)        # 后台作业完成通知
+        self.set_interval(0.08, self._drain_events)
+        self.set_interval(0.8, self._refresh_status)
+        self.set_interval(1.0, self._drain_jobs)
 
-    def _show_picker(self, cap: int = 20) -> None:
-        """在 TUI 内列历史会话供选择（取代启动前的老 CLI 选择）。"""
-        from .session import get_session_name
-        self._mount("历史会话（输入编号加载，直接回车=新会话）：", "meta")
-        for i, sid in enumerate(self._sessions[:cap], 1):
-            self._mount(f"  [{i}] {get_session_name(sid)}", "meta")
-        if len(self._sessions) > cap:
-            self._mount(f"  …共 {len(self._sessions)} 个，更早的进去后用 /sessions + /load", "meta")
-        self._picking = True
-
-    def _do_pick(self, text: str) -> None:
-        self._picking = False
-        try:
-            idx = int(text) - 1
-            if 0 <= idx < len(self._sessions):
-                self._apply_load(self._sessions[idx])
-                return
-        except ValueError:
-            pass
-        self.query_one("#transcript").remove_children()
-        self._mount("新会话开始，直接输入消息即可。", "meta")
+    def _load_pending(self) -> None:
+        """进聊天屏时按存档选择结果加载会话（NEW=不加载，沿用 splash 初始化的空会话）。"""
+        sid = self.app.pending_load
+        if not sid:
+            return
+        from .main import _append_volatile_context
+        from .session import load_session
+        self.app.ctx.clear_log()
+        self.app.ctx.log.extend(load_session(sid))
+        _append_volatile_context(self.app.ctx)
+        self.app.session_id = sid
+        self.app.final_session_id = sid
+        self._echo_conversation()
 
     # ── 输入 ──
     def on_input_submitted(self, event: Input.Submitted) -> None:
         text = event.value.strip()
         event.input.value = ""
-        if self._picking:
-            self._do_pick(text)
-            return
         if not text or self._busy:
             return
         self._mount("你 " + text, "user")
@@ -195,62 +294,64 @@ class CTGentsTUI(App):
                 self._pending_notices.clear()
             self._run_turn(text)
 
-    # ── 指令（控制面，同步处理；effect 复用 dispatch_cmd 的 CmdResult）──
+    # ── 指令 ──
     def _handle_command(self, text: str) -> None:
         from .commands import dispatch as dispatch_cmd
         try:
-            r = dispatch_cmd(text, self.ctx, self.session_id)
+            r = dispatch_cmd(text, self.app.ctx, self.app.session_id)
         except Exception as e:  # noqa: BLE001
             self._mount(f"指令出错: {e}", "err")
             return
         if getattr(r, "exit", False):
-            self.action_quit()
+            self.app.action_quit()
             return
         if r.message:
             self._mount(r.message, "meta")
         if r.save:
             from .session import save_session
-            self.session_id = save_session(self.ctx.all, self.session_id)
-            self._mount(f"会话已保存: [{self.session_id}]", "meta")
+            self.app.session_id = save_session(self.app.ctx.all, self.app.session_id)
+            self.app.final_session_id = self.app.session_id
+            self._mount(f"会话已保存: [{self.app.session_id}]", "meta")
         if r.load:
             self._apply_load(r.load)
         if r.clear:
             self._apply_clear(r)
         if r.retry:
-            last = self.ctx.last_user_content() or ""
+            last = self.app.ctx.last_user_content() or ""
             if last:
                 self._run_turn(last)
 
     def _apply_load(self, target: str) -> None:
         from .main import _append_volatile_context
         from .session import load_session
-        self.ctx.clear_log()
-        self.ctx.log.extend(load_session(target))
-        _append_volatile_context(self.ctx)
-        self.session_id = target
+        self.app.ctx.clear_log()
+        self.app.ctx.log.extend(load_session(target))
+        _append_volatile_context(self.app.ctx)
+        self.app.session_id = target
+        self.app.final_session_id = target
         from . import status_bar
         status_bar.reset()
         self.query_one("#transcript").remove_children()
         self._echo_conversation()
-        self._refresh_status()   # 会话名即时进状态栏（取代"已加载会话"提示）
+        self._refresh_status()
 
     def _apply_clear(self, r) -> None:
         from .main import _append_volatile_context, _make_prefix_msgs
-        self.ctx.clear_log()
-        self.ctx.rebuild_prefix(_make_prefix_msgs())
+        self.app.ctx.clear_log()
+        self.app.ctx.rebuild_prefix(_make_prefix_msgs())
         if r.save:
-            self.session_id = None
+            self.app.session_id = None
             from . import status_bar
             from .session_pins import clear_pins
             from .tasks import reset_gaps_cache
             clear_pins()
             reset_gaps_cache()
             status_bar.reset()
-        _append_volatile_context(self.ctx)
+        _append_volatile_context(self.app.ctx)
         self.query_one("#transcript").remove_children()
         self._mount("上下文已清除", "meta")
 
-    # ── 一轮 agent 驱动：后台线程跑唯一咽喉 run_agent_turn ──
+    # ── 一轮 agent 驱动 ──
     def _run_turn(self, text: str) -> None:
         self._busy = True
         self.query_one("#prompt", Input).disabled = True
@@ -279,9 +380,9 @@ class CTGentsTUI(App):
             end_message=lambda: ev.append(("end",)),
         )
         try:
-            self.session_id = _main.run_agent_turn(
-                self.ctx, text, self.session_id, display=disp)
-            self.final_session_id = self.session_id
+            self.app.session_id = _main.run_agent_turn(
+                self.app.ctx, text, self.app.session_id, display=disp)
+            self.app.final_session_id = self.app.session_id
         except Exception as e:  # noqa: BLE001
             ev.append(("error", f"{type(e).__name__}: {e}"))
         finally:
@@ -292,7 +393,7 @@ class CTGentsTUI(App):
         try:
             transcript = self.query_one("#transcript", VerticalScroll)
         except Exception:
-            return  # 拆屏/退出途中定时器仍可能触发，#transcript 已不在 → 静默跳过
+            return
         changed = False
         while True:
             try:
@@ -302,8 +403,8 @@ class CTGentsTUI(App):
             if kind == "token":
                 self._cur_text += rest[0]
                 self._dirty = True
-            elif kind in ("tool", "status", "footer", "error", "end", "done"):
-                await self._flush_md(transcript)   # 先把在写的 agent 段定格
+            else:
+                await self._flush_md(transcript)
                 if kind == "tool":
                     self._mount(f"→ {rest[0]}" + (f"  {rest[1]}" if rest[1] else ""), "tool")
                 elif kind in ("status", "footer"):
@@ -323,7 +424,6 @@ class CTGentsTUI(App):
             transcript.scroll_end(animate=False)
 
     async def _flush_md(self, transcript, finalize: bool = True) -> None:
-        """把累计的 agent 文本渲染进当前 Markdown widget；finalize=True 则收尾、下段另起。"""
         if self._cur_text:
             if self._cur_md is None:
                 self._cur_md = Markdown(self._cur_text, classes="agent")
@@ -347,13 +447,11 @@ class CTGentsTUI(App):
         t.scroll_end(animate=False)
 
     def _echo_conversation(self) -> None:
-        """加载会话后回放【完整原对话】：用户消息 + assistant 文字回复(markdown)。
-
-        只放对话本身——跳过 tool 结果 / system 注入 / 空的 tool-call 消息，
-        那些是用户说的"加载后好多之前没有的信息"噪声（原本不在可见对话里）。
+        """加载会话后回放完整原对话：用户消息 + assistant 文字回复(markdown)，
+        跳过 tool 结果 / system 注入 / 空的 tool-call 消息（那些是噪声）。
         """
         t = self.query_one("#transcript", VerticalScroll)
-        for m in self.ctx.log:
+        for m in self.app.ctx.log:
             role = m.get("role")
             content = (m.get("content") or "").strip()
             if role == "user":
@@ -362,13 +460,12 @@ class CTGentsTUI(App):
                     self._mount("你 " + text, "user")
             elif role == "assistant" and content:
                 self._mount_md(content)
-            # tool / system / 空 assistant(纯 tool_calls) → 跳过
         t.scroll_end(animate=False)
 
     def _refresh_status(self) -> None:
-        import contextlib
         with contextlib.suppress(Exception):
-            self.query_one("#status", Static).update(_status_line(self.ctx, self.session_id or ""))
+            self.query_one("#status", Static).update(
+                _status_line(self.app.ctx, self.app.session_id or ""))
 
     def _drain_jobs(self) -> None:
         try:
@@ -382,7 +479,6 @@ class CTGentsTUI(App):
     # ── 动作 ──
     def action_interrupt(self) -> None:
         if not self._busy:
-            # 空闲时 Esc 不是中断：清空输入框，不刷"已请求中断"
             self.query_one("#prompt", Input).value = ""
             return
         try:
@@ -393,12 +489,45 @@ class CTGentsTUI(App):
             pass
 
 
+# ═══════════════════════════════════════════════════════
+# App
+# ═══════════════════════════════════════════════════════
+class CTGentsApp(App):
+    """多屏协调 + NES 主题。共享状态（ctx/session_id/sessions）挂在 App 上，各屏经 self.app 取。"""
+
+    BINDINGS = [Binding("ctrl+c", "quit", "退出", priority=True)]
+
+    def __init__(self, ctx: CacheContext, session_id: str | None,
+                 sessions: list[str] | None = None):
+        super().__init__()
+        self.ctx = ctx
+        self.session_id = session_id
+        self.sessions = sessions or []
+        self.final_session_id = session_id
+        self.pending_load: str | None = None
+
+    def on_mount(self) -> None:
+        self.register_theme(NES_THEME)
+        self.theme = "nes"
+        self.push_screen(SplashScreen())
+
+    def goto_select(self) -> None:
+        if self.sessions:
+            self.switch_screen(SaveSelectScreen())
+        else:
+            self.goto_chat(None)   # 没存档：直接新游戏
+
+    def goto_chat(self, load_sid: str | None) -> None:
+        self.pending_load = load_sid
+        self.switch_screen(ChatScreen())
+
+
 def run_tui(ctx: CacheContext, session_id: str | None,
             sessions: list[str] | None = None) -> str | None:
     """启动 TUI，阻塞直到退出；返回最终 session_id 供 main 做收尾。"""
     from . import main as _main
     _main._under_tui = True
-    app = CTGentsTUI(ctx, session_id, sessions)
+    app = CTGentsApp(ctx, session_id, sessions)
     try:
         app.run()
     finally:

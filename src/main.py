@@ -658,20 +658,27 @@ def main() -> None:
 
     if ctx is None:
         ctx = CacheContext()
-    ctx.rebuild_prefix(_make_prefix_msgs())
-    _append_volatile_context(ctx)
+
+    def _ensure_ctx_ready() -> None:
+        # 行式 / 回退路径在此初始化；TUI 路径把它推迟到开屏后台做（界面秒显）。
+        if not ctx.prefix:
+            ctx.rebuild_prefix(_make_prefix_msgs())
+            _append_volatile_context(ctx)
 
     try:
         if use_tui:
             try:
                 from .tui import run_tui
-                session_id = run_tui(ctx, session_id, sessions)
+                session_id = run_tui(ctx, session_id, sessions)  # ctx 初始化在开屏后台做
             except Exception as e:  # noqa: BLE001  # TUI 起不来 → 回退行式，别让用户卡黑屏
                 print(f"[TUI 启动失败，回退行式界面: {type(e).__name__}: {e}]")
+                _ensure_ctx_ready()
                 session_id = _run_line_repl(ctx, session_id)
         else:
+            _ensure_ctx_ready()
             session_id = _run_line_repl(ctx, session_id)
     finally:
+        _ensure_ctx_ready()   # 收尾前兜底：TUI 未及初始化也保证 prefix 在
         for line in _finalize_session(ctx, session_id):
             print(line)
 

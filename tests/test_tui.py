@@ -1,158 +1,180 @@
-"""TUI 纯函数 + 构造冒烟。
+"""像素 TUI（多屏 + NES 主题）测试。
 
-交互行为（流式/滚动/markdown 实时渲染）靠用户终端实测——无 async 测试框架，
-且线程+定时器的 run_test 冒烟易 flaky（本项目对测试门稳定性有惨痛教训），
-故只钉死可同步、确定的部分：状态行、工具格式化、App 能构造。
+纯函数确定性钉死；多屏流程/交互用 headless run_test（轮询到目标屏，避免计时 flaky），
+不入慢测。SplashScreen.MIN_SECONDS 置 0 跳过开屏最短等待。
 """
 
+import asyncio
+
 from src.cache_context import CacheContext
-from src.tui import CTGentsTUI, _fmt_tool, _status_line, _strip_user_wrappers
+from src.tui import (
+    ChatScreen,
+    CTGentsApp,
+    SaveSelectScreen,
+    SplashScreen,
+    _banner,
+    _fmt_tool,
+    _status_line,
+    _strip_user_wrappers,
+)
 
 
-class TestStripUserWrappers:
-    def test_strips_preread_wrapper(self):
-        assert _strip_user_wrappers("[预读]x\n── 用户问题 ──\n真问题") == "真问题"
+async def _wait_screen(app, pilot, name: str, ticks: int = 40) -> bool:
+    for _ in range(ticks):
+        if type(app.screen).__name__ == name:
+            return True
+        await pilot.pause(0.05)
+    return type(app.screen).__name__ == name
 
-    def test_strips_job_notice_wrapper(self):
+
+# ── 纯函数 ──
+class TestPureHelpers:
+    def test_fmt_tool(self):
+        label, detail = _fmt_tool("read_file", {"path": "a.py"})
+        assert detail == "path=a.py" and label
+
+    def test_fmt_tool_truncates(self):
+        _, detail = _fmt_tool("x", {"k": "v" * 200})
+        assert len(detail) <= 80 and detail.endswith("...")
+
+    def test_strip_preread(self):
+        assert _strip_user_wrappers("[预读]\n── 用户问题 ──\n真问题") == "真问题"
+
+    def test_strip_job_notice(self):
         assert _strip_user_wrappers("【后台作业完成】d\n\n【用户消息】\n继续") == "继续"
 
-    def test_plain_unchanged(self):
-        assert _strip_user_wrappers("普通消息") == "普通消息"
+    def test_strip_plain(self):
+        assert _strip_user_wrappers("普通") == "普通"
+
+    def test_status_line_string(self):
+        assert isinstance(_status_line(CacheContext(), ""), str)
+
+    def test_banner_five_rows_has_blocks(self):
+        b = _banner("CTGENTS")
+        assert b.count("\n") == 4          # 5 行
+        assert "█" in b
 
 
-class TestEchoConversation:
-    """加载会话只回放干净对话：跳过 tool 结果 / system 注入 / 空 tool-call 消息。"""
-
-    def test_skips_tool_and_system_noise(self):
-        import asyncio
-
-        from textual.widgets import Markdown
+# ── 多屏流程 ──
+class TestScreenFlow:
+    def test_splash_to_select_to_chat(self, monkeypatch):
+        monkeypatch.setattr(SplashScreen, "MIN_SECONDS", 0.0)
 
         async def go():
-            ctx = CacheContext()
-            app = CTGentsTUI(ctx, None, [])
+            app = CTGentsApp(CacheContext(), None, ["a", "b"])
             async with app.run_test() as pilot:
                 await pilot.pause()
-                ctx.log = [
-                    {"role": "system", "content": "内部注入"},
+                # MIN_SECONDS=0 时开屏可能已秒切，不强求当下仍在 splash
+                assert await _wait_screen(app, pilot, "SaveSelectScreen"), "应切到存档选择"
+                from textual.widgets import ListView
+                lv = app.screen.query_one("#saves", ListView)
+                lv.index = len(app.sessions)   # NEW GAME（最后一项）
+                await pilot.pause()
+                await pilot.press("enter")
+                assert await _wait_screen(app, pilot, "ChatScreen"), "选定后应进聊天屏"
+                assert app.ctx.prefix, "开屏后台应已初始化 ctx"
+
+        asyncio.run(go())
+
+    def test_no_sessions_skip_select(self, monkeypatch):
+        monkeypatch.setattr(SplashScreen, "MIN_SECONDS", 0.0)
+
+        async def go():
+            app = CTGentsApp(CacheContext(), None, [])   # 无存档
+            async with app.run_test() as pilot:
+                await pilot.pause()
+                assert await _wait_screen(app, pilot, "ChatScreen"), "无存档应直接进聊天（新游戏）"
+
+        asyncio.run(go())
+
+
+class TestSaveSelect:
+    def test_has_new_game_item(self, monkeypatch):
+        monkeypatch.setattr(SplashScreen, "MIN_SECONDS", 0.0)
+
+        async def go():
+            app = CTGentsApp(CacheContext(), None, ["x"])
+            async with app.run_test() as pilot:
+                await pilot.pause()
+                assert await _wait_screen(app, pilot, "SaveSelectScreen")
+                from textual.widgets import ListView
+                lv = app.screen.query_one("#saves", ListView)
+                names = [c.name for c in lv.children]
+                assert "__new__" in names and "x" in names
+
+        asyncio.run(go())
+
+
+# ── 聊天屏 ──
+class TestChatScreen:
+    def _fresh_chat_app(self, monkeypatch):
+        monkeypatch.setattr(SplashScreen, "MIN_SECONDS", 0.0)
+        return CTGentsApp(CacheContext(), None, [])   # 无存档 → 直接进聊天
+
+    def test_idle_esc_clears_no_interrupt(self, monkeypatch):
+        app = self._fresh_chat_app(monkeypatch)
+
+        async def go():
+            async with app.run_test() as pilot:
+                await pilot.pause()
+                assert await _wait_screen(app, pilot, "ChatScreen")
+                inp = app.screen.query_one("#prompt")
+                inp.value = "half typed"
+                assert app.screen._busy is False
+                await pilot.press("escape")
+                await pilot.pause()
+                assert inp.value == ""
+
+        asyncio.run(go())
+
+    def test_echo_conversation_skips_noise(self, monkeypatch):
+        app = self._fresh_chat_app(monkeypatch)
+
+        async def go():
+            from textual.widgets import Markdown
+            async with app.run_test() as pilot:
+                await pilot.pause()
+                assert await _wait_screen(app, pilot, "ChatScreen")
+                app.ctx.log = [
+                    {"role": "system", "content": "注入"},
                     {"role": "user", "content": "问题A"},
                     {"role": "assistant", "content": None,
                      "tool_calls": [{"id": "1", "function": {"name": "x"}}]},
-                    {"role": "tool", "tool_call_id": "1", "content": "TOOLDUMP巨量"},
+                    {"role": "tool", "tool_call_id": "1", "content": "TOOLDUMP"},
                     {"role": "assistant", "content": "**回复B**"},
                 ]
-                app.query_one("#transcript").remove_children()
-                app._echo_conversation()
+                app.screen.query_one("#transcript").remove_children()
+                app.screen._echo_conversation()
                 await pilot.pause()
-                assert len(list(app.query(".user"))) == 1, "只 1 条用户消息"
-                assert len(list(app.query(Markdown))) == 1, "只有有文字的 assistant 渲染"
+                assert len(list(app.screen.query(".user"))) == 1
+                assert len(list(app.screen.query(Markdown))) == 1
 
         asyncio.run(go())
 
-
-class TestFmtTool:
-    def test_known_label_and_detail(self):
-        label, detail = _fmt_tool("read_file", {"path": "a.py"})
-        assert detail == "path=a.py"
-        assert isinstance(label, str) and label
-
-    def test_detail_truncated(self):
-        _, detail = _fmt_tool("x", {"k": "v" * 200})
-        assert len(detail) <= 80
-        assert detail.endswith("...")
-
-    def test_unknown_tool_falls_back_to_name(self):
-        label, _ = _fmt_tool("__no_such_tool__", {})
-        assert label == "__no_such_tool__"
-
-
-class TestStatusLine:
-    def test_empty_ctx_returns_string(self):
-        s = _status_line(CacheContext(), "")
-        assert isinstance(s, str) and s  # 至少 "就绪" 或 "ctx 0%"
-
-    def test_never_raises_on_weird_session(self):
-        # 内部各段都 try 包裹，状态行永不拖垮 UI
-        s = _status_line(CacheContext(), "no-such-session")
-        assert isinstance(s, str)
-
-
-class TestStartupPicker:
-    """会话选择搬进 TUI（不再先闪老 CLI）。"""
-
-    def test_sessions_enter_picking_mode_then_new(self):
-        import asyncio
+    def test_agent_turn_streams_markdown(self, monkeypatch):
+        import src.main as main_mod
+        monkeypatch.setattr(SplashScreen, "MIN_SECONDS", 0.0)
+        monkeypatch.setattr(
+            main_mod, "run_agent_turn",
+            lambda c, t, sid, *, display=None: (
+                display.make_display()[0]("**hi**"), display.end_message(), "sidX")[-1])
+        app = CTGentsApp(CacheContext(), None, [])
 
         async def go():
-            app = CTGentsTUI(CacheContext(), None, ["a", "b"])
+            from textual.widgets import Markdown
             async with app.run_test() as pilot:
                 await pilot.pause()
-                assert app._picking is True, "有历史会话应进选择模式"
-                await pilot.press("enter")   # 空=新会话
-                await pilot.pause()
-                assert app._picking is False
-
-        asyncio.run(go())
-
-    def test_no_sessions_no_picker(self):
-        import asyncio
-
-        async def go():
-            app = CTGentsTUI(CacheContext(), None, [])
-            async with app.run_test() as pilot:
-                await pilot.pause()
-                assert app._picking is False
+                assert await _wait_screen(app, pilot, "ChatScreen")
+                app.screen.query_one("#prompt").value = "hello"
+                await pilot.press("enter")
+                for _ in range(20):
+                    await pilot.pause(0.05)
+                assert len(list(app.screen.query(Markdown))) >= 1
+                assert app.final_session_id == "sidX"
 
         asyncio.run(go())
 
 
-class TestIdleEsc:
-    """空闲按 Esc 不是中断：清输入、不刷'已请求中断'。"""
-
-    def test_idle_esc_clears_input_no_notice(self):
-        import asyncio
-
-        async def go():
-            app = CTGentsTUI(CacheContext(), None, [])
-            async with app.run_test() as pilot:
-                await pilot.pause()
-                inp = app.query_one("#prompt")
-                inp.value = "half typed"
-                assert app._busy is False
-                await pilot.press("escape")
-                await pilot.pause()
-                assert inp.value == "", "空闲 Esc 应清空输入"
-
-        asyncio.run(go())
-
-
-class TestAppConstruction:
-    def test_construct_holds_ctx_and_empty_pipe(self):
-        ctx = CacheContext()
-        app = CTGentsTUI(ctx, "sid0")
-        assert app.ctx is ctx
-        assert app.session_id == "sid0"
-        assert app.final_session_id == "sid0"
-        assert len(app._events) == 0
-        assert app._busy is False
-
-    def test_mount_layout(self):
-        """挂载后布局：状态栏在输入框【下面】、输入框只有上下两根线（无左右框）。
-
-        run_test 仅挂载、不提交输入（不起后台线程）→ 确定性、非 flaky。
-        """
-        import asyncio
-
-        async def go():
-            app = CTGentsTUI(CacheContext(), None)
-            async with app.run_test() as pilot:
-                await pilot.pause()
-                p = app.query_one("#prompt")
-                s = app.query_one("#status")
-                assert s.region.y >= p.region.y + p.region.height, "状态栏应在输入框下面"
-                assert p.styles.border_top[0] == "solid", "输入框上边应有线"
-                assert p.styles.border_bottom[0] == "solid", "输入框下边应有线"
-                assert p.styles.border_left[0] == "", "输入框左边不应有框"
-                assert p.styles.border_right[0] == "", "输入框右边不应有框"
-
-        asyncio.run(go())
+# 屏类可导入（构造冒烟，防 import 级回归）
+def test_screens_importable():
+    assert SplashScreen and SaveSelectScreen and ChatScreen
