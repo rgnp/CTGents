@@ -279,16 +279,16 @@ class SplashScreen(Screen):
     """
 
     MIN_SECONDS = 0.0       # 测试可调，默认 0（动画本身已有节奏）
-    ROW_INTERVAL = 0.10     # 每行间隔（秒）
+    ROW_INTERVAL = 0.04     # 每行间隔（秒）—— 加快，按钮早点出来
 
     CSS = """
     SplashScreen { align: center middle; background: $background; }
     #splashwrap { width: auto; height: auto; align: center middle; }
     #logo_area { width: auto; height: auto; margin-bottom: 1; }
     #logo_area > Static { width: auto; height: 1; }
-    #buttons { width: 100%; height: auto; align: center middle; margin-top: 1; }
+    #buttons { width: 100%; height: auto; align: center middle; margin-top: 4; }
     #buttons Button {
-        width: 12; height: 1; border: none; margin: 0 2;
+        width: 16; height: 3; border: none; margin: 0 8; text-style: bold;
         content-align: center middle; background: $surface; color: $primary;
     }
     #buttons Button:hover { background: $primary; color: $background; }
@@ -336,10 +336,10 @@ class SplashScreen(Screen):
             _main._append_volatile_context(self.app.ctx)
         except Exception:
             pass
-        with contextlib.suppress(Exception):
-            import src.llm  # noqa: F401
-        self._ctx_ready = True
+        self._ctx_ready = True                                # 按钮不等重栈预热（~1s）
         self.app.call_from_thread(self._try_show_buttons)
+        with contextlib.suppress(Exception):
+            import src.llm  # noqa: F401  # 预热挪到按钮之后、后台继续，第一轮不卡
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
         if event.button.id == "new_game":
