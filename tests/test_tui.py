@@ -28,6 +28,30 @@ async def _wait_screen(app, pilot, name: str, ticks: int = 40) -> bool:
     return type(app.screen).__name__ == name
 
 
+class TestSplashLogoVisible:
+    """回归：开屏 Logo 必须有可见尺寸。
+
+    曾因 CSS `#logo_area{width:auto}` + 子 `Static{width:100%}` 循环依赖塌成
+    0×0 而整块隐身——而当时的测试只验"挂载/切屏"、不验尺寸，导致两次"修复
+    Logo 不显示"都过测试却没真修好。此测试断言可见尺寸，堵住这类静默回归。
+    """
+
+    def test_logo_renders_nonzero_size(self):
+        async def go():
+            app = CTGentsApp(CacheContext(), None, [])
+            async with app.run_test(size=(100, 30)) as pilot:
+                await pilot.pause()
+                for _ in range(30):
+                    await pilot.pause(0.05)
+                if type(app.screen).__name__ != "SplashScreen":
+                    return
+                la = app.screen.query_one("#logo_area")
+                assert la.size.width > 0 and la.size.height > 0, \
+                    f"开屏 Logo 尺寸为 {la.size}，应可见"
+
+        asyncio.run(go())
+
+
 # ── 纯函数 ──
 class TestPureHelpers:
     def test_fmt_tool(self):

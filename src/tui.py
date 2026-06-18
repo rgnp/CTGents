@@ -283,14 +283,15 @@ class SplashScreen(Screen):
 
     CSS = """
     SplashScreen { align: center middle; background: $background; }
-    #logo_area { width: auto; height: auto; align: center middle; margin-bottom: 1; }
-    #logo_area > Static { content-align: center middle; width: 100%; }
+    #splashwrap { width: auto; height: auto; align: center middle; }
+    #logo_area { width: auto; height: auto; margin-bottom: 1; }
+    #logo_area > Static { width: auto; height: 1; }
     #buttons { width: auto; height: auto; align: center middle; margin-top: 2; }
     #buttons > Button { margin: 0 2; }
     """
 
     def compose(self) -> ComposeResult:
-        with Vertical():
+        with Vertical(id="splashwrap"):
             yield Vertical(id="logo_area")
             yield Horizontal(id="buttons")
 
