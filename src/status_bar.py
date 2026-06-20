@@ -120,13 +120,13 @@ def _task_title(current_md: str) -> str:
 
 
 def _footer(lt: dict) -> str:
-    """组装每轮收尾小结一行。"""
-    parts = [f"{lt['elapsed']:.1f}s", f"输出 {lt['out']:,} tok"]
+    """组装每轮收尾小结一行（紧凑徽标式；miss 由前端再弱化一档）。"""
+    parts = [f"耗时 {lt['elapsed']:.1f}s", f"输出 {lt['out']:,} tok"]
     if lt["req"]:
-        parts.append(f"{lt['req']} 请求")
+        parts.append(f"请求 {lt['req']}")
     if lt["miss"] > 0:
         parts.append(f"miss {_fmt_k(lt['miss'])}" + (" 突刺" if lt["spike"] else ""))
-    return "  本轮 " + " · ".join(parts)
+    return "  本轮  " + "  ·  ".join(parts)
 
 
 def _build(ctx, session_id: str):
@@ -134,10 +134,14 @@ def _build(ctx, session_id: str):
 
     segs: list[str] = []
 
+    # ── 当前模型 ──
+    from .llm import get_current_model_name
+    segs.append(f"🤖 {get_current_model_name()}")
+
     # ── 上下文充满度（压缩崖预警）──
     from .config import MAX_CONTEXT_TOKENS
-    from .tools.tokens import count_messages_tokens
-    used = count_messages_tokens(ctx.all)
+    from .tools.tokens import count_context_tokens
+    used = count_context_tokens(ctx.all)  # 含工具 schema，与真实 prompt 一致
     pct = used / MAX_CONTEXT_TOKENS * 100 if MAX_CONTEXT_TOKENS else 0
     label = f"ctx {pct:.0f}%"
     if pct >= _CRIT_PCT:

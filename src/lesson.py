@@ -403,32 +403,9 @@ def _first_lesson_line(content: str) -> str:
     return content[:120]
 
 
-def inject_lesson_context(log: list[dict], tool_name: str, args: dict) -> None:
-    """在 log 尾部注入匹配到的教训（volatile 系统消息）。"""
-    if not tool_name:
-        return
-
-    # args["desc"] 优先：run_conversation 每轮首部用当前 user_input 当 desc
-    # （原占位传 "_task" 时这里读不到它，desc 退化为裸 "_task" → 匹配近乎失效）。
-    # 工具执行前调用则走 tool_name + 参数分支。
-    if args.get("desc"):
-        desc = str(args["desc"])
-    else:
-        desc_parts = [tool_name]
-        if tool_name in ("write_file", "edit_file_lines", "delete_file"):
-            desc_parts.append(args.get("path", ""))
-        elif tool_name in ("run_command",):
-            desc_parts.append(args.get("command", "")[:80])
-        desc = " ".join(desc_parts)
-
-    matches = match_lessons_for_action(desc)
-    if not matches:
-        return
-
-    lines = ["[⚠️ 经验提醒] 你之前遇到过类似情况："]
-    for m in matches:
-        lines.append(f"  {m}")
-    log.append({"role": "system", "content": "\n".join(lines), "_volatile": True})
+# inject_lesson_context（把匹配到的教训当 _volatile system 消息挂在 log 尾部）已删除：
+# 它是挂尾机制的一员（破坏前缀缓存），且自 llm.py 移除每轮调用后已是死代码。教训匹配逻辑
+# match_lessons_for_action 保留，回归须按 append-only 重做。详见 [[ctgents-context-cache]]。
 
 
 _LESSON_MAX_FILES = 5  # 合并时最多保留的文件名数量

@@ -69,7 +69,8 @@ def _is_py_edit(msg: dict) -> bool:
     first = (msg.get("content") or "").split("\n", 1)[0]
     if name == "write_file":
         return first.startswith(_WRITE_OK) and ".py" in first
-    if name == "edit_file_lines":
+    # edit_file_lines 与 replace_in_file 都用 "已编辑:" 前缀（后者字符串匹配式编辑，去行号漂移）。
+    if name in ("edit_file_lines", "replace_in_file"):
         return first.startswith(_EDIT_OK) and ".py" in first
     return False
 

@@ -6,7 +6,7 @@ main() 是 REPL 入口，难直接测。这里只锁抽出的纯函数 _render_t
 from __future__ import annotations
 
 import src.main as main
-from src.main import _make_mechanisms_message, _render_turn_error
+from src.main import _render_turn_error
 
 
 def test_exception_friendly_and_no_break():
@@ -32,23 +32,9 @@ def test_non_exception_base_no_break():
     assert "请求失败" in "\n".join(lines)
 
 
-# ── C16 缝：派生的运行时机制索引（注入缓存前缀，治"对自身架构失忆/编造"）──
-
-def test_mechanisms_message_covers_every_injector():
-    """机制索引必须自动覆盖每个 _inject_* + _append_volatile_context。
-
-    缝：agent 曾否认 completion_audit 存在、重造已有机制。索引内省派生 → 新增机制
-    自动入册、不会漏；本测试同时守住"派生没断线"（若有人改了内省逻辑会红）。
-    """
-    content = _make_mechanisms_message()["content"]
-    injectors = [n for n in dir(main)
-                 if n.startswith("_inject_") or n == "_append_volatile_context"]
-    assert injectors, "main 里应有 _inject_* 机制"
-    for n in injectors:
-        assert n in content, f"机制索引漏了 {n}"
-    # 两个被 agent 否认过/重造过的审计机制必须在册
-    assert "_inject_completion_audit" in content
-    assert "_inject_citation_audit" in content
+# test_mechanisms_message_covers_every_injector 随挂尾注入器（_inject_* /
+# _append_volatile_context）及 _make_mechanisms_message 整体删除而移除——它索引的
+# 是已删除的挂尾机制本身。审计逻辑保留为 dormant,回归须按 append-only 重做。
 
 
 # ── C16 缝：会话收尾必须触发反思（被动进化分析层的唯一写入口） ──
@@ -124,20 +110,81 @@ def _stub_backbone(monkeypatch, calls, *, progressed):
                         lambda *a, **k: calls.append("task_continuation"))
 
 
-def test_run_agent_turn_chat_branch_only(monkeypatch):
-    """没推进 current.md → 只走对话分支，不升级任务分支。"""
-    from src.cache_context import CacheContext
-    calls: list[str] = []
-    _stub_backbone(monkeypatch, calls, progressed=False)
-    main.run_agent_turn(CacheContext(), "聊一句", "sid0")
-    assert calls == ["process_turn"]
-
-
-def test_run_agent_turn_escalates_to_task_branch(monkeypatch):
-    """推进了 current.md → 对话分支之后升级到任务分支(run_task_continuation)。"""
+def test_run_agent_turn_drives_continuation_when_progressed(monkeypatch):
+    """这一轮 agent 真推进了 current.md → run_agent_turn 自主驱动任务续跑（已接回）。"""
     from src.cache_context import CacheContext
     calls: list[str] = []
     _stub_backbone(monkeypatch, calls, progressed=True)
     main.run_agent_turn(CacheContext(), "做个任务", "sid0")
-    assert calls[0] == "process_turn"          # 先对话分支
-    assert "task_continuation" in calls        # 再升级任务分支
+    assert calls == ["process_turn", "task_continuation"]
+
+
+def test_run_agent_turn_no_continuation_when_no_progress(monkeypatch):
+    """这一轮没推进 current.md（普通对话）→ 只一次驱动，不触发任务续跑。"""
+    from src.cache_context import CacheContext
+    calls: list[str] = []
+    _stub_backbone(monkeypatch, calls, progressed=False)
+    main.run_agent_turn(CacheContext(), "聊个天", "sid0")
+    assert calls == ["process_turn"]
+    assert "task_continuation" not in calls
+
+
+def _audit_disp(captured):
+    """最小 Display 替身，只捕获 on_status。"""
+    from src import ui
+    return ui.Display(
+        make_display=lambda: ((lambda _t: None), (lambda: False)),
+        on_tool=lambda *_a: None,
+        on_status=lambda s: captured.append(s),
+        on_footer=lambda *_a: None,
+        end_message=lambda *_a: None,
+    )
+
+
+def _write_without_read_log():
+    """构造一段触发审计的 log：本轮 write_file 了一个 .py 但没先 read_file。"""
+    return [
+        {"role": "user", "content": "改个文件"},
+        {"role": "assistant", "content": None,
+         "tool_calls": [{"id": "1", "function": {"name": "write_file", "arguments": "{}"}}]},
+        {"role": "tool", "tool_call_id": "1", "content": "已写入: x.py", "_tool_name": "write_file"},
+        {"role": "assistant", "content": "搞定了"},
+    ]
+
+
+def test_post_turn_audits_append_only_and_print():
+    """④审计命中 → 作为非 volatile _audit system 消息 append 进 log + 打印给用户。"""
+    from src.cache_context import CacheContext
+    ctx = CacheContext(log_msgs=_write_without_read_log())
+    captured: list[str] = []
+    main._run_post_turn_audits(ctx, _audit_disp(captured))
+    audit_msgs = [m for m in ctx.log if m.get("_audit")]
+    assert audit_msgs, "审计 nudge 应已 append 进 log"
+    assert all(m["role"] == "system" and not m.get("_volatile") for m in audit_msgs)
+    assert captured, "审计 nudge 应打印给用户"
+
+
+def test_run_agent_turn_injects_resume_reminder_once(monkeypatch):
+    """会话首轮有未完成任务 → append-only 注入一次 _resume 提醒；后续轮不重复。"""
+    import src.tasks as tasks
+    from src.cache_context import CacheContext
+    calls: list[str] = []
+    _stub_backbone(monkeypatch, calls, progressed=False)
+    monkeypatch.setattr(tasks, "resume_reminder", lambda: "⏸ 有未完成任务")
+    main._session_state["task_reminded"] = False
+    ctx = CacheContext()
+    main.run_agent_turn(ctx, "hi", "sid0")
+    assert sum(1 for m in ctx.log if m.get("_resume")) == 1
+    main.run_agent_turn(ctx, "hi again", "sid0")
+    assert sum(1 for m in ctx.log if m.get("_resume")) == 1, "首轮提醒一次，后续不重复"
+
+
+def test_post_turn_audits_dedup_no_repeat():
+    """同一条 nudge 条件不变 → 第二次审计不重复追加（去重防刷屏）。"""
+    from src.cache_context import CacheContext
+    ctx = CacheContext(log_msgs=_write_without_read_log())
+    main._run_post_turn_audits(ctx, _audit_disp([]))
+    n_after_first = sum(1 for m in ctx.log if m.get("_audit"))
+    main._run_post_turn_audits(ctx, _audit_disp([]))
+    n_after_second = sum(1 for m in ctx.log if m.get("_audit"))
+    assert n_after_first == n_after_second

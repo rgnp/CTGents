@@ -57,6 +57,10 @@ class CacheContext:
         self.log: list[dict] = list(log_msgs or [])
         self.scratch: list[dict] = []
         self._prefix_hash: str = _compute_msg_hash(self.prefix)
+        # 循环控制信号：agent 调 task_done/need_user 时由 run_conversation 置位（取代
+        # "不调工具=结束"的隐式判断）。续跑/主干据此决定停或继续。见 tools/control.py。
+        self.control_signal: str | None = None
+        self.control_payload: str | None = None
 
     # ── 属性 ──────────────────────────────────────────────
 
@@ -110,18 +114,22 @@ class CacheContext:
 
     # ── 核心方法 ──────────────────────────────────────────
 
-    def send(self, validate: bool = True, skip_volatile_system: bool = False) -> list[dict]:
-        """构建发给 LLM API 的消息列表。
+    def send(self, validate: bool = True) -> list[dict]:
+        """构建发给 LLM API 的消息列表 —— Reasonix 式纯追加（唯一模式）。
 
         策略（保障 DeepSeek 前缀缓存）：
-          1. 不可变 prefix 系统消息排在 payload 最前面
-          2. prefix 全部发送（_volatile 仅影响持久化过滤，不影响 API）
-          3. log 中非 system 消息按追加顺序排中间
-          4. log 中 system 消息放末尾，不影响缓存前缀
+          1. 不可变 prefix 系统消息排在 payload 最前面（会话级冻结、哈希锁死）
+          2. prefix 之后**只追加** log 中的非 volatile-system 消息（user/assistant/tool）
+          3. 永不在对话后面摆放浮动的 volatile system 尾——每轮对话结束的"输入结束
+             位置"就是对话本身，下一轮首请求才能可靠命中该缓存单元
+             （实测无尾 ~88% vs 挂尾 ~25%，见 [[ctgents-context-cache]]）
+
+        log 里带 _volatile 标记的 system 消息一律丢弃（不发给 API、只影响内存/持久化）。
+        历史上的"挂尾"机制（审计/任务/钉板/记忆触发摆在 payload 末尾）已整体删除；
+        这些能力若要回归，必须按 append-only 重做（append 进永久日志，不再挂尾）。
+
         Args:
             validate: 是否校验 prefix 完整性，默认 True。
-            skip_volatile_system: True 时跳过 log 中带 _volatile 标记的
-                system 消息。工具循环中间调用时设 True，节省尾部 token。
 
         Returns:
             API-ready 消息列表。
@@ -133,22 +141,14 @@ class CacheContext:
             self._validate_prefix()
         api: list[dict] = []
 
-        # immutable prefix
+        # immutable prefix（全部发送；_volatile 仅影响持久化过滤，不影响 API）
         for m in self.prefix:
             api.append({"role": "system", "content": m.get("content", "")})
 
-        # log 中的非 system 消息（修复 tool_calls/tool 配对不变量，防 400 卡死）
-        nonsys = [self._clean_log_msg(m) for m in self.log if m.get("role") != "system"]
-        api.extend(self._repair_tool_pairing(nonsys))
-
-        # log 中的 system 消息放末尾
-        for m in self.log:
-            if m.get("role") == "system":
-                # 工具循环中跳过装饰性尾挂消息（只对首轮判断有意义）
-                if skip_volatile_system and m.get("_volatile"):
-                    continue
-                api.append({"role": "system", "content": m.get("content", "")})
-
+        # prefix 之后纯追加：丢弃所有 volatile system 消息，不挂任何尾
+        kept = [m for m in self.log
+                if not (m.get("role") == "system" and m.get("_volatile"))]
+        api.extend(self._repair_tool_pairing([self._clean_log_msg(m) for m in kept]))
         return api
 
     def _validate_prefix(self) -> None:

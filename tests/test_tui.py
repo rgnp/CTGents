@@ -54,13 +54,19 @@ class TestSplashLogoVisible:
 
 # ── 纯函数 ──
 class TestPureHelpers:
-    def test_fmt_tool(self):
-        label, detail = _fmt_tool("read_file", {"path": "a.py"})
-        assert detail == "path=a.py" and label
+    def test_fmt_tool_known_pretty(self):
+        """已知工具按类型出精炼标签（图标+关键信息），不 dump 全部参数。"""
+        _, d_read = _fmt_tool("read_file", {"path": "a.py"})
+        assert d_read == "📄 a.py"
+        _, d_grep = _fmt_tool("grep_code", {"pattern": "foo", "path": "src"})
+        assert "🔍 foo" in d_grep and "📁 src" in d_grep
+        _, d_test = _fmt_tool("run_command", {"command": "pytest -q"})
+        assert d_test == "▶ 运行测试"
 
-    def test_fmt_tool_truncates(self):
+    def test_fmt_tool_unknown_caps_value(self):
+        """未知工具回退 k=v，单值超长截到 60 防一行刷屏。"""
         _, detail = _fmt_tool("x", {"k": "v" * 200})
-        assert len(detail) <= 80 and detail.endswith("...")
+        assert detail == "k=" + "v" * 60 + "…"
 
     def test_strip_preread(self):
         assert _strip_user_wrappers("[预读]\n── 用户问题 ──\n真问题") == "真问题"
@@ -178,18 +184,17 @@ class TestChatScreen:
             async with app.run_test() as pilot:
                 await self._enter_chat(app, pilot)
                 inp = app.screen.query_one("#prompt")
-                inp.value = "half typed"
+                inp.text = "half typed"
                 assert app.screen._busy is False
                 await pilot.press("escape")
                 await pilot.pause()
-                assert inp.value == ""
+                assert inp.text == ""
 
         asyncio.run(go())
 
     def test_echo_conversation_skips_noise(self, monkeypatch):
         async def go():
             app = self._fresh_chat_app()
-            from textual.widgets import Markdown
             async with app.run_test() as pilot:
                 await self._enter_chat(app, pilot)
                 app.ctx.log = [
@@ -203,8 +208,116 @@ class TestChatScreen:
                 app.screen.query_one("#transcript").remove_children()
                 app.screen._echo_conversation()
                 await pilot.pause()
+                # 用户消息现按 markdown 渲染(classes=user)，agent 回复 classes=agent；
+                # 工具结果/system 注入仍被跳过(不渲染)。
                 assert len(list(app.screen.query(".user"))) == 1
-                assert len(list(app.screen.query(Markdown))) == 1
+                assert len(list(app.screen.query(".agent"))) == 1
+
+        asyncio.run(go())
+
+    def test_echo_replays_reasoning_and_tools_as_folded(self, monkeypatch):
+        """重启回放：持久化的 _reasoning + tool_calls 还原成默认折叠的 Collapsible。"""
+        async def go():
+            app = self._fresh_chat_app()
+            from textual.widgets import Collapsible
+            async with app.run_test() as pilot:
+                await self._enter_chat(app, pilot)
+                app.ctx.log = [
+                    {"role": "user", "content": "问题"},
+                    {"role": "assistant", "content": None, "_reasoning": "我先想想",
+                     "tool_calls": [{"id": "1", "function": {"name": "read_file",
+                                     "arguments": '{"path": "a.py"}'}}]},
+                    {"role": "tool", "tool_call_id": "1", "content": "DUMP"},
+                    {"role": "assistant", "content": "答复", "_reasoning": "再想一下"},
+                ]
+                app.screen.query_one("#transcript").remove_children()
+                app.screen._echo_conversation()
+                await pilot.pause()
+                cols = list(app.screen.query(Collapsible))
+                # 2 思考折叠 + 1 工具折叠 = 3，全部默认折叠
+                assert len(cols) == 3, f"应有 3 个折叠块，实得 {len(cols)}"
+                assert all(c.collapsed for c in cols), "回放的折叠块应默认折叠"
+
+        asyncio.run(go())
+
+    def test_interrupt_soft_then_terminate(self, monkeypatch):
+        """Esc(运行中)=软中断置 pending → 本轮 done 进中断态(断点线+状态栏) → 再 Esc=终止。"""
+        async def go():
+            app = self._fresh_chat_app()
+            async with app.run_test() as pilot:
+                await self._enter_chat(app, pilot)
+                s = app.screen
+                s._busy = True
+                s.action_interrupt()                 # 软中断
+                assert s._interrupt_pending is True
+                s._events.append(("done",))          # 本轮真正收尾
+                for _ in range(6):
+                    await pilot.pause(0.05)
+                assert s._interrupted is True and s._interrupt_pending is False
+                brks = [str(b.render()) for b in s.query(".brk")]
+                assert any("推理已暂停" in b for b in brks), brks
+                status = str(s.query_one("#status").render())
+                assert "已中断" in status and "Enter 继续" in status
+                s.action_interrupt()                 # 再按 Esc = 硬终止
+                assert s._interrupted is False
+                brks = [str(b.render()) for b in s.query(".brk")]
+                assert any("已终止" in b for b in brks), brks
+
+        asyncio.run(go())
+
+    def test_interrupt_resume_drives_continue_turn(self, monkeypatch):
+        """中断态下空 Enter = 继续：喂续跑指令、退出中断态。"""
+        import src.main as main_mod
+        seen = []
+        monkeypatch.setattr(
+            main_mod, "run_agent_turn",
+            lambda c, t, sid, *, display=None: (seen.append(t), display.end_message(), sid)[-1])
+
+        async def go():
+            app = self._fresh_chat_app()
+            async with app.run_test() as pilot:
+                await self._enter_chat(app, pilot)
+                s = app.screen
+                s._interrupted = True                 # 直接置中断态
+                p = s.query_one("#prompt")
+                p.text = ""
+                p.focus()
+                await pilot.pause()
+                s.action_submit_prompt()              # 空 Enter → 继续
+                for _ in range(10):
+                    await pilot.pause(0.05)
+                assert s._interrupted is False
+                assert seen and "继续" in seen[0], seen
+                # 续跑指令不能用"工作"这类词（"继续刚才的工作"会让 agent 去读任务状态、丢上下文）
+                assert "工作" not in seen[0], seen
+
+        asyncio.run(go())
+
+    def test_interrupt_resume_carries_instruction(self, monkeypatch):
+        """中断态下带文字回车 = 按指示继续：指示进续跑 prompt + 回显用户那条。"""
+        import src.main as main_mod
+        seen = []
+        monkeypatch.setattr(
+            main_mod, "run_agent_turn",
+            lambda c, t, sid, *, display=None: (seen.append(t), display.end_message(), sid)[-1])
+
+        async def go():
+            app = self._fresh_chat_app()
+            async with app.run_test() as pilot:
+                await self._enter_chat(app, pilot)
+                s = app.screen
+                s._interrupted = True
+                prompt = s.query_one("#prompt")
+                prompt.text = "改用中文"
+                prompt.focus()
+                await pilot.pause()
+                s.action_submit_prompt()             # 直接触发，避开按键路由的不确定性
+                for _ in range(10):
+                    await pilot.pause(0.05)
+                assert s._interrupted is False
+                assert seen and "改用中文" in seen[0], seen
+                # 用户那条按 markdown 回显(classes=user)，source 即原文
+                assert any(getattr(u, "source", "") == "改用中文" for u in s.query(".user"))
 
         asyncio.run(go())
 
@@ -220,8 +333,11 @@ class TestChatScreen:
             from textual.widgets import Markdown
             async with app.run_test() as pilot:
                 await self._enter_chat(app, pilot)
-                app.screen.query_one("#prompt").value = "hello"
-                await pilot.press("enter")
+                p = app.screen.query_one("#prompt")
+                p.text = "hello"
+                p.focus()
+                await pilot.pause()
+                app.screen.action_submit_prompt()
                 for _ in range(20):
                     await pilot.pause(0.05)
                 assert len(list(app.screen.query(Markdown))) >= 1

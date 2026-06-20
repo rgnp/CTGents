@@ -48,8 +48,9 @@ def _ctx_empty() -> CacheContext:
 
 
 def test_substeps_all_called(monkeypatch):
-    """含 assistant 消息的会话 → save + reflect + lessons + pins 全调。"""
+    """开启关闭时收割后，含 assistant 消息的会话 → save + reflect + lessons + pins 全调。"""
     calls = []
+    monkeypatch.setattr(main, "_HARVEST_ON_CLOSE", True)
 
     def fake_save(messages, sid):
         calls.append("save")
@@ -89,8 +90,12 @@ def test_substeps_all_called(monkeypatch):
 
 
 def test_empty_session_skips_save_reflect(monkeypatch):
-    """无 assistant 消息 → 不保存、不反思（避免空文件/无效反思）。"""
+    """无 assistant 消息 → 不保存、不反思（避免空文件/无效反思）。
+
+    收割开启时，extract/promote 不受 assistant 存在条件约束。
+    """
     calls = []
+    monkeypatch.setattr(main, "_HARVEST_ON_CLOSE", True)
 
     def fake_save(messages, sid):
         calls.append("save")
@@ -129,8 +134,9 @@ def test_empty_session_skips_save_reflect(monkeypatch):
 
 
 def test_reflect_failure_does_not_block_lessons(monkeypatch):
-    """reflect_on_session 抛异常 → extract_lessons 仍被调用。"""
+    """reflect_on_session 抛异常 → extract_lessons 仍被调用（收割开启时）。"""
     calls = []
+    monkeypatch.setattr(main, "_HARVEST_ON_CLOSE", True)
 
     def fake_save(messages, sid):
         calls.append("save")
@@ -158,8 +164,9 @@ def test_reflect_failure_does_not_block_lessons(monkeypatch):
 
 
 def test_lessons_failure_does_not_block_pins(monkeypatch):
-    """extract_lessons 抛异常 → promote_durable 仍被调用。"""
+    """extract_lessons 抛异常 → promote_durable 仍被调用（收割开启时）。"""
     calls = []
+    monkeypatch.setattr(main, "_HARVEST_ON_CLOSE", True)
 
     def fake_save(messages, sid):
         calls.append("save")
@@ -191,8 +198,9 @@ def test_lessons_failure_does_not_block_pins(monkeypatch):
 
 
 def test_lessons_saved_when_found(monkeypatch):
-    """extract_lessons 返回非空 → save_lessons 被调用且计入返回行。"""
+    """extract_lessons 返回非空 → save_lessons 被调用且计入返回行（收割开启时）。"""
     saved_count = []
+    monkeypatch.setattr(main, "_HARVEST_ON_CLOSE", True)
 
     def fake_save(messages, sid):
         return "sid"
@@ -217,6 +225,34 @@ def test_lessons_saved_when_found(monkeypatch):
 
     assert saved_count == [1]
     assert any("收割" in ln for ln in lines)
+
+
+# ═══════════════════════════════════════════════════════════════
+# 关闭时收割默认关：save/reflect/pin 照常，但不跑 lessons/档案收割
+# ═══════════════════════════════════════════════════════════════
+
+
+def test_harvest_off_by_default_skips_lessons(monkeypatch):
+    """默认 _HARVEST_ON_CLOSE=False → save/reflect/promote 照常，extract 不调。
+
+    收割每次关闭都全量 LLM 重写档案、churn 记忆索引致下次新建会话前缀变动，
+    已默认关闭（记忆靠 agent 显式 remember 生长）。CTG_HARVEST_ON_CLOSE=1 恢复。
+    """
+    calls = []
+    # 不设 _HARVEST_ON_CLOSE —— 用模块默认（False）
+    monkeypatch.setattr(main, "save_session", lambda m, s: calls.append("save") or "sid")
+    monkeypatch.setattr(tracker, "reflect_on_session", lambda s: calls.append("reflect"))
+    monkeypatch.setattr(lesson, "extract_lessons", lambda m: calls.append("extract") or [])
+    monkeypatch.setattr(lesson, "save_lessons", lambda _: 0)
+    monkeypatch.setattr(sp, "promote_durable", lambda: calls.append("promote") or 0)
+
+    ctx = _ctx_with_assistant()
+    main._finalize_session(ctx, None)
+
+    assert "save" in calls
+    assert "reflect" in calls
+    assert "promote" in calls
+    assert "extract" not in calls, "收割默认关，不应调用 extract_lessons"
 
 
 # ═══════════════════════════════════════════════════════════════

@@ -75,6 +75,8 @@ temp/
 
 # ── 调试临时文件 ──
 _debug*.txt
+# ── 外部 Git 仓库 ──
+gitCenterPoint/
 _a.txt
 _c.txt
 # ── 运行时数据（自动生成，不提交）──
@@ -89,18 +91,7 @@ tasks/
 .scan_conf_cache.json
 .read_cache.json
 .gap_cache.json
+.ctg_model
 # ── 已废弃目录 ──
 agent/
 plugins/
-
-# ── 运行时数据（自动生成，不提交）──
-sessions/
-stats/
-memory/
-knowledge/
-.agent_backups/
-# 论文工具缓存（scan_papers / scan_conf / read_papers 自动生成）
-.scan_cache.json
-.scan_conf_cache.json
-.read_cache.json
-.gap_cache.json

@@ -48,7 +48,6 @@ python src/main.py                # 启动
 | 工具边界 | 文件操作限 cwd、读后写、禁 src/tools/ 新建 `.py` | `tool_guard.py` 在执行前机械校验 |
 | 文件保护 | 禁止修改 guard.py 等核心文件 | `file.py` → `is_immutable()` |
 | 提交闸 | lint 零错误 + 全量 pytest | pre-commit hook，任何路径提交都绕不过 |
-| 事后审计 | 改代码没跑测试 → 下轮提醒 | `_inject_completion_audit` 每轮注入 |
 | 记忆收割 | 会话关闭自动提取失败模式 | `_finalize_session` → `extract_lessons` |
 | Tavily 自愈 | API quota 耗尽自动切 key | `MultiKeyTavilyClient` 轮换 + 热重载 |
 

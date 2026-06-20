@@ -5,6 +5,8 @@
 
 from pathlib import Path
 
+import pytest
+
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
 # ═══════════════════════════════════════════════════════════════
@@ -37,17 +39,39 @@ class TestGuardCoverageGate:
 # ═══════════════════════════════════════════════════════════════
 
 class TestStickyModel:
-    """始终使用 Pro 模型。"""
+    """模型选择：默认 Pro，/model 切换后 auto_select 跟随（全局生效）。
+
+    隔离 fixture：每个用例用 tmp 持久化文件(不写真 .ctg_model)+前后复位 _current_backend，
+    切模型是模块全局，不隔离会污染其他测试（test_default_is_pro 曾被串成 flash）。
+    """
+
+    @pytest.fixture(autouse=True)
+    def _isolate_model(self, tmp_path, monkeypatch):
+        import src.llm
+        monkeypatch.setattr(src.llm, "_MODEL_PREF_FILE", tmp_path / ".ctg_model")
+        saved = src.llm._current_backend
+        src.llm._current_backend = src.llm.AVAILABLE_MODELS["pro"]
+        yield
+        src.llm._current_backend = saved
 
     def test_default_is_pro(self):
         import src.llm
-        backend = src.llm.auto_select_model("任意输入")
-        assert "pro" in backend.info.name.lower()
+        assert "pro" in src.llm.auto_select_model("任意输入").info.name.lower()
 
-    def test_always_returns_pro(self):
+    def test_auto_select_follows_switch(self):
+        """切到 flash 后 auto_select 返回 flash（修复：曾写死 pro→/model 是摆设）。"""
         import src.llm
-        backend = src.llm.auto_select_model("任意输入")
-        assert "pro" in backend.info.name.lower()
+        src.llm.switch_model("flash")
+        assert "flash" in src.llm.auto_select_model("x").info.name.lower()
+
+    def test_model_choice_persists_and_loads(self, tmp_path):
+        """切换落盘、load_persisted_model 启动时读回——全局、跨重启。"""
+        import src.llm
+        src.llm.switch_model("flash")
+        assert (tmp_path / ".ctg_model").read_text(encoding="utf-8").strip() == "flash"
+        src.llm._current_backend = src.llm.AVAILABLE_MODELS["pro"]  # 模拟重启复位
+        src.llm.load_persisted_model()
+        assert src.llm.get_current_model_name().lower() == "flash"
 
 # ═══════════════════════════════════════════════════════════════
 # 5. 工具注册
@@ -72,7 +96,9 @@ class TestToolRegistry:
 
     """关键命令必须可执行且正确接线。"""
 
-    def test_model_command_switches(self):
+    def test_model_command_switches(self, tmp_path, monkeypatch):
+        import src.llm
+        monkeypatch.setattr(src.llm, "_MODEL_PREF_FILE", tmp_path / ".ctg_model")  # 不写真文件
         from src.cache_context import CacheContext
         from src.commands import dispatch
 

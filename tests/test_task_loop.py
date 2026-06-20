@@ -12,6 +12,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 import src.tasks as tasks
 from src.task_loop import made_task_progress, run_task_continuation
+from src.tasks import resume_reminder
 
 _BASE = "# 目标锚点\nX\n\n- [x] S1\n- [ ] S2\n"
 
@@ -22,6 +23,20 @@ def _set_current(monkeypatch, tmp_path, text):
     monkeypatch.setattr(tasks, "CURRENT_TASK_FILE", task)
     monkeypatch.setattr(tasks, "ARCHIVE_DIR", tmp_path / "archive")
     return task
+
+
+# ── resume_reminder：跨会话/重启恢复未完成任务的"注意力" ──
+
+def test_resume_reminder_none_when_all_done(monkeypatch, tmp_path):
+    _set_current(monkeypatch, tmp_path, "# 目标锚点\nX\n\n- [x] S1\n")
+    assert resume_reminder() is None
+
+
+def test_resume_reminder_surfaces_unfinished_with_anchor(monkeypatch, tmp_path):
+    _set_current(monkeypatch, tmp_path, _BASE)  # 含 [ ] S2
+    out = resume_reminder()
+    assert out is not None
+    assert "未完成" in out and "S2" in out and "目标锚点" in out
 
 
 # ── made_task_progress：判定"agent 这轮是否自己推进了任务" ──
@@ -84,14 +99,72 @@ def test_continuation_stops_on_blocker_without_driving(monkeypatch, tmp_path):
     assert any("拍板" in s or "[!]" in s for s in status)
 
 
-def test_continuation_stops_when_turn_makes_no_progress(monkeypatch, tmp_path):
-    """这一步 agent 没改 current.md（写了段话/问了问题）→ 停下交还，不硬推。"""
+def test_continuation_stops_on_stall_after_grace(monkeypatch, tmp_path):
+    """连续没推进 current.md → 容一次宽限（忘勾标记≠卡住），到 stall_limit 才停。"""
     _set_current(monkeypatch, tmp_path, _BASE)
     drives = []
     status = []
-    run_task_continuation(object(), lambda *_: drives.append(1), on_status=status.append)
-    assert drives == [1], "驱动一次发现没推进就停"
-    assert any("没有推进" in s or "停下" in s for s in status)
+    run_task_continuation(object(), lambda *_: drives.append(1),
+                          on_status=status.append, stall_limit=2)
+    assert drives == [1, 1], "stall_limit=2：第一步没推进给宽限，第二步仍没推进才停"
+    assert any("没推进" in s or "卡住" in s for s in status)
+
+
+def test_continuation_stall_limit_one_stops_immediately(monkeypatch, tmp_path):
+    """stall_limit=1 退回旧行为：一步没推进即停。"""
+    _set_current(monkeypatch, tmp_path, _BASE)
+    drives = []
+    run_task_continuation(object(), lambda *_: drives.append(1),
+                          on_status=lambda _s: None, stall_limit=1)
+    assert drives == [1]
+
+
+def _ctx_with_signal(sig, payload=""):
+    """假 ctx：drive 后带显式控制信号（模拟 agent 调了 task_done/need_user）。"""
+    import types
+    holder = types.SimpleNamespace(control_signal=None, control_payload=None)
+
+    def drive(_c, _text):
+        holder.control_signal = sig
+        holder.control_payload = payload
+
+    return holder, drive
+
+
+def test_continuation_stops_on_need_user_signal(monkeypatch, tmp_path):
+    """调 need_user → 续跑停下并把问题交还用户。"""
+    _set_current(monkeypatch, tmp_path, _BASE)
+    ctx, drive = _ctx_with_signal("need_user", "用 A 还是 B？")
+    status = []
+    run_task_continuation(ctx, drive, on_status=status.append)
+    assert any("拍板" in s and "A 还是 B" in s for s in status)
+
+
+def test_continuation_stops_on_interrupt_signal(monkeypatch, tmp_path):
+    """用户 Esc 截停（control_signal=interrupted）→ 续跑立即停，不再驱动下一步。"""
+    _set_current(monkeypatch, tmp_path, _BASE)
+    ctx, drive = _ctx_with_signal("interrupted")
+    status = []
+    run_task_continuation(ctx, drive, on_status=status.append)
+    assert any("截停" in s for s in status)
+
+
+def test_continuation_stops_on_task_done_signal(monkeypatch, tmp_path):
+    """调 task_done 且全完成 → 续跑归档并停。"""
+    task = _set_current(monkeypatch, tmp_path, _BASE)
+
+    import types
+    ctx = types.SimpleNamespace(control_signal=None, control_payload=None)
+
+    def drive(_c, _text):
+        task.write_text("# 目标锚点\nX\n\n- [x] S1\n- [x] S2\n", encoding="utf-8")
+        ctx.control_signal = "task_done"
+        ctx.control_payload = "都做完了"
+
+    status = []
+    run_task_continuation(ctx, drive, on_status=status.append)
+    assert any("完成" in s for s in status)
+    assert task.read_text(encoding="utf-8").strip() == "", "task_done 且全 [x] → 归档清空"
 
 
 def test_continuation_budget_caps_runaway(monkeypatch, tmp_path):
@@ -105,5 +178,5 @@ def test_continuation_budget_caps_runaway(monkeypatch, tmp_path):
 
     status = []
     run_task_continuation(object(), drive, on_status=status.append, budget=3)
-    assert n[0] == 3, "应到预算上限即停"
-    assert any("预算" in s for s in status)
+    assert n[0] == 3, "应到自主上限即停"
+    assert any("自主上限" in s or "上限" in s for s in status)

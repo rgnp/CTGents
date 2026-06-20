@@ -572,11 +572,14 @@ def git_review(path: str | None = None) -> str:
         )
 
         try:
-            backend = auto_select_model(review_prompt)  # 始终 Pro
+            backend = auto_select_model(review_prompt)  # 当前模型（跟随 /model 全局选择）
+            # track_stats=False：审查是工具内部的一次性子调用，自带小上下文、与主对话前缀不同，
+            #   不该计入主会话缓存统计（否则污染 /context 命中率、抬高 req 计数、落盘混入主会话）。
+            # tools=[]：审查是纯文本任务，不需要工具表（默认会塞 50+ 工具 schema ~7k token，白费）。
             llm_review, _ = _invoke_llm(backend, [
                 {"role": "system", "content": "你是一个代码审查助手。只说关键问题，不要凑字数。"},
                 {"role": "user", "content": review_prompt},
-            ], lambda _: None)
+            ], lambda _: None, track_stats=False, tools=[])
         except Exception as e:
             llm_review = f"（LLM 审查失败: {e}）"
 

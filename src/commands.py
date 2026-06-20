@@ -176,7 +176,7 @@ def _cmd_new(r: CmdResult, _ctx, _args, _sid) -> None:
 # 模型指令
 # ═══════════════════════════════════════════════════════════════
 
-@builtin("/model", description="查看/切换 LLM 模型", usage="/model [pro]")
+@builtin("/model", description="查看/切换 LLM 模型", usage="/model [pro|flash]")
 def _cmd_model(r: CmdResult, _ctx, args, _sid) -> None:
     from .llm import get_current_model_name, list_models, switch_model
     if not args:
@@ -201,7 +201,7 @@ def _cmd_model(r: CmdResult, _ctx, args, _sid) -> None:
 def _cmd_context(r: CmdResult, ctx, _args, _sid) -> None:
     """精简版：前缀缓存结构 + 尾部注入清单 + API 命中率。"""
     from .config import MAX_CONTEXT_TOKENS
-    from .tools.tokens import count_messages_tokens
+    from .tools.tokens import count_context_tokens
 
     if not hasattr(ctx, 'all'):
         r.message = "需要 CacheContext。"
@@ -209,7 +209,7 @@ def _cmd_context(r: CmdResult, ctx, _args, _sid) -> None:
 
     all_msgs = ctx.all
     log_msgs = ctx.log
-    used_tokens = count_messages_tokens(all_msgs)
+    used_tokens = count_context_tokens(all_msgs)  # 含工具 schema(~5600)，否则窗口占用恒定偏低
     usage_pct = used_tokens / MAX_CONTEXT_TOKENS * 100
 
     if used_tokens >= int(MAX_CONTEXT_TOKENS * 0.85):
@@ -230,19 +230,25 @@ def _cmd_context(r: CmdResult, ctx, _args, _sid) -> None:
 
     _append_prefix_section(lines, ctx)
     _append_log_section(lines, log_msgs)
-    _append_tail_section(lines, log_msgs)
     _append_cache_section(lines, ctx, _sid)
 
     r.message = "\n".join(lines)
 
 
 def _append_prefix_section(lines: list[str], ctx) -> None:
-    """在前缀段追加 prefix 内容清单。"""
-    _prefix_labels = ["日期", "AGENTS.md", "运行时机制索引"]
+    """在前缀段追加 prefix 内容清单。
+
+    标签取每条消息自带的 _label（在 main._make_*_message 处定义）——不写死位置,
+    前缀构成变了(增删某条)也不会错位(对照:曾因删日期、位置标签整体错位一格)。
+    """
+    from .tools import get_tools
+    from .tools.tokens import estimate_tokens, tools_schema_tokens
     for i, m in enumerate(ctx.prefix):
         content = m.get("content", "")
-        label = _prefix_labels[i] if i < len(_prefix_labels) else "前缀"
-        lines.append(f"  [{i + 1}] {label:<16} {len(content):,} 字符")
+        label = m.get("_label", "前缀")
+        lines.append(f"  [{i + 1}] {label:<16} {len(content):,} 字符  ~{estimate_tokens(content):,} tok")
+    # 工具 schema 也是每轮必发、被缓存的稳定前缀(不在 messages 里、但计入 prompt_tokens)
+    lines.append(f"  [tools] 工具 schema      ({len(get_tools())} 个)        ~{tools_schema_tokens():,} tok")
     lines.append(f"  哈希: {ctx.prefix_hash}")
 
 
@@ -258,45 +264,6 @@ def _append_log_section(lines: list[str], log_msgs: list[dict]) -> None:
         n = roles.get(role, 0)
         bar = "█" * min(n, 40) if n else "—"
         lines.append(f"  {role:<10} {n:>3} 条  {bar}")
-
-
-def _append_tail_section(lines: list[str], log_msgs: list[dict]) -> None:
-    """在尾部注入段追加各注入标签的命中状态。
-
-    _tail_tags 是一张扫描清单：每轮在 log 里查这几类尾部注入本轮是否触发。
-    [ ] = 本轮未触发（条件注入，条件不满足就为空，不代表功能不存在）。
-    去重扫描：同一条消息多标签命中只报一次完整长度，其余标"与上同条"。
-    """
-    lines.append("")
-    lines.append("── 尾部注入（每轮在末尾 → 必然 miss）──")
-
-    from .session_pins import PINBOARD_MARKER
-    _tail_tags: list[tuple[str, str]] = [
-        # completion_audit.py — 改动晚于绿测 / 改文件前没先读
-        ("本会话最后一次代码改动", "完成自检"),
-        ("本轮你修改了文件", "改前未读"),
-        # citation_audit.py — 引用了没取证过的代码文件
-        ("你在回复里给了", "引用自检·路径"),
-        ("你的回复用代码体引用了", "引用自检·标识符"),
-        # session_pins.py — 会话钉板
-        (PINBOARD_MARKER, "钉板"),
-    ]
-
-    seen_ids: set[int] = set()
-    for tag, label in _tail_tags:
-        found = None
-        for m in log_msgs:
-            if m.get("role") == "system" and tag in (m.get("content") or ""):
-                found = m
-                break
-        if not found:
-            lines.append(f"  [ ] {label:<10}      —")
-        elif id(found) in seen_ids:
-            lines.append(f"  [✓] {label:<10}   （与上同条）")
-        else:
-            seen_ids.add(id(found))
-            chars = len(found.get("content", ""))
-            lines.append(f"  [✓] {label:<10} {chars:>7,} 字符")
 
 
 def _append_cache_section(lines: list[str], ctx, _sid: str | None) -> None:
@@ -316,7 +283,7 @@ def _append_cache_section(lines: list[str], ctx, _sid: str | None) -> None:
     reqs = t.get("requests", 0)
     if reqs == 0:
         lines.append("")
-        lines.append("── API 缓存 ──")
+        lines.append("── API 缓存（本会话累计）──")
         lines.append("  本会话暂无 API 请求记录（先问一句再看）。")
         return
     prompt = t.get("prompt_tokens", 0)
@@ -325,16 +292,20 @@ def _append_cache_section(lines: list[str], ctx, _sid: str | None) -> None:
     hit_pct = hit / prompt * 100 if prompt > 0 else 0
 
     lines.append("")
-    lines.append("── API 缓存 ──")
+    lines.append("── API 缓存（本会话累计）──")
     lines.append(f"  请求:    {reqs} 次")
     bar_len = 22
     hit_bars = int(bar_len * hit_pct / 100)
     bar = "█" * hit_bars + "░" * (bar_len - hit_bars)
-    lines.append(f"  命中率:  {bar}  {hit_pct:.1f}%")
+    lines.append(f"  本会话命中率:  {bar}  {hit_pct:.1f}%")
     lines.append(f"           (命中 {hit:,} / 输入 {prompt:,} tok)")
     lines.append(f"  miss 合计: {miss:,} tok")
+    completion = t.get("completion_tokens", 0)
+    if completion:
+        lines.append(f"  输出合计: {completion:,} tok")
 
     history = cache.get("models", {}).get("pro", {}).get("history", []) or []
+    _append_fingerprint_summary(lines, history)
 
     # ── miss 归因（逐请求拆分，不在聚合层估算）──
     # 尾部在 payload 末尾：一条只要有 miss，尾部整段必落在 miss 区，故 tail_miss=min(t,miss)；
@@ -365,20 +336,6 @@ def _append_cache_section(lines: list[str], ctx, _sid: str | None) -> None:
     lines.append(f"    尾部注入  {tail_total:>9,}  ({n_tail}/{len(history)} 请求带尾部，循环内其余跳过)")
     lines.append(f"    对话增量  {body:>9,}  (工具输出/读文件/生成，新内容只付一次)")
 
-    # ── 调用结构（架构视角：轮首带尾 vs 循环内跳尾，miss 落在哪）──
-    if history:
-        t_rows = [e for e in history if e.get("t", 0) > 0]   # 轮首：带尾部注入
-        l_rows = [e for e in history if e.get("t", 0) == 0]  # 循环内：跳尾
-        miss_t = sum(e.get("p", 0) - e.get("h", 0) for e in t_rows)
-        miss_l = sum(e.get("p", 0) - e.get("h", 0) for e in l_rows)
-        lines.append("")
-        lines.append("  调用结构:")
-        ratio = f"  ≈ {len(history) / len(t_rows):.1f} 请求/轮" if t_rows else ""
-        lines.append(f"    轮首 {len(t_rows)} 次 / 循环内 {len(l_rows)} 次{ratio}")
-        lines.append(f"    miss 分布:  轮首 {miss_t:,}  ·  循环内 {miss_l:,}")
-        if miss_l:
-            lines.append("    （循环内 miss = 工具输出灌入的新内容，第一次出现必 miss、之后命中）")
-
     # ── 每请求明细（揪突刺 + 取证）──
     if history:
         shown = history[-15:]
@@ -393,9 +350,13 @@ def _append_cache_section(lines: list[str], ctx, _sid: str | None) -> None:
             kind = "T" if e.get("t", 0) > 0 else "L"
             c = e.get("c")
             out = f" 出{c:>5,}" if c is not None else ""
-            extra = f" g{e.get('g', 0)}s n{e.get('n', 0)}" if "fe" in e else ""
+            ch = e.get("ch", 0)
+            extra = f" ch{ch:>7,}" + (f" g{e.get('g', 0)}s n{e.get('n', 0)}" if "fe" in e else "")
             if e.get("th_chg"):
                 extra += " ⚠tools变"  # 工具表变了→前缀整体作废，突刺锅在 tools 不在 messages
+            # 指纹变=换后端节点(那台没我们的缓存)，这次冷命中是路由所致、非淘汰
+            if prev is not None and prev.get("fp") and e.get("fp") and e.get("fp") != prev.get("fp"):
+                extra += f" ⚠换节点→{_fp_short(e.get('fp'))}"
             verdict = _spike_verdict(e, prev, p, h, pct)
             lines.append(
                 f"    #{i:<3}[{kind}] 输入{p:>7,} 命中{h:>7,} miss{m:>7,} ({pct:>3.0f}%)"
@@ -405,12 +366,38 @@ def _append_cache_section(lines: list[str], ctx, _sid: str | None) -> None:
         tail_note = f"仅显示最近 {len(shown)}/{len(history)} 次，" if base > 0 else ""
         lines.append(f"    （{tail_note}T=轮首带尾 L=循环内跳尾）")
         lines.append(
-            "    取证: ▲前沿变=旧消息被改写 · ⚡服务端吃掉=发过的前缀仍 miss"
-            " · 新内容=miss 在新后缀(预期内)"
+            "    ch=发送字符数  ·  取证: ▲前沿变=旧消息被改写 · ⚡服务端吃掉=发过的前缀仍 miss"
+            " · ⚠换节点=路由到别的后端(那台无缓存) · 新内容=miss 在新后缀(预期内)"
         )
     else:
         lines.append("")
         lines.append("  每请求明细：本次更新后开始记录（旧会话仅有汇总）。")
+
+
+def _fp_short(fp: str | None) -> str:
+    """把 system_fingerprint 缩成可读短码：fp_9954b31ca7_prod… → 9954b31ca7。"""
+    if not fp:
+        return "—"
+    s = fp[3:] if fp.startswith("fp_") else fp
+    return (s.split("_", 1)[0] or fp)[:12]
+
+
+def _append_fingerprint_summary(lines: list[str], history: list[dict]) -> None:
+    """节点指纹(system_fingerprint)汇总：几个节点、切换几次。
+
+    DeepSeek 按 user_id 命名空间在某台后端节点上存 KV 缓存；指纹变=请求被路由到
+    另一台机器，那台没有我们的缓存 → 该次必冷命中。区分"换节点"与"被淘汰"(同节点
+    但缓存被 LRU 清掉)是定位低命中的关键。DeepSeek 有时不返回指纹，此时这段不显示。
+    """
+    fps = [e.get("fp", "") for e in history if e.get("fp")]
+    if not fps:
+        return
+    switches = sum(1 for a, b in zip(fps, fps[1:], strict=False) if a != b)
+    uniq = len(set(fps))
+    if uniq <= 1:
+        lines.append(f"  节点指纹: 全程同一节点 {_fp_short(fps[-1])}（无换节点）")
+    else:
+        lines.append(f"  节点指纹: {uniq} 个节点、切换 {switches} 次 ⚠（换节点处必冷命中）")
 
 
 def _is_isolated_single_shot(e: dict, prev: dict | None) -> bool:
@@ -435,8 +422,15 @@ def _spike_verdict(e: dict, prev: dict | None, p: int, h: int, pct: float) -> st
     """
     if _is_isolated_single_shot(e, prev):  # 独立上下文(评分者等)，必 miss、非主会话冷启动
         return "  隔离单发(独立上下文·必miss·一次性)"
-    if h <= p * 0.05 or (prev is None and pct < 70):  # 首请求大半没命中也是冷启动
+    if prev is None and pct < 70:  # 真·首请求冷启动（无 prev，不可能是换节点）
         return "  冷启动"
+    # 换节点优先于"同节点淘汰"：指纹变了→请求被路由到另一台后端节点，那台没我们的缓存→
+    # 低/零命中是路由所致，不是淘汰、也不是改写。比"冷启动/服务端吃掉"更具体，故先判。
+    if (prev is not None and prev.get("fp") and e.get("fp")
+            and e.get("fp") != prev.get("fp") and pct < 90):
+        return f"  ⚠换节点(路由到 {_fp_short(e.get('fp'))}、该节点无此缓存)"
+    if h <= p * 0.05:  # 同节点（或无指纹）但命中≈0 = 缓存被淘汰，冷
+        return "  冷启动(缓存被淘汰)"
     # 前沿（最早 3 条非 sys）变 = 旧消息被改写。但前 3 条尚未填满时 fe 本就随追加变化，
     # 不算改写——故要求上一条已有 ≥3 条中段消息（前沿已定型）才判，避免开头几轮误报。
     if (prev is not None and prev.get("n", 0) >= 3

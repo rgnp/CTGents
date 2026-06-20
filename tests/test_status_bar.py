@@ -56,7 +56,8 @@ def _render(monkeypatch, *, tokens, stats: Stats, unfinished=False, current=""):
     import src.tasks as tasks
     import src.tools.tokens as toks
     _patch_stats(monkeypatch, stats)
-    monkeypatch.setattr(toks, "count_messages_tokens", lambda _m: tokens)
+    # 状态条用 count_context_tokens(消息+工具 schema)——直接桩这个，测试精确控制最终占用值
+    monkeypatch.setattr(toks, "count_context_tokens", lambda _m: tokens)
     monkeypatch.setattr(tasks, "has_unfinished", lambda: unfinished)
     monkeypatch.setattr(tasks, "read_current", lambda: current)
     sb.refresh(Ctx(), "sess")
@@ -129,9 +130,9 @@ def test_footer_reports_time_output_requests(monkeypatch):
     assert footer is not None
     assert footer.strip().startswith("本轮")
     assert "输出 1,847 tok" in footer
-    assert "4 请求" in footer
+    assert "请求 4" in footer
     assert "miss 5.0k" in footer
-    assert "s" in footer                     # 含耗时
+    assert "耗时" in footer and "s" in footer  # 含耗时
 
 
 def test_footer_none_without_start():

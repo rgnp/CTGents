@@ -11,7 +11,6 @@ from src.lesson import (
     _detect_signature_drift,
     _detect_tool_arg_error,
     extract_lessons,
-    inject_lesson_context,
     match_lessons_for_action,
     save_lessons,
 )
@@ -195,58 +194,8 @@ def test_extract_lessons_multi_fingerprint():
 # 注入引擎
 # ═══════════════════════════════════════════════════════════════
 
-def test_inject_lesson_context_no_match_noop(tmp_path, monkeypatch):
-    """没有匹配的教训时，不向 log 追加任何消息。"""
-    import src.config as cfg
-    import src.lesson as lesson_mod
-    monkeypatch.setattr(cfg, "MEMORY_DIR", str(tmp_path))
-    monkeypatch.setattr(lesson_mod, "MEMORY_DIR", str(tmp_path), raising=False)
-    log: list[dict] = []
-    inject_lesson_context(log, "write_file", {"path": "tests/unknown.py"})
-    assert len(log) == 0
-
-
-def test_inject_lesson_context_desc_takes_priority(tmp_path, monkeypatch):
-    """run_conversation 传 {"desc": user_input} 时，用 user_input 匹配教训，
-    不退化为裸 tool_name（"_task"）。
-
-    缝测试：run_conversation:1575 唯一调用点传 ("_task", {"desc": ...})。
-    旧逻辑内部只读 tool_name/args[path]/args[command]，args["desc"] 被无视 →
-    desc 退化成 "_task" → 用 "_task" 去匹配教训。存一条内容不含 "task" 的策略
-    教训：desc 接通（新）应命中，退化（旧）应 miss。锁住两件事——
-    (a) args["desc"] 真的参与匹配；(b) 不回退到裸 tool_name。
-    """
-    import src.config as cfg
-    import src.lesson as lesson_mod
-    import src.tools.memory as memtools
-
-    mem_dir = tmp_path / "memory"
-    monkeypatch.setattr(cfg, "MEMORY_DIR", str(mem_dir))
-    monkeypatch.setattr(lesson_mod, "MEMORY_DIR", str(mem_dir), raising=False)
-    monkeypatch.setattr(memtools, "MEMORY_DIR", str(mem_dir))
-
-    # 存一条内容刻意不含 "task" token 的策略教训
-    save_lessons([Lesson(
-        name="http-retry-pattern",
-        content="网络请求失败时用指数退避重试，不要立刻放弃。",
-        fingerprint="lesson-desc-test",
-    )])
-
-    # (a) desc 接通：用真实描述应命中
-    log_hit: list[dict] = []
-    inject_lesson_context(
-        log_hit, "_task",
-        {"desc": "网络请求失败重试指数退避"},
-    )
-    assert len(log_hit) == 1
-    assert "经验提醒" in log_hit[0]["content"]
-
-    # (b) 退化路径：desc 缺省时 tool_name 分支取 args[desc]，空 → 退回 tool_name
-    #     本案 tool_name="_task" 且无 args[desc] → desc="_task"，不该命中这条
-    #     （内容里没有 "task"）。锁住 desc 缺省时的行为不被破坏。
-    log_miss: list[dict] = []
-    inject_lesson_context(log_miss, "_task", {})
-    assert len(log_miss) == 0
+# test_inject_lesson_context_* 随 inject_lesson_context（教训挂尾注入）删除而移除。
+# 教训匹配逻辑 match_lessons_for_action 仍在，由下方 test_match_lessons_* 覆盖。
 
 
 def test_match_lessons_no_memories(tmp_path, monkeypatch):
@@ -289,12 +238,6 @@ def test_extract_save_and_recall(tmp_path, monkeypatch):
     matches = match_lessons_for_action("git_commit message=fix")
     assert len(matches) >= 1
     assert any("pre-commit" in m.lower() for m in matches)
-
-    # 4) 注入
-    log2: list[dict] = []
-    inject_lesson_context(log2, "git_commit", {"message": "fix"})
-    assert len(log2) == 1
-    assert "经验提醒" in log2[0]["content"]
 
 
 @pytest.mark.slow

@@ -38,6 +38,11 @@ class Display:
     on_status: Callable[[str], None]   # 任务续跑的状态行
     on_footer: Callable[[str], None]   # 每轮收尾小结
     end_message: Callable[[], None]    # 一条消息流完后的收尾（stdout 下=换行）
+    # 思考(reasoning_content)流。None=不显示思考（行式默认：终端没法折叠，思考只产不显，
+    # 仅"思考-only"轮把思考当正文）；TUI 设成把 chunk 推进折叠区的回调。
+    on_reasoning: Callable[[str], None] | None = None
+    # 工具执行结果（含 diff）。None=不显示（REPL 默认不看）。
+    on_tool_result: Callable[[str, str], None] | None = None
 
 
 def _c():

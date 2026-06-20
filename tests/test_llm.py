@@ -32,31 +32,66 @@ def _tool_call(name: str, args: dict) -> dict:
     }
 
 
-def test_stream_surfaces_reasoning_when_no_content(monkeypatch):
-    """模型只产出 reasoning_content、无 content/工具 → 兜出思考显示+返回，不空屏。
-
-    复刻线上 bug：deepseek-v4-pro 某轮只输出思考，旧码不读 reasoning_content →
-    屏幕全空、history 存空 assistant，但 completion_tokens 照样计 → footer 显示「输出 N tok」。
-    """
+def _reasoning_only_stream():
     from types import SimpleNamespace
-
-    backend = llm.AVAILABLE_MODELS["pro"]
 
     def _delta(content=None, reasoning=None):
         return SimpleNamespace(content=content, reasoning_content=reasoning, tool_calls=None)
 
-    def fake_create(**kwargs):
-        return iter([
-            SimpleNamespace(choices=[SimpleNamespace(delta=_delta(reasoning="先想一下"))], usage=None),
-            SimpleNamespace(choices=[SimpleNamespace(delta=_delta(reasoning="还是想"))], usage=None),
-        ])
+    return iter([
+        SimpleNamespace(choices=[SimpleNamespace(delta=_delta(reasoning="先想一下"))], usage=None),
+        SimpleNamespace(choices=[SimpleNamespace(delta=_delta(reasoning="还是想"))], usage=None),
+    ])
 
-    monkeypatch.setattr(backend.client.chat.completions, "create", fake_create)
+
+def test_stream_thinking_only_no_sink_uses_reasoning_as_content(monkeypatch):
+    """无 on_reasoning(aux 调用)：思考-only → 思考当内容(去丑前缀)、不空屏。"""
+    backend = llm.AVAILABLE_MODELS["pro"]
+    monkeypatch.setattr(backend.client.chat.completions, "create",
+                        lambda **k: _reasoning_only_stream())
     shown: list[str] = []
     content, tcs = backend.chat_stream([{"role": "user", "content": "hi"}], shown.append, None)
     assert tcs is None
-    assert content and "只输出了思考" in content and "先想一下还是想" in content
-    assert any("先想一下" in s for s in shown)   # 确实打到了屏幕
+    assert content == "先想一下还是想", "无显示通道→思考即内容，无'只输出了思考'丑前缀"
+    assert "只输出了思考" not in content
+    assert any("先想一下" in s for s in shown)
+
+
+def test_stream_thinking_streams_to_on_reasoning(monkeypatch):
+    """有 on_reasoning(前端显示通道)：思考实时流给它、正文只放干净短提示、不进 on_token 丑文。"""
+    backend = llm.AVAILABLE_MODELS["pro"]
+    monkeypatch.setattr(backend.client.chat.completions, "create",
+                        lambda **k: _reasoning_only_stream())
+    shown: list[str] = []
+    think: list[str] = []
+    content, tcs = backend.chat_stream(
+        [{"role": "user", "content": "hi"}], shown.append, None, on_reasoning=think.append)
+    assert "".join(think) == "先想一下还是想", "思考实时流到 on_reasoning"
+    assert content == llm._THINKING_ONLY_NOTE and "只输出了思考" not in content
+
+
+def test_reasoning_persisted_on_assistant_but_stripped_from_api(monkeypatch):
+    """思考挂 assistant 消息的 _reasoning（供重启回放折叠区），但 send() 不发给 API。
+
+    缝：_reasoning 若漏进 API payload，就违反"不回传 reasoning"铁律、且污染缓存前缀。
+    这里跑 thinking-only 一轮（on_reasoning 收到思考），断言 log 里 assistant 带
+    _reasoning、而 ctx.send() 产出的消息一律不含该字段。
+    """
+    def _final_with_reasoning(backend, messages, on_token, session_id, on_reasoning=None):
+        if on_reasoning:
+            on_reasoning("我在想")
+            on_reasoning("继续想")
+        return ("最终答复", [], {})
+
+    monkeypatch.setattr(llm, "_invoke_llm_eager", _final_with_reasoning)
+    ctx = _ctx()
+    out = llm.run_conversation(
+        ctx, "你好", on_token=lambda _t: None, on_tool=lambda *_a: None, session_id="")
+    assert out == "最终答复"
+    amsg = next(m for m in ctx.log if m.get("role") == "assistant")
+    assert amsg.get("_reasoning") == "我在想继续想", "思考应挂 assistant 消息供回放"
+    # 关键：发给 API 的消息一律不含 _reasoning
+    assert all("_reasoning" not in m for m in ctx.send()), "_reasoning 不得进 API payload"
 
 
 def test_smoke_no_tool_response(monkeypatch):
@@ -116,63 +151,19 @@ def test_smoke_user_interrupt_returns_clean(monkeypatch):
         raise llm.UserInterruptError("Esc")
 
     monkeypatch.setattr(llm, "_invoke_llm_eager", _boom)
+    ctx = _ctx()
     out = llm.run_conversation(
-        _ctx(), "你好",
+        ctx, "你好",
         on_token=lambda _t: None, on_tool=lambda *_a: None, session_id="",
     )
     assert "已中断" in out
+    # 截停信号：外层 gate 与 run_task_continuation 据此停（否则中断后续跑会接着跑）。
+    assert ctx.control_signal == "interrupted"
 
 
-def test_smoke_pin_rides_tail(monkeypatch):
-    """一轮内 agent 调 pin → 钉板消息落在 send() 的最末尾(近因高注意力区),不进 prefix。
-
-    走真实派发(execute_tool → session_pins.add_pin) + llm.py 轮内刷新,
-    验证整条接线:pin 工具 → store → 尾部系统消息 → send() 搬到 API 末尾。
-    """
-    import src.session_pins as sp
-    sp.clear_pins()
-    responses = iter([
-        ("", [_tool_call("pin", {"content": "决定:走内存易失版"})], {}),
-        ("好了", [], {}),
-    ])
-    monkeypatch.setattr(llm, "_invoke_llm_eager", lambda *_a, **_k: next(responses))
-    ctx = _ctx()
-    try:
-        out = llm.run_conversation(
-            ctx, "记住这个决定",
-            on_token=lambda _t: None, on_tool=lambda *_a: None, session_id="",
-        )
-        assert out == "好了"
-        api = ctx.send()
-        assert sp.PINBOARD_MARKER in (api[-1].get("content") or "")  # 钉在最末尾
-        assert api[-1]["role"] == "system"
-        assert "走内存易失版" in api[-1]["content"]
-        # 不在 prefix(prefix 只有测试桩,钉板绝不破坏缓存前缀)
-        assert all(sp.PINBOARD_MARKER not in (m.get("content") or "") for m in ctx.prefix)
-    finally:
-        sp.clear_pins()
-
-
-def test_smoke_unpin_removes_tail_message(monkeypatch):
-    """全部 unpin 后,尾部钉板消息被移除(不残留空钉板)。"""
-    import src.session_pins as sp
-    sp.clear_pins()
-    sp.add_pin("旧决定")
-    responses = iter([
-        ("", [_tool_call("unpin", {"content": "旧决定"})], {}),
-        ("取下了", [], {}),
-    ])
-    monkeypatch.setattr(llm, "_invoke_llm_eager", lambda *_a, **_k: next(responses))
-    ctx = _ctx()
-    try:
-        llm.run_conversation(
-            ctx, "取下那条",
-            on_token=lambda _t: None, on_tool=lambda *_a: None, session_id="",
-        )
-        api = ctx.send()
-        assert all(sp.PINBOARD_MARKER not in (m.get("content") or "") for m in api)
-    finally:
-        sp.clear_pins()
+# test_smoke_pin_rides_tail / test_smoke_unpin_removes_tail_message 随挂尾机制删除——
+# 钉板曾在 send() 末尾(及 llm.py 轮内刷新),现已不挂尾(send() 纯追加)。pin 工具仍正常
+# 存储(session_pins),只是不再注入 payload；存储接线由 test_session_pins 覆盖。
 
 
 def test_smoke_malformed_tool_args_handled(monkeypatch):

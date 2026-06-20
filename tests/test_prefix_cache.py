@@ -178,29 +178,26 @@ def test_conversation_growth():
 
 # ── 测试 3: log system 消息放末尾，不影响前缀 ──
 
-def test_log_system_at_end():
-    """安全模式、记忆索引等 log system 消息应在末尾，不扰动前缀。"""
+def test_volatile_log_system_dropped():
+    """默认(纯追加)：log 里的 volatile system 消息(安全模式/记忆等挂尾)整体不进 payload。
+
+    prefix 之后只剩对话,末条是对话 → 它就是缓存输入结束单元(见 [[ctgents-context-cache]])。
+    """
     ctx = CacheContext()
     ctx.rebuild_prefix([mock_env_msg(), mock_project_msg(), mock_rag_msg()])
 
-    # 加对话 + 加安全模式（在 log 里）
     ctx.log.append({"role": "user", "content": "hello"})
     ctx.log.append({"role": "assistant", "content": "hi"})
-    ctx.log.append(mock_safety_msg())
-    ctx.log.append(mock_memory_msg())
+    ctx.log.append(mock_safety_msg())   # _volatile system → 丢弃
+    ctx.log.append(mock_memory_msg())   # _volatile system → 丢弃
 
     payload = api_bytes(ctx.send(validate=False))
     msgs = json.loads(payload)
 
-    # 验证顺序：prefix → 对话 → log system（末尾）
-    assert msgs[0]["content"] == mock_env_msg()["content"], "第1条应为 env"
-    assert msgs[1]["content"] == mock_project_msg()["content"], "第2条应为 project"
-    assert msgs[2]["content"] == mock_rag_msg()["content"], "第3条应为 RAG"
-    assert msgs[3]["role"] == "user", "第4条应为 user"
-    assert msgs[4]["role"] == "assistant", "第5条应为 assistant"
-    # log system 在末尾
-    assert msgs[5]["role"] == "system", "第6条应为 system（安全模式）"
-    assert msgs[6]["role"] == "system", "第7条应为 system（记忆）"
+    assert [m["role"] for m in msgs] == ["system", "system", "system", "user", "assistant"]
+    assert msgs[0]["content"] == mock_env_msg()["content"]
+    assert msgs[-1]["role"] != "system"   # 末条是对话,不是挂尾
+    assert all("安全模式" not in (m.get("content") or "") for m in msgs)
 
 
 # ── 测试 4: 压缩后的前缀稳定性 ──
@@ -430,7 +427,6 @@ if __name__ == "__main__":
     TESTS = [
         ("空会话 prefix 稳定", test_empty_startup),
         ("多轮对话前缀不退化", test_conversation_growth),
-        ("log system 放末尾", test_log_system_at_end),
         ("压缩后前缀不变", test_compaction_prefix),
         ("记忆变更不扰动前缀", test_memory_update),
         ("保存/加载无冗余", test_save_load_cycle),

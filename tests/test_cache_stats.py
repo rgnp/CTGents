@@ -181,6 +181,22 @@ def test_first_request_carried_over_on_session_assign(monkeypatch, tmp_path):
     assert st["total"]["prompt_tokens"] == 2100
 
 
+def test_first_request_carried_over_for_flash(monkeypatch, tmp_path):
+    """切到 Flash 时首请求也要搬过去——曾因 carry-over 判据写死 'pro'，Flash 首轮
+    被漏判为空：状态栏首次对话不显示 cache、/context 误报"本会话暂无请求"。
+    """
+    monkeypatch.setattr(llm, "_STATS_DIR", tmp_path)
+    monkeypatch.setattr(llm, "_current_session_id", "")
+    monkeypatch.setattr(llm, "_CACHE_STATS", {"flash": dict(llm._EMPTY_STATS)})
+
+    llm._set_api_usage("flash", _Usage(1000, 600, 50))
+    llm._update_cache_stats("flash", [{"role": "user", "content": "x"}], "")
+
+    st = llm.get_cache_stats("sess-flash")  # 真 id 无文件，应从内存搬运（非只看 pro）
+    assert st["total"]["requests"] == 1
+    assert st["total"]["cache_hit_tokens"] == 600
+
+
 def test_resume_existing_session_loads_not_carries(monkeypatch, tmp_path):
     """恢复已有会话（真 id 已有统计文件）→ 正常加载，不把空的无名累计搬上去。"""
     monkeypatch.setattr(llm, "_STATS_DIR", tmp_path)

@@ -58,11 +58,40 @@ def count_messages_tokens(messages: list[dict]) -> int:
     return total
 
 
+_tools_tokens_cache: int | None = None
+
+
+def tools_schema_tokens() -> int:
+    """工具 schema 的 token 估算。
+
+    工具定义(get_tools 返回的 51 个 function schema)随每个请求一起发送、计入 DeepSeek
+    的 prompt_tokens，但它**不在 messages 里**——只数 messages 的窗口占用/预算会恒定漏掉
+    这部分(实测 ~5600 token，比 AGENTS.md 还大)。工具集会话内不变 → 结果缓存。
+    序列化方式与 API 发送一致(json.dumps)，与官方 usage 对账后整体误差 <1%。
+    """
+    global _tools_tokens_cache
+    if _tools_tokens_cache is None:
+        import json
+
+        from . import get_tools
+        _tools_tokens_cache = estimate_tokens(json.dumps(get_tools(), ensure_ascii=False))
+    return _tools_tokens_cache
+
+
+def count_context_tokens(messages: list[dict]) -> int:
+    """真实上下文窗口占用 = 消息 + 工具 schema。
+
+    窗口占用%/压缩触发/工具结果预算都应基于这个数——工具 schema 每轮必发、占用真实窗口，
+    漏掉它会让占用%偏低 ~5600 token、压缩触发偏晚、工具预算偏松。
+    """
+    return count_messages_tokens(messages) + tools_schema_tokens()
+
+
 def truncate_to_budget(raw_text: str, messages: list[dict]) -> str:
     """根据当前消息列表的剩余 token 预算动态截断文本。
     不设固定上限——剩余空间多就多留，少就少留。
     """
-    used = count_messages_tokens(messages)
+    used = count_context_tokens(messages)  # 含工具 schema：预算才不被高估 ~5600 token
     remaining = MAX_CONTEXT_TOKENS - used
 
     if remaining <= 0:

@@ -85,7 +85,6 @@
   <nav id="nav"></nav>
   <span style="flex:1"></span>
   <span class="dot" id="dot"></span>
-  <span class="meta" id="updated">连接中…</span>
 </header>
 <main id="root"></main>
 
@@ -264,10 +263,8 @@ async function tick(){
     const br=(s.session&&s.session.branch)||(s.git&&s.git.branch);
     if(br)document.getElementById('branch').textContent='⎇ '+br;
     document.getElementById('dot').classList.remove('stale');
-    document.getElementById('updated').textContent='更新于 '+new Date(s.generated_at).toLocaleTimeString();
   }catch(e){
     document.getElementById('dot').classList.add('stale');
-    document.getElementById('updated').textContent='读取失败，重试中…';
   }
 }
 buildNav();tick();setInterval(tick,5000);

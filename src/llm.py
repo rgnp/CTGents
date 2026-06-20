@@ -21,8 +21,10 @@ from .cache_context import CacheContext
 from .config import (
     DEEPSEEK_API_KEY,
     DEEPSEEK_BASE_URL,
+    FLASH_MAX_TOKENS,
     MAX_CONTEXT_TOKENS,
     MAX_RETRIES,
+    MODEL_FLASH,
     MODEL_PRO,
     PRO_MAX_TOKENS,
     RETRY_BASE_DELAY,
@@ -94,13 +96,20 @@ class ModelInfo:
     max_tokens: int = 8192     # 最大输出 token
 
 
-def _reasoning_fallback(reasoning: str) -> str:
-    """模型本轮只产出思考(reasoning_content)、没产出正式 content 时的兜底文本。
+_THINKING_ONLY_NOTE = "（本轮模型只在思考、没给结论——可以追问，或让我重试）"
 
-    不处理的话：思考计入 completion_tokens 但 content 为空 → 屏幕全空 + history 存空
-    assistant。把思考兜出来显示并留存，至少不丢、不空。正常有 content 的回复不走这里。
+
+def _thinking_only_content(reasoning: str, on_reasoning: Callable[[str], None] | None) -> str:
+    """模型本轮只产出思考(reasoning_content)、没产出正式 content 时返回什么当 content。
+
+    旧版把思考裹上"[模型本轮只输出了思考…]"丑前缀整坨灌进正文——难看、像被截断。
+    现在思考有独立通道(on_reasoning，前端暗色/可折叠显示)：
+    - 有前端显示通道(on_reasoning 非 None)→ 正文只放一句干净短提示，思考另在折叠区。
+    - 无显示通道(aux 子调用，如摘要/审查)→ 思考即内容(去丑前缀)，至少不空、可用。
     """
-    return "[模型本轮只输出了思考、未给正式回复]\n\n" + reasoning
+    if on_reasoning is not None:
+        return _THINKING_ONLY_NOTE
+    return reasoning
 
 
 class LLMBackend(ABC):
@@ -158,8 +167,9 @@ class DeepSeekBackend(LLMBackend):
         on_token: TokenCallback,
         tools: list[dict] | None = None,
         on_tool_ready: Callable[[int, str, str], None] | None = None,
+        on_reasoning: Callable[[str], None] | None = None,
     ) -> tuple[str | None, list[dict] | None]:
-        """流式调用。on_tool_ready(idx, name, args_json) 在工具参数完整时回调。"""
+        """流式调用。on_tool_ready 工具参数完整时回调；on_reasoning 思考(reasoning_content)流。"""
         content_parts: list[str] = []
         reasoning_parts: list[str] = []  # 模型的思考通道(reasoning_content)，正常不显示
         tool_calls: list[dict] = []
@@ -204,6 +214,8 @@ class DeepSeekBackend(LLMBackend):
                 rc = getattr(delta, "reasoning_content", None)
                 if rc:
                     reasoning_parts.append(rc)
+                    if on_reasoning:
+                        on_reasoning(rc)  # 思考实时流给前端（暗色/可折叠），不混进正文
 
                 if delta.tool_calls:
                     for tc_delta in delta.tool_calls:
@@ -240,8 +252,9 @@ class DeepSeekBackend(LLMBackend):
         content = "".join(content_parts) if content_parts else None
         final_tool_calls = tool_calls if tool_calls else None
         if not content and not final_tool_calls and reasoning_parts:
-            content = _reasoning_fallback("".join(reasoning_parts))
-            on_token(content)  # 否则整屏空白（计入 completion_tokens 却无 content）
+            content = _thinking_only_content("".join(reasoning_parts), on_reasoning)
+            if content:
+                on_token(content)  # 否则整屏空白（计入 completion_tokens 却无 content）
         return content, final_tool_calls
 
     def chat_non_stream(
@@ -250,6 +263,7 @@ class DeepSeekBackend(LLMBackend):
         on_token: TokenCallback,
         tools: list[dict] | None = None,
         max_tokens: int | None = None,
+        on_reasoning: Callable[[str], None] | None = None,
     ) -> tuple[str | None, list[dict] | None]:
         kwargs = {
             "model": self.info.id,
@@ -290,7 +304,9 @@ class DeepSeekBackend(LLMBackend):
         if not content and not tool_calls:
             reasoning = getattr(msg, "reasoning_content", None)
             if reasoning:
-                content = _reasoning_fallback(reasoning)
+                if on_reasoning:
+                    on_reasoning(reasoning)
+                content = _thinking_only_content(reasoning, on_reasoning)
         if content:
             on_token(content)
 
@@ -301,21 +317,51 @@ class DeepSeekBackend(LLMBackend):
 # 模型注册表
 # ═══════════════════════════════════════════════════════════════
 
-# 所有可用模型（始终 Pro — 单模型养肥前缀缓存）
+# 可用模型：Pro（强推理/长代码，默认）+ Flash（快/省）。同 provider，切换复用连接。
+# DeepSeek v4 两档思考都常开（reasoning_content），supports_thinking=True。
 AVAILABLE_MODELS: dict[str, LLMBackend] = {
     "pro": DeepSeekBackend(ModelInfo(
         id=MODEL_PRO,
         name="Pro",
         provider="deepseek",
-        supports_tools=True,   # deepseek-v4-pro 也支持 function calling
+        supports_tools=True,
         supports_stream=True,
-        supports_thinking=False,
+        supports_thinking=True,
         max_tokens=PRO_MAX_TOKENS,
+    )),
+    "flash": DeepSeekBackend(ModelInfo(
+        id=MODEL_FLASH,
+        name="Flash",
+        provider="deepseek",
+        supports_tools=True,
+        supports_stream=True,
+        supports_thinking=True,
+        max_tokens=FLASH_MAX_TOKENS,
     )),
 }
 
-# 当前模型 — 始终 Pro（DeepSeek KV 缓存按模型独立，固定单模型才能养肥长前缀）
+# 当前模型 — 默认 Pro（切到 Flash 会换 KV 缓存命名空间、前缀缓存另起，缓存已非约束）。
 _current_backend: LLMBackend = AVAILABLE_MODELS["pro"]
+
+# 模型选择持久化：全局属性（不随会话），切了就一直是、跨重启/跨会话都保持。
+# 仿 .gap_cache.json 放项目根；启动 load_persisted_model() 应用，switch_model 落盘。
+_MODEL_PREF_FILE = Path(__file__).resolve().parent.parent / ".ctg_model"
+
+
+def _persist_model(key: str) -> None:
+    with contextlib.suppress(OSError):
+        _MODEL_PREF_FILE.write_text(key, encoding="utf-8")
+
+
+def load_persisted_model() -> None:
+    """启动时读持久化的模型选择并应用；无文件/无效键则保持默认 Pro。"""
+    global _current_backend
+    try:
+        key = _MODEL_PREF_FILE.read_text(encoding="utf-8").strip()
+    except OSError:
+        return
+    if key in AVAILABLE_MODELS:
+        _current_backend = AVAILABLE_MODELS[key]
 
 
 def get_current_model_name() -> str:
@@ -324,24 +370,23 @@ def get_current_model_name() -> str:
 
 
 def switch_model(name: str) -> tuple[bool, str]:
-    """切换当前模型。name 可以是 'pro' 或完整模型 ID。"""
+    """切换当前模型并落盘（全局、持久）。name 可以是短名('pro'/'flash') 或完整模型 ID。"""
     global _current_backend
 
-    # 先按短名称查找
-    if name in AVAILABLE_MODELS:
-        _current_backend = AVAILABLE_MODELS[name]
+    key = name if name in AVAILABLE_MODELS else next(
+        (k for k, b in AVAILABLE_MODELS.items() if b.info.id == name), None)
+    if key is not None:
+        _current_backend = AVAILABLE_MODELS[key]
+        _persist_model(key)
         info = _current_backend.info
         return True, f"已切换到 {info.name}（{info.id}）"
 
-    # 按完整模型 ID 查找
-    for _key, backend in AVAILABLE_MODELS.items():
-        if backend.info.id == name:
-            _current_backend = backend
-            info = backend.info
-            return True, f"已切换到 {info.name}（{info.id}）"
-
     available = ", ".join(f"{k}={v.info.id}" for k, v in AVAILABLE_MODELS.items())
     return False, f"未知模型: {name}。可用: {available}"
+
+
+# 模块加载即应用持久化的模型选择（llm 懒加载到首轮，不拖慢 TUI 开屏；status bar 取名也会触发）。
+load_persisted_model()
 
 
 def list_models() -> str:
@@ -365,8 +410,12 @@ def list_models() -> str:
 # ═══════════════════════════════════════════════════════════════
 
 def auto_select_model(user_input: str) -> LLMBackend:
-    """始终使用 Pro。"""
-    return AVAILABLE_MODELS["pro"]
+    """返回当前选定的模型（默认 Pro，/model 切换后跟随，全局生效）。
+
+    曾写死返回 Pro → /model 切换是摆设(对话仍走 Pro)。现返回 _current_backend，
+    切换对下一次请求即生效（含对话续跑、git_review 等共用此选择 = 全局一致）。
+    """
+    return _current_backend
 
 
 
@@ -416,9 +465,10 @@ def get_turn_accum() -> dict:
 
 
 def _trailing_system_tokens(messages: list[dict]) -> int:
-    """量本次 payload 尾部注入的 token：send() 把 system 消息排到末尾，
-    末尾连续的 system 段就是尾部（工具循环 skip_volatile 时它更短甚至为空）。
-    前缀的 system 在开头、不计。
+    """量本次 payload 末尾连续 system 段的 token。前缀 system 在开头、不计。
+
+    挂尾机制已删除 → send() 纯追加、payload 末尾不再有 system 消息，此值应恒为 0。
+    保留为金丝雀：若它变非 0，说明有挂尾偷偷回来了（往 send()/注入处查）。
     """
     from .tools.tokens import estimate_tokens
     total = 0
@@ -485,7 +535,8 @@ def _payload_fingerprint(messages: list[dict]) -> dict:
     now = time.monotonic()
     gap = 0.0 if _last_req_time is None else round(now - _last_req_time, 1)
     _last_req_time = now
-    return {"n": len(nonsys), "fe": fe, "g": gap, "lcpr": lcpr, "th_chg": th_chg}
+    total_chars = sum(len(m.get("content") or "") for m in messages)
+    return {"n": len(nonsys), "fe": fe, "g": gap, "lcpr": lcpr, "th_chg": th_chg, "ch": total_chars}
 
 # 当前会话 ID 和内存中的统计（切换会话时自动读写文件）
 _current_session_id: str = ""
@@ -666,7 +717,11 @@ def _update_cache_stats(model_key: str, messages: list[dict], session_id: str = 
                      "c": usage["completion_tokens"],
                      "t": _trailing_system_tokens(messages),
                      "n": fp["n"], "fe": fp["fe"], "g": fp["g"], "lcpr": fp["lcpr"],
-                     "th_chg": fp.get("th_chg", False)})
+                     "th_chg": fp.get("th_chg", False),
+                     "ch": fp.get("ch", 0),
+                     # system_fingerprint：后端节点标识，变了=请求被路由到另一台机器、
+                     # 那台没我们的缓存 → 冷命中是"换节点"而非"被淘汰"（诊断关键区分）。
+                     "fp": _last_system_fingerprint or ""})
         if len(hist) > _HISTORY_LIMIT:
             del hist[:-_HISTORY_LIMIT]
         _dump_payload(_current_session_id, stats["requests"], messages, usage)
@@ -687,10 +742,15 @@ def get_cache_stats(session_id: str = "") -> dict:
     兜底：新会话首轮无工具循环时 _ensure_session(real_id) 未触发，_current_session_id
     仍为 ""，文件不存在——但 _CACHE_STATS 中有真实的首请求数据。此时用内存数据并补写文件。
     """
+    def _req_total(d: dict) -> int:
+        return sum(s.get("requests", 0) for s in d.values() if isinstance(s, dict))
+
     if session_id and session_id != _current_session_id:
         data = _load_cache_stats(session_id)
-        # 文件为空但内存有数据（新会话首请求已计入 _CACHE_STATS，尚未关联到 real_id）
-        if data.get("pro", {}).get("requests", 0) == 0 and _CACHE_STATS.get("pro", {}).get("requests", 0) > 0:
+        # 文件为空但内存有数据（新会话首请求已计入 _CACHE_STATS，尚未关联到 real_id）。
+        # 按所有模型键求和判断，别只看 pro——否则切到 Flash 时首轮统计被漏判为空、
+        # 状态栏首次对话不显示 cache、/context 误报"本会话暂无请求"（用户实测 Flash 命中）。
+        if _req_total(data) == 0 and _req_total(_CACHE_STATS) > 0:
             data = dict(_CACHE_STATS)
             _save_cache_stats(session_id)  # 补写，下次直读文件
     else:
@@ -701,8 +761,10 @@ def get_cache_stats(session_id: str = "") -> dict:
 
     models: dict[str, dict] = {}
     total = dict(_EMPTY_STATS)
+    # 汇总所有模型键（pro/flash/…），不再只算 pro——否则切到 flash 后它的统计被丢。
+    # total 只累加 _EMPTY_STATS 的数值键（stats.get(k) 取不到 history 这种 list，不参与求和）。
     for key, stats in data.items():
-        if key == "pro" and isinstance(stats, dict):
+        if isinstance(stats, dict):
             models[key] = dict(stats)
             for k in total:
                 total[k] += stats.get(k, 0)
@@ -775,16 +837,18 @@ def _try_llm_call(
     on_tool_ready: Callable | None,
     attempt: int,
     max_retries: int,
+    on_reasoning: Callable[[str], None] | None = None,
 ) -> tuple[str | None, list[dict] | None]:
     """执行一次 LLM 调用：首次流式，后续降级非流式。"""
     if attempt == 1:
         return backend.chat_stream(
             messages, on_token, tools, on_tool_ready=on_tool_ready,
+            on_reasoning=on_reasoning,
         )
     logger.warning(
         "流式失败，降级为非流式重试 (%d/%d)...", attempt, max_retries,
     )
-    return backend.chat_non_stream(messages, on_token, tools)
+    return backend.chat_non_stream(messages, on_token, tools, on_reasoning=on_reasoning)
 
 
 def _invoke_llm_eager(
@@ -794,6 +858,7 @@ def _invoke_llm_eager(
     session_id: str = "",
     track_stats: bool = True,
     tools: list[dict] | None = None,
+    on_reasoning: Callable[[str], None] | None = None,
 ) -> tuple[str | None, list[dict] | None, dict[int, str]]:
     """Eager 工具执行：LLM 流式期间预启动 SAFE 工具。
 
@@ -836,7 +901,7 @@ def _invoke_llm_eager(
         try:
             content, tool_calls = _try_llm_call(
                 backend, messages, on_token, tools, on_tool_ready,
-                attempt, MAX_RETRIES,
+                attempt, MAX_RETRIES, on_reasoning=on_reasoning,
             )
 
             # ── 收集 eager 结果 ──
@@ -876,18 +941,9 @@ _TOOL_RESULT_COMPRESS_THRESHOLD = RUNTIME.tool_result_compress_threshold
 _COMPRESS_MIN_OMITTED = 120
 # 单轮请求数熔断——真值在 params.RUNTIME
 _MAX_REQUESTS_PER_TURN = RUNTIME.max_requests_per_turn
-# 工具循环请求是否携带尾部 volatile。默认 keep（=1）。
-# 待验证假设：曾默认 skip 省 token，疑似导致 [T]→第一个[L] 命中塌回前缀（~37%，本该~96%）；
-# 改 keep 让轮内 payload shape 不切换，看能否消除塌陷。**尚未实测**——需开 CTGents 跑一轮
-# 带工具的对话、看 /context 第一个[L]是否仍塌；机制（为何 skip 丢命中）也未坐实，勿当结论。
-# 设 CTG_TOOLLOOP_KEEP_TAIL=0 恢复旧行为（skip）。
-_KEEP_TOOLLOOP_TAIL = os.getenv("CTG_TOOLLOOP_KEEP_TAIL", "1").strip().lower() not in ("", "0", "false", "no")
-# 诊断实验：CTG_NO_VOLATILE_TAIL=1 时每个请求都跳过全部尾部 volatile（stance/任务/钉板都不发），
-# payload 变成纯 [前缀][对话]、可证明只追加。用于终结"命中塌陷是我们的代码还是服务端"之争：
-# 开着仍塌=代码已证明只追加→服务端淘汰；开着不塌=尾部那套在作怪。默认关。
-_NO_VOLATILE_TAIL = os.getenv("CTG_NO_VOLATILE_TAIL", "").strip().lower() not in ("", "0", "false", "no")
-# 干了不少活却没建任务 → 提示建任务的请求数阈值——真值在 params.RUNTIME
-_TASK_SUGGEST_MIN_REQUESTS = RUNTIME.task_suggest_min_requests
+# 挂尾机制已整体删除：send() 永远纯追加（[前缀][对话]），不存在"工具循环是否带尾"
+# 之类的开关。每个请求 payload shape 一致、对话即输入结束单元。见 [[ctgents-context-cache]]。
+# （建任务提示 maybe_suggest_task_nudge 曾在此挂尾，随挂尾机制删除——逻辑保留为 dormant。）
 # eager 工具执行线程池（LLM 流式期间预启动 SAFE 工具，持久复用）
 _EAGER_EXECUTOR: _ThreadPoolExecutor | None = None
 
@@ -1247,12 +1303,6 @@ def reset_safe_stats() -> None:
         _safe_stats = {"batches": 0, "parallel_tools": 0, "serial_tools": 0}
 
 
-def get_safe_stats() -> dict:
-    """返回 SAFE 并行分发统计（线程安全）。"""
-    with _safe_stats_lock:
-        return dict(_safe_stats)
-
-
 def _update_safe_stats(n_parallel: int, n_serial: int) -> None:
     """更新 SAFE 统计。"""
     with _safe_stats_lock:
@@ -1498,6 +1548,25 @@ def _inject_loop_guard(approved: list[tuple], storm_count: int) -> None:
     logger.warning("stormBreaker: %s 连续失败 %d 次，已注入 loop guard", last[1], storm_count)
 
 
+def _detect_control_signal(tool_calls: list[dict]) -> tuple[str, str] | None:
+    """本批工具是否含显式停止信号（task_done/need_user）。返回 (信号名, 附带文本) 或 None。
+
+    走原生 function-calling、不另搞 JSON 协议——只是把"结束"从隐式（模型不调工具）变成
+    agent 显式调控制工具。附带文本=summary 或 question，供 UI 把问题/总结交还用户。
+    """
+    from .tools.control import CONTROL_TOOLS
+    for tc in tool_calls:
+        name = tc.get("function", {}).get("name", "")
+        if name in CONTROL_TOOLS:
+            try:
+                args = json.loads(tc["function"]["arguments"])
+            except (json.JSONDecodeError, KeyError, TypeError):
+                args = {}
+            payload = (args.get("summary") or args.get("question") or "").strip()
+            return name, payload
+    return None
+
+
 def _handle_tool_results(
     ctx: CacheContext,
     tool_calls: list[dict],
@@ -1505,12 +1574,21 @@ def _handle_tool_results(
     on_tool: ToolCallback,
     storm_sig: str | None,
     storm_count: int,
+    content: str | None = None,
+    reasoning: str = "",
+    on_tool_result: Callable[[str, str], None] | None = None,
 ) -> tuple[str | None, int]:
     """解析工具调用 → 执行 → stormBreaker → 压缩 → 写 log。
 
+    content = LLM 在 tool_calls 之前可能附带的正文（模型先说一句再调工具）。保留它，
+    不丢——这是本函数与旧内联版漂移出的差异（旧内联保留 content、本函数曾写死 None）。
+    reasoning = 本次 LLM 调用的思考，挂 _reasoning（不进 API，供重启回放折叠区）。
     返回 (更新后的 storm_sig, 更新后的 storm_count)。
     """
-    ctx.log.append({"role": "assistant", "content": None, "tool_calls": tool_calls})
+    _amsg: dict = {"role": "assistant", "content": content, "tool_calls": tool_calls}
+    if reasoning:
+        _amsg["_reasoning"] = reasoning
+    ctx.log.append(_amsg)
 
     approved: list[tuple] = []
     for tc_data in tool_calls:
@@ -1552,6 +1630,8 @@ def _handle_tool_results(
         result = truncate_to_budget(result, ctx.all)
         result = _compress_tool_result(tool_name, result)
         ctx.log.append({"role": "tool", "tool_call_id": tc_data["id"], "content": result, "_tool_name": tool_name})
+        if on_tool_result is not None:
+            on_tool_result(tool_name, result)
 
     return storm_sig, storm_count
 
@@ -1563,6 +1643,8 @@ def run_conversation(
     on_tool: ToolCallback,
     on_progress: Callable[[], None] | None = None,
     session_id: str = "",
+    on_reasoning: Callable[[str], None] | None = None,
+    on_tool_result: Callable[[str, str], None] | None = None,
 ) -> str:
     """处理一轮对话：自动路由 + 工具调用循环。
 
@@ -1579,17 +1661,15 @@ def run_conversation(
             f"但收到了 {type(ctx).__name__}。"
             f"请确认传入了 CacheContext 而非 list[dict]。"
         )
-    # ── 每轮刷新 volatile 上下文（strip-then-append，缓存安全挂尾） ──
-    ctx.log[:] = [m for m in ctx.log if not m.get("_task_ctx")]
-    from .tasks import make_task_context_message
-    task_ctx = make_task_context_message()
-    if task_ctx:
-        ctx.log.append(task_ctx)
-    # 追加用户输入到 log（prefix 不变）
+    # 追加用户输入到 log（prefix 不变）。挂尾机制已整体删除——任务上下文/教训/审计/
+    # 钉板都不再摆在 payload 末尾（任何挂尾都让"对话"不再是请求输入结束位置、轮首只能
+    # 命中脆弱内部单元、空闲即被淘汰、整段重 miss；A/B 实测尾在末尾 ~25% vs 无尾 ~88%）。
+    # 这些能力若回归须按 append-only 重做。详见 [[ctgents-context-cache]]。
     ctx.log.append({"role": "user", "content": user_input})
-    # ── 教训注入：检查本轮任务是否匹配已知失败模式 ──
-    from .lesson import inject_lesson_context
-    inject_lesson_context(ctx.log, "_task", {"desc": user_input})
+
+    # 复位本轮控制信号：agent 这轮若调 task_done/need_user 才会置位（取代隐式"不调工具=结束"）。
+    ctx.control_signal = None
+    ctx.control_payload = None
 
     # 重设 Storm 去重窗口 + SAFE 并行统计（同轮工具循环内）
     from .tools.storm import reset_storm
@@ -1600,7 +1680,7 @@ def run_conversation(
 
     reset_safe_stats()
 
-    # 自动选择模型（始终 Pro）
+    # 选当前模型（默认 Pro，/model 切换后全局跟随）
     backend = auto_select_model(user_input)
     logger.info("路由: '%s...' → %s", user_input[:30], backend.info.name)
 
@@ -1608,20 +1688,36 @@ def run_conversation(
     # ── stormBreaker：同轮连续同一错误 → 打破死亡螺旋 ──
     _storm_sig: str | None = None   # 上一轮失败签名
     _storm_count = 0                # 同一签名连续次数
+    # 思考(reasoning)按"每次 LLM 调用"累积，挂到对应 assistant 消息的 _reasoning 字段——
+    # 仅供前端重启后回放折叠区。_clean_log_msg 只发 role/content/tool_calls/tool_call_id，
+    # _reasoning 不进 API（零缓存影响）；save_session 只滤 _volatile，会保留它。
+    _reasoning_accum: list[str] = []
+
+    def _capture_reasoning(chunk: str) -> None:
+        _reasoning_accum.append(chunk)
+        if on_reasoning is not None:
+            on_reasoning(chunk)
+
     while True:
         if requests_made >= _MAX_REQUESTS_PER_TURN:
-            return (
-                f"本轮已发出 {requests_made} 次 API 请求，达到熔断上限"
-                f"（CTG_MAX_REQUESTS_PER_TURN={_MAX_REQUESTS_PER_TURN}）。"
-                "已停止，请检查任务是否陷入循环，或拆小后继续。"
+            # 经 on_token 显式吐出停因——否则这条 return 被 _drive_turn 忽略、用户只看到
+            # 回复戛然而止、不知为何停。长任务里这是"本步到顶、续跑下一步新预算接力"，非失败。
+            msg = (
+                f"本轮已发出 {requests_made} 次 API 请求，达到单轮熔断上限"
+                f"（CTG_MAX_REQUESTS_PER_TURN={_MAX_REQUESTS_PER_TURN}）。本步已停；"
+                "若在长任务里、续跑会带新预算接着做下一步，否则请拆小后继续。"
             )
+            on_token("\n" + msg + "\n")
+            return msg
         used = count_messages_tokens(ctx.all)
         limit = int(MAX_CONTEXT_TOKENS * TOOL_LOOP_THRESHOLD)
         if used >= limit:
-            return (
+            msg = (
                 f"上下文用量已达上限（{used}/{MAX_CONTEXT_TOKENS} tokens）。"
                 "请开启新会话或精简问题。"
             )
+            on_token("\n" + msg + "\n")
+            return msg
         # 自动压缩旧对话（用量超过 _COMPACT_THRESHOLD 即触发）
         compact_limit = int(MAX_CONTEXT_TOKENS * _COMPACT_THRESHOLD)
         if used >= compact_limit:
@@ -1630,168 +1726,45 @@ def run_conversation(
             logger.info("压缩后消息数: %d", len(ctx))
 
         try:
-            _skip_tail = _NO_VOLATILE_TAIL or ((requests_made > 0) and not _KEEP_TOOLLOOP_TAIL)
+            _reasoning_accum.clear()
             content, tool_calls, eager_results = _invoke_llm_eager(
-                backend, ctx.send(skip_volatile_system=_skip_tail), on_token, session_id,
+                backend, ctx.send(), on_token, session_id, on_reasoning=_capture_reasoning,
             )
             requests_made += 1
         except UserInterruptError:
             clear_interrupt()
+            # 显式停止信号：用户截停本轮。外层主干 gate（control_signal is None 才续跑）
+            # 与 run_task_continuation 据此停——否则中断后续跑会接着跑下一步、"截停"失效。
+            ctx.control_signal = "interrupted"
             return "\n\n[⏹️ 已中断]"
         if tool_calls:
-            ctx.log.append({
-                "role": "assistant",
-                "content": content,
-                "tool_calls": tool_calls,
-            })
-            try:
-                approved: list[tuple] = []  # (tc_data, tool_name, args, tc, pre_result_or_None)
-
-                for tc_data in tool_calls:
-                    tool_name = tc_data["function"]["name"]
-                    try:
-                        args = json.loads(tc_data["function"]["arguments"])
-                    except json.JSONDecodeError:
-                        repaired = _repair_json(tc_data["function"]["arguments"])
-                        try:
-                            args = json.loads(repaired)
-                            logger.info("工具调用 JSON 已修复: %s", tool_name)
-                        except json.JSONDecodeError:
-                            error_payload = {
-                                "error": f"JSON 解析失败: {tc_data['function']['arguments'][:100]}",
-                            }
-                            approved.append((
-                                tc_data,
-                                tool_name,
-                                {},
-                                SimpleNamespace(function=SimpleNamespace(name=tool_name, arguments="{}")),
-                                json.dumps(error_payload, ensure_ascii=False),
-                            ))
-                            continue
-                    tc = SimpleNamespace(
-                        function=SimpleNamespace(
-                            name=tool_name,
-                            arguments=tc_data["function"]["arguments"],
-                        )
-                    )
-                    on_tool(tool_name, args)
-                    approved.append((tc_data, tool_name, args, tc, None))
-
-                # ── 注入 eager 预执行结果（LLM 流式期间已跑完的工具）──
-                for i, eager_result in eager_results.items():
-                    if i < len(approved) and approved[i][4] is None:
-                        tc_data = approved[i][0]
-                        tname = approved[i][1]
-                        targs = approved[i][2]
-                        tc = approved[i][3]
-                        approved[i] = (tc_data, tname, targs, tc, eager_result)
-
-                # 同轮去重由 storm.py 在 execute_tool 豁口统一处理（单一机制）
-                exec_indices: list[int] = []
-                exec_items: list[tuple] = []
-                for i, item in enumerate(approved):
-                    if item[4] is None:  # pre_result is None → 需要执行
-                        exec_indices.append(i)
-                        exec_items.append(item)
-
-                if exec_items:
-                    exec_results = _execute_tool_batch(exec_items)
-                    for idx, result in zip(exec_indices, exec_results, strict=True):
-                        tc_data, tool_name, args, tc, _ = approved[idx]
-                        approved[idx] = (tc_data, tool_name, args, tc, result)
-
-                # ── stormBreaker：检测同轮连续同一错误 ──
-                _all_failed = True
-                _sig_parts = []
-                for _item in approved:
-                    _tool_name = _item[1]
-                    _result = _item[4]
-                    _has_err = False
-                    _err_line = ""
-                    try:
-                        _parsed = json.loads(_result)
-                        if isinstance(_parsed, dict) and "error" in _parsed:
-                            _has_err = True
-                            _err_line = str(_parsed["error"]).split("\n")[0][:80]
-                    except (json.JSONDecodeError, Exception):
-                        pass
-                    if not _has_err:
-                        _all_failed = False
-                        break
-                    _sig_parts.append(f"{_tool_name}:{_err_line}")
-                if _all_failed and _sig_parts:
-                    _cur_sig = "|".join(_sig_parts)
-                    if _cur_sig == _storm_sig:
-                        _storm_count += 1
-                    else:
-                        _storm_sig = _cur_sig
-                        _storm_count = 1
-                    if _storm_count >= 3 and approved:
-                        _last = approved[-1]
-                        _warn = (
-                            f"\n\n[loop guard] '{_last[1]}' 已连续失败 {_storm_count} 次"
-                            f"且错误相同。重复发送——即使换了措辞——也不会有帮助。换方法："
-                            f"如果参数被截断，拆成多个小调用；"
-                            f"否则修正参数、换工具、或在最终回复中说明障碍。"
-                        )
-                        _last_result = _last[4] + _warn
-                        approved[-1] = (_last[0], _last[1], _last[2], _last[3], _last_result)
-                        logger.warning(
-                            "stormBreaker: %s 连续失败 %d 次，已注入 loop guard",
-                            _last[1], _storm_count,
-                        )
-                else:
-                    _storm_sig = None
-                    _storm_count = 0
-
-                for tc_data, tool_name, _args, _tc, result in approved:
-                    result = truncate_to_budget(result, ctx.all)
-                    result = _compress_tool_result(tool_name, result)
-                    ctx.log.append({
-                        "role": "tool",
-                        "tool_call_id": tc_data["id"],
-                        "content": result,
-                        "_tool_name": tool_name,
-                    })
-                # 记忆已移入缓存前缀（会话开始快照、会话内不变），不在轮内更新——
-                # 中途 remember 的新记忆靠对话上下文带过本会话，落盘后下次会话进前缀索引。
-                # 钉板变更后刷新 ctx.log 中的钉板消息（轮内 pin/unpin 即时生效，缓存安全挂尾）
-                from .session_pins import is_pinboard_msg, make_pinboard_msg
-                pin_idx = next((i for i, m in enumerate(ctx.log) if is_pinboard_msg(m)), -1)
-                new_pin = make_pinboard_msg()
-                if new_pin and pin_idx >= 0:
-                    ctx.log[pin_idx] = new_pin
-                elif new_pin and pin_idx < 0:
-                    ctx.log.append(new_pin)
-                elif not new_pin and pin_idx >= 0:
-                    ctx.log.pop(pin_idx)  # 全 unpin 后移除空钉板消息(按 _pinboard 标记定位,精确)
-                # on_progress 不在循环内调用——移到最后只调用一次
-            except Exception:
-                # 异常时补上 tool 结果消息，防止下次 API 调用因缺少 tool 消息而 400
-                for tc_data in tool_calls:
-                    already_saved = any(
-                        m.get("role") == "tool" and m.get("tool_call_id") == tc_data["id"]
-                        for m in ctx.log
-                    )
-                    if not already_saved:
-                        ctx.log.append({
-                            "role": "tool",
-                            "tool_call_id": tc_data["id"],
-                            "content": json.dumps({"error": "工具处理异常，已跳过"}, ensure_ascii=False),
-                        })
-                raise
+            # 解析→执行→stormBreaker→压缩→写 log 全部走 _handle_tool_results（单一实现）。
+            # 此处曾内联同一套 ~130 行（与 helper 漂移出 content=None 等差异，违反 C9 DRY）——
+            # 已删，改为调 helper。中途崩溃留下的光杆 tool_calls 由 send() 的
+            # _repair_tool_pairing 在唯一咽喉兜底补占位（旧内联的 except 回填已冗余，一并删）。
+            _storm_sig, _storm_count = _handle_tool_results(
+                ctx, tool_calls, eager_results, on_tool,
+                _storm_sig, _storm_count, content,
+                reasoning="".join(_reasoning_accum),
+                on_tool_result=on_tool_result,
+            )
+            # 显式停止信号：agent 这批调了 task_done/need_user → 置 ctx.control_signal、
+            # 结束本轮（不再靠"模型不调工具"猜结束）。续跑/主干据此决定停或继续。
+            ctrl = _detect_control_signal(tool_calls)
+            if ctrl:
+                ctx.control_signal, ctx.control_payload = ctrl
+                if on_progress:
+                    on_progress()
+                return content or ""
         else:
-            ctx.log.append({"role": "assistant", "content": content or ""})
-            # 长任务的"接着做"不在这里硬续（旧补丁靠 has_unfinished 注入"不要停"=
-            # 与对话回合打架、逼出自问自答）。改由 main 的 REPL 在"agent 这轮真推进了
-            # current.md"时自主驱动下一步（task_loop.run_task_continuation）——续跑条件
-            # 是 agent 自己的推进、不是任务存在，停由它的判断（停止推进/标 [!]）决定。
-            # ── 建任务建议：干了不少活却没 current.md 任务 → 提示建任务（一次/会话）──
-            # 事实触发（请求数+无任务），判断留 agent（带 opt-out），不机械分类长任务。
-            from .tasks import maybe_suggest_task_nudge
-            _suggest = maybe_suggest_task_nudge(requests_made, _TASK_SUGGEST_MIN_REQUESTS)
-            if _suggest:
-                ctx.log.append({"role": "system", "content": _suggest, "_volatile": True})
+            _msg = {"role": "assistant", "content": content or ""}
+            if _reasoning_accum:
+                _msg["_reasoning"] = "".join(_reasoning_accum)  # 重启回放折叠区用，不进 API
+            ctx.log.append(_msg)
+            # 模型这轮没调任何工具 = 本轮自然结束（纯文本回复）。长任务的"接着做"不在这里
+            # 硬续——由 main.run_agent_turn 在 agent 参与了任务时自主驱动（run_task_continuation，
+            # "有未完成就继续"），停靠 agent 显式调 task_done/need_user（见 tools/control.py）
+            # 或卡死保险，不再靠"在回复里说停"或"注入不要停"那套自问自答补丁。
             if on_progress:
                 on_progress()
             from .tasks import get_task_progress_line

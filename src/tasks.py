@@ -170,6 +170,24 @@ def is_all_done() -> bool:
     return has_done and not any(m in text for m in _ALL_NOT_DONE)
 
 
+def resume_reminder() -> str | None:
+    """会话首轮若有未完成长任务，返回一段恢复提醒（含目标锚点 + 任务清单），否则 None。
+
+    治"可恢复"：current.md 持久化、会话日志每轮 autosave——状态从不丢，但跨会话/重启后
+    agent 对"有个没做完的任务"没有注意力。main 在会话首轮 append-only 注入这一条（永久 log、
+    非挂尾），让重开就能从断点接着干。一次性注入（不每轮 bloat），见 main.run_agent_turn。
+    """
+    if not has_unfinished():
+        return None
+    text = read_current()
+    head = ("⏸ 你有一个未完成的长任务（tasks/current.md），从未完成步骤（[ ]/[o]）的断点继续，"
+            "不要从头重来；在步骤旁记录细进度（如 47/250），完成后清空归档。")
+    anchor = _extract_anchor(text)
+    if anchor:
+        head += f"\n🎯 目标锚点：{anchor}（每完成一步对照检查方向）"
+    return head + "\n\n" + text
+
+
 def make_task_context_message() -> dict | None:
     """生成 volatile 上下文消息：经验检索 + 方向发现 + 长期目标 + 未完成长任务 + 被动进化反思。"""
     global _gaps_reported, _experience_reported
@@ -189,12 +207,8 @@ def make_task_context_message() -> dict | None:
         if gap_text:
             parts.append(gap_text)
 
-    # ── 长期目标（你与 agent 共同的长期方向）──
-    if has_ambitions():
-        parts.append(
-            "📋 你们共同的长期目标（tasks/ambitions.md），"
-            "所有决策的弱方向参考：\n\n" + read_ambitions()
-        )
+    # 长期目标已移入缓存前缀（main._make_ambitions_message）——它 session 稳定，
+    # 留在挂尾会让"对话"不再是输入结束位置、轮首缓存被淘汰整段重 miss（见 llm.py 注释）。
 
     # ── 经验检索：有未完成任务时，搜索相似历史任务注入教训 ──
     if not _experience_reported and has_unfinished():
@@ -231,21 +245,9 @@ def make_task_context_message() -> dict | None:
                 "↳ 每完成一个步骤，对照上方锚点检查当前方向：做的事还在解决这个问题吗？"
             )
 
-    # ── 被动进化反思：去重 → format_diagnostics 统一格式化 ──
-    from .diagnostics import format_diagnostics
-    from .tracker import get_latest_reflections as _get_reflections
-    reflections = _get_reflections(limit=3)
-    if reflections:
-        seen: set[tuple[str, str]] = set()
-        anomalies: list[dict] = []
-        for ref in reflections:
-            for a in ref.get("anomalies", []):
-                key = (a.get("tool", ""), a.get("type", ""))
-                if key not in seen:
-                    seen.add(key)
-                    anomalies.append(a)
-        if anomalies:
-            parts.append(format_diagnostics(anomalies))
+    # 被动进化反思已移入缓存前缀（main._make_reflections_message）——它 session 稳定
+    # （反思在会话边界写、本会话内不变），留在挂尾会让"对话"不再是输入结束位置、轮首
+    # 命中脆弱内部单元、负载尖峰时偶发整段重 miss（见 build_reflections_text / llm.py 注释）。
 
     if not parts:
         return None
@@ -253,6 +255,26 @@ def make_task_context_message() -> dict | None:
     # 任务上下文每轮堆一份副本(全在挂尾区,每个请求重算,白烧缓存 miss)。
     return {"role": "system", "content": "\n\n".join(parts),
             "_volatile": True, "_task_ctx": True}
+
+
+def build_reflections_text() -> str | None:
+    """被动进化反思文本（去重 → format_diagnostics）。session 稳定，供缓存前缀注入。"""
+    from .diagnostics import format_diagnostics
+    from .tracker import get_latest_reflections as _get_reflections
+    reflections = _get_reflections(limit=3)
+    if not reflections:
+        return None
+    seen: set[tuple[str, str]] = set()
+    anomalies: list[dict] = []
+    for ref in reflections:
+        for a in ref.get("anomalies", []):
+            key = (a.get("tool", ""), a.get("type", ""))
+            if key not in seen:
+                seen.add(key)
+                anomalies.append(a)
+    if not anomalies:
+        return None
+    return format_diagnostics(anomalies)
 
 
 def create_task(content: str) -> str:

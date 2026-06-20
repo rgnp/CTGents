@@ -45,14 +45,16 @@ def made_task_progress(before: str, after: str) -> bool:
 def _drive_prompt() -> str:
     """自主续跑每步的驱动输入：任务内容框架，不是"继续"meta 指令。
 
-    current.md 已由 make_task_context_message 每轮注入上下文，这里不重复贴清单，
-    只给自主执行的姿态 + 停下问我的明确出口。
+    只给自主执行的姿态 + 显式停止信号的出口（task_done/need_user 走工具，被循环认账，
+    取代"在回复里说停"——后者会被自动续跑覆盖）。
     """
     return (
         "[长任务·自主推进] 按你自己的判断做 current.md 的下一步，做完更新步骤标记"
-        "（进度记在步骤后，如 47/250）。全部完成就归档。"
-        "如果遇到必须我拍板才能继续的决策，把那一步标成 [!] 并写清要问我什么，然后停下——我会看到。"
-        "常规的下一步不用征求许可。"
+        "（进度记在步骤后，如 47/250）。\n"
+        "停下的正式信号（别只在回复里说，否则会被自动续跑覆盖）：\n"
+        "· 整个任务全部完成 → 把所有步骤标 [x] 并调 task_done\n"
+        "· 需要我拍板/缺信息才能继续 → 调 need_user 写清要问什么（或把该步标 [!]）\n"
+        "常规的下一步不用征求许可，直接做。"
     )
 
 
@@ -61,27 +63,62 @@ def run_task_continuation(
     drive_turn: Callable[[object, str], object],
     on_status: Callable[[str], None] = lambda _s: None,
     budget: int | None = None,
+    stall_limit: int | None = None,
 ) -> None:
-    """在一次推进了 current.md 的回合之后，自主驱动后续步骤，直到 agent 自己停。
+    """有未完成步骤就自主驱动下一步，直到 agent 显式喊停 / 全完成 / 卡死 / 预算上限。
 
-    调用前提（由 REPL 保证）：上一回合 made_task_progress 为真。
+    停的优先级（显式 > 状态 > 兜底）：
+      1. agent 调 need_user → 把问题交还用户，停。
+      2. agent 调 task_done → 声明完成（全 [x] 则归档），停。
+      3. current.md 有 [!]/[r] 阻塞标记 → 需用户拍板，停。
+      4. 没有 [ ]/[o] 活跃未完成步骤 → 全完成归档，停。
+      5. 连续 stall_limit 步没推进清单 → 疑卡死/需用户，停（容一次忘勾标记的宽限）。
+      6. 预算 budget 步用尽 → 暂停兜底。
     drive_turn(ctx, prompt) 跑一整轮真实 process_turn 管线（Esc 可中断，由调用方接）。
+    控制信号经 ctx.control_signal/payload 传回（run_conversation 每轮复位+按需置位）。
     """
     budget = budget if budget is not None else RUNTIME.task_continue_budget
+    stall_limit = stall_limit if stall_limit is not None else RUNTIME.task_stall_limit
+    no_progress = 0
     for _ in range(budget):
         text = read_current()
         if not text.strip():
             return  # 任务被清空/归档
-        if not _has(text, UNFINISHED_MARKERS + BLOCKED_MARKERS):
-            on_status(archive_current())
-            on_status("✅ 长任务全部完成，已归档。")
-            return
         if _has(text, BLOCKED_MARKERS):
             on_status("⏸ 任务里有需要你拍板的步骤（[!]/[r]），已停下——见上方任务清单。")
             return
+        if not _has(text, UNFINISHED_MARKERS):
+            on_status(archive_current())
+            on_status("✅ 长任务全部完成，已归档。")
+            return
         before = text
         drive_turn(ctx, _drive_prompt())
-        if read_current() == before:
-            on_status("⏸ 这一步没有推进任务清单，已停下交还你。")
+
+        sig = getattr(ctx, "control_signal", None)
+        if sig == "interrupted":
+            on_status("⏹ 已被你截停，长任务续跑停下——上下文已保留，要接着干就按 Enter。")
             return
-    on_status(f"⏸ 已自主推进 {budget} 步（预算上限），暂停。要继续就说一声。")
+        if sig == "need_user":
+            q = getattr(ctx, "control_payload", None) or ""
+            on_status(f"⏸ agent 需要你拍板：{q}" if q else "⏸ agent 请你拍板，已停下。")
+            return
+        if sig == "task_done":
+            if not _has(read_current(), UNFINISHED_MARKERS + BLOCKED_MARKERS):
+                on_status(archive_current())
+            s = getattr(ctx, "control_payload", None) or ""
+            on_status(f"✅ agent 声明任务完成。{s}".rstrip())
+            return
+
+        if read_current() == before:
+            no_progress += 1
+            if no_progress >= stall_limit:
+                on_status(
+                    f"⏸ 连续 {no_progress} 步没推进任务清单，可能卡住或需要你——已停下交还你。"
+                )
+                return
+        else:
+            no_progress = 0
+    from .tasks import get_task_progress_line
+    progress = get_task_progress_line()
+    tail = f"（当前进度：{progress}）" if progress else ""
+    on_status(f"⏸ 已自主推进 {budget} 步（自主上限），先停下来跟你对一次{tail}。要接着干就说一声。")

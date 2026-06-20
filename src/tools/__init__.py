@@ -5,6 +5,7 @@ import json
 import logging
 import sys
 import time
+from collections import OrderedDict
 
 from openai.types.chat import ChatCompletionMessageToolCall
 
@@ -91,6 +92,72 @@ def get_tools() -> list[dict]:
     _tools_cache = tools
     return tools
 # ── 工具执行 ──
+# ── 会话级工具调用缓存 ──
+#
+# 与 Storm（轮内去重）互补：Storm 处理同轮重复调用，写操作即全清；
+# 会话缓存跨轮次保持读结果，TTL 兜底，写操作不清。
+# 不重复覆盖 file.py 已自带的 read_file / list_files 缓存。
+_SESSION_CACHE_TTL = 300        # 5 分钟
+_SESSION_CACHE_MAX = 200        # 最大条目数
+_session_cache: OrderedDict = OrderedDict()
+_session_cache_hit: int = 0
+_session_cache_miss: int = 0
+# 白名单：只有纯读、确定性的工具才进缓存
+_SESSION_CACHEABLE: frozenset[str] = frozenset({
+    "grep_code", "find_files", "count_lines", "read_page",
+    "scan_papers", "read_papers",
+})
+
+
+def _session_cache_key(name: str, args: dict) -> tuple:
+    """生成缓存键：归一化参数顺序 + 排除 None 值抖动。"""
+    clean = {k: v for k, v in args.items() if v is not None}
+    return (name, json.dumps(clean, sort_keys=True, ensure_ascii=False))
+
+
+def _session_cache_get(name: str, args: dict) -> str | None:
+    """查缓存。命中且未过期 → 返回结果；过期/不在 → 返回 None。"""
+    global _session_cache_hit, _session_cache_miss
+    if name not in _SESSION_CACHEABLE:
+        _session_cache_miss += 1
+        return None
+    key = _session_cache_key(name, args)
+    entry = _session_cache.get(key)
+    if entry is None:
+        _session_cache_miss += 1
+        return None
+    ts, result = entry
+    if time.time() - ts > _SESSION_CACHE_TTL:
+        del _session_cache[key]
+        _session_cache_miss += 1
+        return None
+    _session_cache_hit += 1
+    return (
+        f"[⚡会话缓存] [{name}] 以下为缓存结果（{_SESSION_CACHE_TTL}秒内未过期）：\n{result}"
+    )
+
+
+def _session_cache_set(name: str, args: dict, result: str) -> None:
+    """存缓存。超过容量时驱逐最旧条目（LRU）。"""
+    if name not in _SESSION_CACHEABLE:
+        return
+    key = _session_cache_key(name, args)
+    _session_cache[key] = (time.time(), result)
+    _session_cache.move_to_end(key)
+    while len(_session_cache) > _SESSION_CACHE_MAX:
+        _session_cache.popitem(last=False)
+
+
+def get_session_cache_stats() -> dict:
+    """返回会话缓存命中统计（供 self 工具展示）。"""
+    return {
+        "hit": _session_cache_hit,
+        "miss": _session_cache_miss,
+        "size": len(_session_cache),
+        "max": _SESSION_CACHE_MAX,
+        "ttl": _SESSION_CACHE_TTL,
+    }
+
 
 
 def execute_tool(tool_call: ChatCompletionMessageToolCall) -> str:
@@ -112,6 +179,11 @@ def execute_tool(tool_call: ChatCompletionMessageToolCall) -> str:
     if dup is not None:
         return dup
 
+    # ── 会话缓存检查 ──（纯读工具跨轮次复用）
+    cached = _session_cache_get(name, args)
+    if cached is not None:
+        return cached
+
     result: str | None = None
     error_msg = ""
 
@@ -123,6 +195,7 @@ def execute_tool(tool_call: ChatCompletionMessageToolCall) -> str:
 
     if result is not None:
         storm_record(name, args, result)
+        _session_cache_set(name, args, result)
         elapsed = time.perf_counter() - t0
         logger.debug("工具调用: %s (%.2f秒)", name, elapsed)
         return result

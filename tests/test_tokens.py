@@ -2,10 +2,29 @@
 
 from src.tools.tokens import (
     _count_tool_calls_tokens,
+    count_context_tokens,
     count_messages_tokens,
     estimate_tokens,
+    tools_schema_tokens,
     truncate_to_budget,
 )
+
+
+class TestContextTokens:
+    """窗口占用 = 消息 + 工具 schema。工具 schema 每轮随请求发、计入 prompt_tokens，
+    只数 messages 会恒定漏掉它(实测 ~5600 token、比 AGENTS.md 还大)。
+    """
+
+    def test_tools_schema_counted(self):
+        assert tools_schema_tokens() > 0
+
+    def test_context_includes_tools(self):
+        msgs = [{"role": "user", "content": "你好"}]
+        assert count_context_tokens(msgs) == count_messages_tokens(msgs) + tools_schema_tokens()
+
+    def test_context_strictly_larger_than_messages(self):
+        msgs = [{"role": "user", "content": "x"}]
+        assert count_context_tokens(msgs) > count_messages_tokens(msgs)
 
 
 class TestEstimateTokens:
@@ -96,6 +115,8 @@ class TestTruncateToBudget:
 
     def test_long_text_truncated(self, monkeypatch):
         monkeypatch.setattr("src.tools.tokens.MAX_CONTEXT_TOKENS", 1000)
+        # 隔离截断逻辑：工具 schema(~5600)会吃满 1000 的小预算，桩成 0 单测截断本身
+        monkeypatch.setattr("src.tools.tokens.tools_schema_tokens", lambda: 0)
         long_text = "A" * 5000
         msgs = [{"role": "user", "content": "hello"}]
         result = truncate_to_budget(long_text, msgs)

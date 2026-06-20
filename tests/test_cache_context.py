@@ -54,22 +54,26 @@ class TestSendMethod:
         # _volatile 不影响 API 发送，只影响 session 持久化
         assert len(api) == 1
 
-    def test_log_system_messages_in_order(self):
-        """Log 中的 system 消息应在对话之后，避免破坏前缀缓存。"""
+    def test_volatile_system_dropped_pure_append(self):
+        """默认(纯追加):log 里的 volatile system 消息(挂尾)整体不进 payload。
+
+        prefix 之后只剩对话(user/assistant/tool),最后一条是对话 → 它就是缓存输入
+        结束单元,下轮首请求可靠命中。见 [[ctgents-context-cache]]。
+        """
         ctx = CacheContext(
             prefix_msgs=[{"role": "system", "content": "PREFIX"}],
             log_msgs=[
                 {"role": "user", "content": "Q1"},
-                {"role": "system", "content": "LOG_SYS"},
+                {"role": "system", "content": "TAIL", "_volatile": True},
                 {"role": "assistant", "content": "A1"},
             ],
         )
         api = ctx.send()
         roles = [m["role"] for m in api]
-        assert roles == ["system", "user", "assistant", "system"]
+        assert roles == ["system", "user", "assistant"]
         assert api[0]["content"] == "PREFIX"
-        assert api[1]["content"] == "Q1"
-        assert api[3]["content"] == "LOG_SYS"
+        assert api[-1]["role"] != "system"
+        assert all(m.get("content") != "TAIL" for m in api)
 
     def test_scratch_not_in_api(self):
         """Scratch 消息不应出现在 send() 输出中。"""

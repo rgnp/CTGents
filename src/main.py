@@ -8,13 +8,12 @@ import threading
 import time
 import traceback
 from collections.abc import Callable
-from datetime import datetime
 from pathlib import Path
 from typing import TYPE_CHECKING
 
 from .cache_context import CacheContext
 from .commands import dispatch as dispatch_cmd
-from .session import list_sessions, load_session, save_session
+from .session import list_sessions, load_prefix, load_session, save_prefix, save_session
 
 # 重模块（llm→openai/tools ~1.1s、tools._tool_meta→trafilatura/tavily）延迟到使用处 import，
 # 让 `import src.main`（程序入口）从 ~1.3s 降到 ~0.2s → TUI 开屏秒显。第一轮真用时再加载。
@@ -70,7 +69,7 @@ def _stop_esc_listener() -> None:
 
 # 本进程是否真跑过一轮（产生过新内容）。空会话 / 加载后未改动的会话退出时
 # 不触发反思/摘要/收割（那是白烧 LLM）。加载/清空会话时复位。
-_session_state = {"turn_ran": False}
+_session_state = {"turn_ran": False, "task_reminded": False}
 
 
 def _make_memory_context() -> dict | None:
@@ -79,7 +78,7 @@ def _make_memory_context() -> dict | None:
     ctx_str = get_context()
     if not ctx_str:
         return None
-    return {"role": "system", "content": ctx_str, "_volatile": True}
+    return {"role": "system", "content": ctx_str, "_volatile": True, "_label": "记忆索引"}
 
 
 logger = logging.getLogger(__name__)
@@ -88,227 +87,84 @@ logger = logging.getLogger(__name__)
 def _make_agents_message() -> dict:
     agents_path = Path(__file__).parent.parent / "AGENTS.md"
     content = agents_path.read_text(encoding="utf-8") if agents_path.exists() else "CTGents 编程助手。"
-    return {"role": "system", "content": content, "_volatile": True}
+    return {"role": "system", "content": content, "_volatile": True, "_label": "AGENTS.md"}
 
 
-def _make_mechanisms_message() -> dict:
-    """自动派生「每轮注入的运行时机制」索引，放进缓存前缀——给 agent 环境级自我认知。"""
-    import inspect
-    g = globals()
-    names = sorted(n for n in g if n.startswith("_inject_") or n == "_append_volatile_context")
-    lines = ["## 你每轮自动注入的运行时机制（自动派生自 main.py，这些确实在跑，不是设想）", ""]
-    for n in names:
-        doc = (inspect.getdoc(g[n]) or "").splitlines()
-        lines.append(f"- `{n}`：{doc[0] if doc else '(无说明)'}")
-    return {"role": "system", "content": "\n".join(lines), "_volatile": True}
+# _make_mechanisms_message（自动派生「每轮注入的运行时机制」索引）已删除：它索引的
+# 是 _inject_* / _append_volatile_context 这些挂尾注入器，随挂尾机制整体删除已无对象可索引。
 
 
-def _make_date_message() -> dict:
-    """今天的日期——放前缀，一天不变，缓存无损。解决 LLM 训练截止日期盲区。"""
-    today = datetime.now().strftime("%Y-%m-%d")
-    return {"role": "system", "content": f"今天是 {today}。", "_volatile": True}
+def _make_ambitions_message() -> dict | None:
+    """长期目标（tasks/ambitions.md）放进缓存前缀——它 session 稳定、是弱方向参考。
+
+    曾在挂尾(make_task_context_message)，但任何挂尾内容都让"对话"不再是请求的输入结束
+    位置，轮首只能命中脆弱内部单元、空闲~40s 即被服务端淘汰、整段对话重 miss。挪进前缀
+    (会话开始建一次、冻结)后对话重新成为可靠的输入结束单元。见 [[ctgents-context-cache]]。
+    """
+    from .tasks import has_ambitions, read_ambitions
+    if not has_ambitions():
+        return None
+    content = ("📋 你们共同的长期目标（tasks/ambitions.md），所有决策的弱方向参考：\n\n"
+               + read_ambitions())
+    return {"role": "system", "content": content, "_volatile": True, "_label": "长期目标"}
+
+
+def _make_reflections_message() -> dict | None:
+    """被动进化反思放进缓存前缀——session 稳定（反思在会话边界写、本会话内不变）。
+
+    曾在挂尾(make_task_context_message)，是 ambitions 移走后最后一个 session 稳定的挂尾项；
+    任何挂尾内容都让"对话"成脆弱内部单元、负载尖峰时偶发整段重 miss。挪进前缀消灭这条。
+    """
+    from .tasks import build_reflections_text
+    text = build_reflections_text()
+    if not text:
+        return None
+    return {"role": "system", "content": text, "_volatile": True, "_label": "被动进化反思"}
 
 
 def _make_prefix_msgs() -> list[dict]:
     """缓存前缀的不可变系统消息（会话开始构建一次，会话内哈希锁死、不变）。
 
-    记忆索引放这里而非尾部：① 它进了缓存前缀，每个请求(含工具循环)都命中、都看得到，
-    不再每轮首因排在增长的对话之后而重新 miss；② 会话中途 remember 不会(也不能)改前缀——
-    新记忆靠对话上下文带过本会话、落盘后下次会话开始重建前缀时才进索引。记忆是参考资料、
-    不靠 recency，进前缀合适。
+    缓存命中已判定为 DeepSeek 服务端问题、不再是约束（见 [[ctgents-context-cache]]），
+    故把 session 稳定的器官接回前缀：AGENTS.md + 记忆索引(轴①越用越懂你) + 长期目标
+    ambitions + 被动进化反思 reflections。这些都在会话边界产生/会话内不变，放冻结前缀里
+    既送达模型、又不破坏纯追加（per-turn 动态的任务上下文/审计不在这里，走 append-only）。
+    每个 _make_* 缺数据时返回 None，按序过滤——空记忆/无任务的会话前缀自动退回只剩 AGENTS.md。
     """
-    msgs = [_make_date_message(), _make_agents_message(), _make_mechanisms_message()]
-    mem = _make_memory_context()
-    if mem:
-        msgs.append(mem)
-    return msgs
+    makers = (
+        _make_agents_message,
+        _make_memory_context,
+        _make_ambitions_message,
+        _make_reflections_message,
+    )
+    return [m for m in (make() for make in makers) if m]
 
 
-def _append_volatile_context(ctx: CacheContext) -> None:
-    """注入 volatile 上下文：未完成长任务 + 会话钉板（记忆已移入缓存前缀，见 _make_prefix_msgs）。"""
-    from .tasks import make_task_context_message
-    task_ctx = make_task_context_message()
-    if task_ctx:
-        ctx.log.append(task_ctx)
-    from .session_pins import render_tail
-    pinboard = render_tail()
-    if pinboard:
-        ctx.log.append({"role": "system", "content": pinboard, "_volatile": True})
+def _save_ctx(ctx: CacheContext, session_id: str | None) -> str:
+    """落盘会话日志 + 冻结前缀，返回（可能新生成的）session_id。
 
-
-def _inject_completion_audit(ctx: CacheContext) -> None:
-    """收尾取证自检：改动晚于绿测 / 改文件前没先读 → 挂尾提示。"""
-    ctx.log[:] = [m for m in ctx.log if not m.get("_completion_audit")]
-    from .completion_audit import audit_completion, audit_read_before_write
-    nudges = []
-    for fn in (audit_completion, audit_read_before_write):
-        nudge = fn(ctx.log)
-        if nudge:
-            nudges.append(nudge)
-    if nudges:
-        ctx.log.append(
-            {"role": "system", "content": "\n".join(nudges),
-             "_volatile": True, "_completion_audit": True}
-        )
-
-def _inject_citation_audit(ctx: CacheContext) -> None:
-    """引用即取证：若最终回复引用了没取证过的代码文件则挂尾提示。"""
-    ctx.log[:] = [m for m in ctx.log if not m.get("_citation_audit")]
-    from .citation_audit import audit_citations
-    nudge = audit_citations(ctx.prefix + ctx.log)
-    if nudge:
-        ctx.log.append(
-            {"role": "system", "content": nudge, "_volatile": True, "_citation_audit": True}
-        )
-
-
-# ── 记忆触发：中→英翻译扩展表（触发专用，补 _TRANSLITERATE 未覆盖的词）──
-_MEMORY_TRIGGER_TRANSLATIONS: dict[str, list[str]] = {
-    "自进化": ["self evolution", "self-evolution"],
-    "进化": ["evolution"],
-    "闭环": ["loop", "closed loop"],
-    "触发": ["trigger"],
-    "越用越懂": ["understanding growth"],
-    "路线": ["roadmap"],
-    "差距": ["gap"],
-    "诊断": ["diagnosis", "gaps"],
-    "收割": ["harvest"],
-    "反思": ["reflection"],
-    "壁纸": ["wallpaper"],
-    "宁缺毋滥": ["precision"],
-    "错误": ["error", "errors"],
-    "系统性": ["systematic"],
-    "编辑": ["edit"],
-    "调研": ["research", "search"],
-    "异步": ["async", "asynchronous"],
-}
-
-# 记忆名中属于噪音的部分（日期、纯数字）
-_MEMORY_NOISE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$|^\d+$")
-
-# 策略型记忆触发时输出的约束模板（按 fingerprint 路由）
-_STRATEGY_CONSTRAINT_TEMPLATES: dict[str, str] = {
-    "systematic_errors": (
-        "[约束] 本轮涉及代码/设计决策——执行前必查三点："
-        "① 设计前先 rag_search+search_web 调研方案，不凭大脑知识库；"
-        "② 改代码前先 read_file 确认内容，单行→edit_file_lines，多行→write_file；"
-        "③ 长任务用 run_async 启动后在后台等，不 poll 循环盯着跑。"
-    ),
-    "edit_repeated": (
-        "[约束] 即将编辑代码：改前必读文件（read_file），"
-        "单行替换→edit_file_lines，多行→write_file 完整重写。"
-        "行号漂移是 37 次遭遇的最高频失败原因——选错工具就是在同一个坑里原地踏步。"
-    ),
-    "memory_behavior_gap": (
-        "[约束] 记忆→行为闭环：触发了教训记忆时，本轮回复/行动中必须体现对应行为改变。"
-        "不是「我知道了」，是「我这次不同了」。"
-    ),
-}
-
-
-def _inject_memory_triggers(ctx: CacheContext, user_input: str) -> None:
-    """记忆触发：用户输入关键词匹配记忆标题/指纹时，提亮一行提醒。宁缺毋滥。
-
-    两级输出：
-    - 策略型（strategy）→ 注入可执行约束模板，强制前置检查
-    - 知识型（knowledge/reference）→ 注入一行摘要，需要时 recall 深读
+    前缀单独存（它整段是 _volatile、被 save_session 过滤掉），保证同一会话跨重启
+    复用同一份前缀字节、服务端缓存保持热（见 session.save_prefix）。
     """
-    from .tools.memory import _dir, _split_frontmatter, _tokenize
+    sid = save_session(ctx.all, session_id)
+    if ctx.prefix:
+        save_prefix(sid, ctx.prefix)
+    return sid
 
-    # 清除上一轮触发
-    ctx.log[:] = [m for m in ctx.log if not m.get("_memory_trigger")]
 
-    mem_dir = _dir()
-    if not mem_dir.is_dir():
-        return
+def _apply_prefix(ctx: CacheContext, session_id: str | None) -> None:
+    """为 ctx 装上前缀：优先复用该会话落盘的冻结前缀；没有（新会话 / 旧存档）才
+    从当前磁盘现生成。这样重载已有会话不再因 AGENTS.md / 记忆变动而前缀作废、命中暴跌；
+    记忆 / AGENTS.md 的更新只在新建会话（下次现生成前缀）时生效——刻意如此。
+    """
+    saved = load_prefix(session_id) if session_id else None
+    ctx.rebuild_prefix(saved if saved else _make_prefix_msgs())
 
-    # 翻译扩展用户输入
-    user_lower = user_input.lower()
-    for cn, en_list in _MEMORY_TRIGGER_TRANSLATIONS.items():
-        if cn in user_input:
-            user_lower += " " + " ".join(en_list)
-    user_tokens = _tokenize(user_lower)
 
-    triggers: list[tuple[str, str, str, str, int]] = []  # (name, desc, type, fp, matches)
-
-    for f in sorted(mem_dir.glob("*.md")):
-        if f.name == "MEMORY.md":
-            continue
-        try:
-            meta, _ = _split_frontmatter(f.read_text(encoding="utf-8"))
-            if meta.get("severity"):
-                continue
-            name = meta.get("name", f.stem)
-            fp = meta.get("fingerprint", "")
-            mem_type = meta.get("type", "")
-
-            # 从 name 和 fingerprint 提取内容词
-            keywords: set[str] = set()
-            for part in name.replace("-", " ").replace("_", " ").split():
-                part = part.strip().lower()
-                if _MEMORY_NOISE_RE.match(part):
-                    continue
-                if len(part) >= 2:
-                    keywords.add(part)
-            for part in fp.replace("_", " ").split():
-                part = part.strip().lower()
-                if len(part) >= 2:
-                    keywords.add(part)
-
-            if not keywords:
-                continue
-
-            matches = sum(
-                1 for kw in keywords
-                if kw in user_tokens or kw in user_lower
-            )
-            if matches >= 2:
-                desc = meta.get("description", "")
-                triggers.append((name, desc[:40] if desc else "", mem_type, fp, matches))
-        except Exception:
-            continue
-
-    if not triggers:
-        return
-
-    triggers.sort(key=lambda x: x[4], reverse=True)
-    triggers = triggers[:3]
-
-    # 按类型分层输出
-    strategy_hits: list[tuple[str, str, str]] = []  # (name, desc, fp)
-    knowledge_hits: list[tuple[str, str]] = []       # (name, desc)
-
-    for name, desc, mem_type, fp, _ in triggers:
-        if mem_type == "strategy":
-            strategy_hits.append((name, desc, fp))
-        else:
-            knowledge_hits.append((name, desc))
-
-    # 策略型 → 强约束模板
-    for _name, _desc, fp in strategy_hits:
-        template = _STRATEGY_CONSTRAINT_TEMPLATES.get(fp)
-        if template:
-            ctx.log.append({
-                "role": "system", "content": template,
-                "_volatile": True, "_memory_trigger": True,
-            })
-
-    # 知识型 → 摘要提示
-    if knowledge_hits:
-        parts = []
-        for name, desc in knowledge_hits:
-            if desc:
-                parts.append(f"{name}（{desc}）")
-            else:
-                parts.append(name)
-        line = (
-            f"[记忆触发] 以下记忆可能与本轮相关，需要时用 recall 搜索详情："
-            f" {', '.join(parts)}"
-        )
-        ctx.log.append({
-            "role": "system", "content": line,
-            "_volatile": True, "_memory_trigger": True,
-        })
+# 旧的"挂尾"注入器（_append_volatile_context / _inject_* 把 volatile system 消息摆在
+# payload 末尾）已整体删除——那是破坏前缀缓存的根因。④可信审计已按 append-only 重新接回
+# （见 _run_post_turn_audits：nudge 追加进永久 log、不挂尾）。记忆触发逻辑当时连同测试
+# 一起删除，未重建。详见 [[ctgents-context-cache]]。
 
 
 def process_turn(
@@ -318,32 +174,15 @@ def process_turn(
     on_tool: Callable[[str, dict], None],
     on_progress: Callable[[], None] | None = None,
     session_id: str = "",
+    on_reasoning: Callable[[str], None] | None = None,
+    on_tool_result: Callable[[str, str], None] | None = None,
 ) -> str:
-    """一轮对话的数据管线：记忆触发 → 预读 → run_conversation → 收尾审计。
-
-    记忆每轮已由 _append_volatile_context 的记忆索引全文注入（约 20 条全给）；
-    曾经的 auto_recall（embedding 每轮再搜 top-3 注入）与之重叠、且拖一个未声明的
-    80MB sentence-transformers 依赖，已删。需要深挖某条记忆用 recall 工具。
-    """
+    """一轮对话的数据管线 → run_conversation（工具循环 + 流式 + 压缩）。"""
     from .llm import run_conversation
-    # 记忆触发：用户输入关键词匹配记忆标题 → 策略型注入约束模板，知识型注入摘要
-    _inject_memory_triggers(ctx, user_input)
-    # 预读优化：用户提到了文件路径，先读入上下文
-    pre_msgs = _preread_files(user_input, ctx)
-    if pre_msgs:
-        contents = "\n\n".join(m["content"] for m in pre_msgs)
-        user_input = (
-            f"[以下文件已预读，可直接基于其内容回答]\n\n{contents}\n\n"
-            f"── 用户问题 ──\n{user_input}"
-        )
-    reply = run_conversation(
+    return run_conversation(
         ctx, user_input, on_token, on_tool,
-        on_progress=on_progress, session_id=session_id,
-    )
-    # 收尾取证自检
-    _inject_completion_audit(ctx)
-    _inject_citation_audit(ctx)
-    return reply
+        on_progress=on_progress, session_id=session_id, on_reasoning=on_reasoning,
+        on_tool_result=on_tool_result)
 
 
 def _stdout_display():
@@ -361,60 +200,97 @@ def _stdout_display():
     )
 
 
-def run_agent_turn(ctx: CacheContext, user_input: str,
-                   session_id: str | None, *, display=None) -> str | None:
-    """主干：一次 agent 驱动。所有入口都走这里，保证不管从哪进、循环都是同一圈。
+def _drive_turn(ctx: CacheContext, user_input: str, disp, sid: list) -> None:
+    """跑一整轮 process_turn 管线 + 显示/Esc 中断/footer。sid 是单元素 list（出参）。
 
-    对话分支(process_turn：预读→run_conversation→完成/引用审计) →
-    若本轮推进了 current.md 则升级到任务分支(run_task_continuation 自主续跑)。
-
-    曾经 /retry 和中断"指导"直接调 run_conversation、绕过 process_turn 的审计与任务
-    续跑——同一 agent 从不同入口跑的不是同一个循环。收敛到此函数后各入口一致、闭合。
-
-    display: 输出去向（默认 stdout=REPL；TUI 传写进 widget 的 Display）。循环不变。
+    run_agent_turn 与任务自主续跑共用此咽喉——保证不管谁驱动，循环都是同一圈、
+    drift 闭合（见 [[project_ctgents]] d4f9a47）。
     """
     from . import status_bar
-    from .task_loop import made_task_progress, run_task_continuation
-    from .tasks import read_current as _read_current
-
-    disp = display or _stdout_display()
     _session_state["turn_ran"] = True
-    task_before = _read_current()
-    sid = [session_id]
     on_token, has_output = disp.make_display()
     status_bar.note_turn_start()
     _start_esc_listener()
     try:
         process_turn(
             ctx, user_input, on_token, disp.on_tool,
-            on_progress=lambda: sid.__setitem__(0, save_session(ctx.all, sid[0])),
+            on_progress=lambda: sid.__setitem__(0, _save_ctx(ctx, sid[0])),
             session_id=sid[0] or "",
+            on_reasoning=disp.on_reasoning,
+            on_tool_result=getattr(disp, "on_tool_result", None),
         )
     finally:
         _stop_esc_listener()
     if has_output():
         disp.end_message()
-
-    # 对话分支推进了 current.md → 升级到任务分支
-    if made_task_progress(task_before, _read_current()):
-        def _task_drive(c, text):
-            ot, ho = disp.make_display()
-            process_turn(
-                c, text, ot, disp.on_tool,
-                on_progress=lambda: sid.__setitem__(0, save_session(c.all, sid[0])),
-                session_id=sid[0] or "",
-            )
-            if ho():
-                disp.end_message()
-        _start_esc_listener()
-        try:
-            run_task_continuation(ctx, _task_drive, on_status=disp.on_status)
-        finally:
-            _stop_esc_listener()
-
     footer = status_bar.note_turn_end()
     if footer:
         disp.on_footer(footer)
+
+
+def _run_post_turn_audits(ctx: CacheContext, disp) -> None:
+    """④可信：轮末取证自检（谎报完成 / 编造引用 / 不读就改）。
+
+    append-only：命中的 nudge 作为**非 volatile** system 消息追加进 log——send() 只丢
+    volatile system、保留它，故下一轮模型看得到、能自纠；永不挂尾、永不原地改历史
+    （这是用户定的 canonical，区别于 per-turn 动态的任务上下文）。去重：同一条 nudge
+    只在 log 里尚无同文 _audit 消息时追加一次——staleness 类 nudge 条件不变会每轮重复
+    返回，不去重会堆积刷屏。命中即同时打印给用户（你来抓 agent 谎报）。
+    """
+    from .citation_audit import audit_citations
+    from .completion_audit import audit_completion, audit_read_before_write
+
+    log = ctx.all
+    nudges = [a(log) for a in (audit_completion, audit_citations, audit_read_before_write)]
+    existing = {m.get("content") for m in ctx.log if m.get("_audit")}
+    # 每条 nudge 单独成一条 _audit 消息——去重按单条比对（join 后整体比对会让
+    # 单条 nudge 永远 != 历史里的 join 文本、每轮重复追加）。
+    fresh = [n for n in nudges if n and n not in existing]
+    if not fresh:
+        return
+    for n in fresh:
+        ctx.log.append({"role": "system", "content": n, "_audit": True})
+    disp.on_status("\n\n".join(fresh))
+
+
+def run_agent_turn(ctx: CacheContext, user_input: str,
+                   session_id: str | None, *, display=None) -> str | None:
+    """主干：一次 agent 驱动。所有入口都走这里，保证不管从哪进、循环都是同一圈。
+
+    一轮 = 一次 _drive_turn（对话）+ 任务自主续跑（若这轮真推进了 current.md，自主驱动
+    后续步骤直到 agent 自己停）+ 轮末 ④可信审计（append-only）。
+
+    display: 输出去向（默认 stdout=REPL；TUI 传写进 widget 的 Display）。循环不变。
+    """
+    from .task_loop import made_task_progress, run_task_continuation
+    from .tasks import read_current
+
+    disp = display or _stdout_display()
+    sid = [session_id]
+
+    # 可恢复：会话首轮若有未完成长任务，append-only 注入一次提醒（恢复跨会话/重启后的"注意力"）。
+    if not _session_state["task_reminded"]:
+        _session_state["task_reminded"] = True
+        from .tasks import resume_reminder
+        rem = resume_reminder()
+        if rem:
+            ctx.log.append({"role": "system", "content": rem, "_resume": True})
+            disp.on_status(rem)
+
+    before_task = read_current()
+    _drive_turn(ctx, user_input, disp, sid)
+
+    # 任务自主续跑：这一轮 agent 真推进了 current.md（参与了任务）→ 自主驱动后续步骤。
+    # 但若 agent 这轮已显式喊停（task_done/need_user），尊重它、不再续跑。
+    # 续跑内部"有未完成就继续"，停由显式信号/卡死保险决定（见 run_task_continuation）。
+    if ctx.control_signal is None and made_task_progress(before_task, read_current()):
+        run_task_continuation(
+            ctx,
+            lambda c, prompt: _drive_turn(c, prompt, disp, sid),
+            on_status=disp.on_status,
+        )
+
+    _run_post_turn_audits(ctx, disp)
     return sid[0]
 
 
@@ -558,8 +434,15 @@ def _reload_dispatch():
 
 # ── 主入口 ──
 
+# 会话关闭时的收割（教训 / 用户理解 / 项目知识）总开关。默认关：每次关闭都全量
+# LLM 重写记忆档案，既烧 LLM 调用、又 churn 记忆索引 → 下次新建会话前缀变动。
+# 记忆改为「用出来的」——靠 agent 显式 remember，不靠每次关闭自动收割。
+# 设 CTG_HARVEST_ON_CLOSE=1 恢复关闭时收割。
+_HARVEST_ON_CLOSE = os.getenv("CTG_HARVEST_ON_CLOSE", "0").strip().lower() not in ("", "0", "false", "no")
+
+
 def _finalize_session(ctx: CacheContext, session_id: str | None) -> list[str]:
-    """会话收尾：落盘 → 反思 → 记忆收割 → 用户理解收割 → pin 转存。
+    """会话收尾：落盘 → 反思 →（收割默认关，见 _HARVEST_ON_CLOSE）→ pin 转存。
 
     本进程没真跑过一轮（空会话 / 加载后未改动就退出）则直接退出，不触发任何
     反思/摘要/收割——那些是 LLM 调用，对没新内容的会话纯属白烧。
@@ -577,7 +460,7 @@ def _finalize_session(ctx: CacheContext, session_id: str | None) -> list[str]:
             timings.append((label, time.perf_counter() - t0))
 
     if any(m["role"] == "assistant" for m in ctx.all):
-        session_id = _timed("保存", lambda: save_session(ctx.all, session_id))
+        session_id = _timed("保存", lambda: _save_ctx(ctx, session_id))
         lines.append(f"会话已保存: [{session_id}]")
         try:
             from .tracker import reflect_on_session
@@ -585,39 +468,40 @@ def _finalize_session(ctx: CacheContext, session_id: str | None) -> list[str]:
                 lines.append("已写入会话反思。")
         except Exception as e:
             logger.warning("会话反思失败: %s", e)
-    try:
-        from .lesson import extract_lessons, save_lessons
-        lessons = _timed("教训", lambda: extract_lessons(ctx.all))
-        if lessons:
-            n = save_lessons(lessons)
-            lines.append(f"已自动收割 {n} 条记忆。")
-    except Exception as e:
-        logger.warning("记忆收割失败: %s", e)
-    if any(m["role"] == "assistant" for m in ctx.all):
-        # 用户档案 + 项目知识都是阻塞 LLM 调用。两者各写不同记忆文件，但 _remember
-        # 末尾会重建共享索引 MEMORY.md（并发写同一文件会互相截断）——故 LLM 调用并发跑、
-        # 落盘串行做：把退出等待从 串行(64+44s) 砍到 并发(≈max)。
-        import concurrent.futures as _cf
-
-        from .project_model import harvest_project_knowledge, save_project_knowledge
-        from .user_model import harvest_user_profile, save_user_profile
-        log_all = ctx.all
-
-        def _harvest_both() -> tuple[str | None, str | None]:
-            with _cf.ThreadPoolExecutor(max_workers=2) as ex:
-                fu = ex.submit(harvest_user_profile, log_all)
-                fp = ex.submit(harvest_project_knowledge, log_all)
-                return fu.result(), fp.result()
-
-        user_body = proj_body = None
+    if _HARVEST_ON_CLOSE:
         try:
-            user_body, proj_body = _timed("收割(并发)", _harvest_both)
+            from .lesson import extract_lessons, save_lessons
+            lessons = _timed("教训", lambda: extract_lessons(ctx.all))
+            if lessons:
+                n = save_lessons(lessons)
+                lines.append(f"已自动收割 {n} 条记忆。")
         except Exception as e:
-            logger.warning("收割失败: %s", e)
-        if user_body and save_user_profile(user_body):
-            lines.append("已更新用户理解档案（下次会话自动注入）。")
-        if proj_body and save_project_knowledge(proj_body):
-            lines.append("已更新项目知识档案（下次会话索引可见，recall 取详情）。")
+            logger.warning("记忆收割失败: %s", e)
+        if any(m["role"] == "assistant" for m in ctx.all):
+            # 用户档案 + 项目知识都是阻塞 LLM 调用。两者各写不同记忆文件，但 _remember
+            # 末尾会重建共享索引 MEMORY.md（并发写同一文件会互相截断）——故 LLM 调用并发跑、
+            # 落盘串行做：把退出等待从 串行(64+44s) 砍到 并发(≈max)。
+            import concurrent.futures as _cf
+
+            from .project_model import harvest_project_knowledge, save_project_knowledge
+            from .user_model import harvest_user_profile, save_user_profile
+            log_all = ctx.all
+
+            def _harvest_both() -> tuple[str | None, str | None]:
+                with _cf.ThreadPoolExecutor(max_workers=2) as ex:
+                    fu = ex.submit(harvest_user_profile, log_all)
+                    fp = ex.submit(harvest_project_knowledge, log_all)
+                    return fu.result(), fp.result()
+
+            user_body = proj_body = None
+            try:
+                user_body, proj_body = _timed("收割(并发)", _harvest_both)
+            except Exception as e:
+                logger.warning("收割失败: %s", e)
+            if user_body and save_user_profile(user_body):
+                lines.append("已更新用户理解档案（下次会话自动注入）。")
+            if proj_body and save_project_knowledge(proj_body):
+                lines.append("已更新项目知识档案（下次会话索引可见，recall 取详情）。")
     from .session_pins import promote_durable
     promoted = _timed("pin转存", promote_durable)
     if promoted:
@@ -672,8 +556,7 @@ def main() -> None:
     def _ensure_ctx_ready() -> None:
         # 行式 / 回退路径在此初始化；TUI 路径把它推迟到开屏后台做（界面秒显）。
         if not ctx.prefix:
-            ctx.rebuild_prefix(_make_prefix_msgs())
-            _append_volatile_context(ctx)
+            _apply_prefix(ctx, session_id)  # 加载的会话复用其冻结前缀；新会话现生成
 
     try:
         if use_tui:
@@ -748,17 +631,18 @@ def _run_line_repl(ctx: CacheContext, session_id: str | None) -> str | None:
             if r.message:
                 print(r.message)
             if r.save:
-                session_id = save_session(ctx.all, session_id)
+                session_id = _save_ctx(ctx, session_id)
                 print(f"会话已保存: [{session_id}]")
             if r.load:
                 ctx.clear_log()
                 loaded_msgs = load_session(r.load)
                 ctx.log.extend(loaded_msgs)
-                _append_volatile_context(ctx)
+                _apply_prefix(ctx, r.load)  # 复用该会话冻结前缀，重载不塌命中
                 session_id = r.load
                 from . import status_bar
                 status_bar.reset()  # 切会话复位 Δmiss 基线
                 _session_state["turn_ran"] = False  # 加载未改动则退出不收割
+                _session_state["task_reminded"] = False  # 切会话→新会话首轮重提醒未完成任务
                 print(f"已加载会话 [{r.load}]，共 {len(ctx)} 条消息")
                 _print_recent(ctx.all)
             if r.clear:
@@ -773,7 +657,7 @@ def _run_line_repl(ctx: CacheContext, session_id: str | None) -> str | None:
                     from . import status_bar
                     status_bar.reset()  # 清空会话复位 Δmiss 基线
                     _session_state["turn_ran"] = False  # 清空后空会话退出不收割
-                _append_volatile_context(ctx)
+                    _session_state["task_reminded"] = False  # 清空后允许再次提醒
             if r.retry:
                 last_user = ctx.last_user_content() or ""
                 if last_user:

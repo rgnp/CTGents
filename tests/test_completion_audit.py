@@ -86,6 +86,12 @@ def test_edit_file_lines_counts_as_edit():
     assert audit_completion(log) == _NUDGE
 
 
+def test_replace_in_file_counts_as_edit():
+    """字符串匹配式编辑 replace_in_file 也用 '已编辑:' 前缀 → 计入 .py 改盘。"""
+    log = [_result("e1", "replace_in_file", "已编辑: D:\\project\\src\\m.py（替换 1 处）")]
+    assert audit_completion(log) == _NUDGE
+
+
 def test_non_py_write_ignored():
     """改 .md 不动测试覆盖面 → 不算代码改动。"""
     log = [_result("e1", "write_file", "已写入: D:\\project\\notes.md（5 字符）")]

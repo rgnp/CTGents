@@ -27,6 +27,10 @@ DEEPSEEK_BASE_URL: str = os.getenv("DEEPSEEK_BASE_URL", "https://api.deepseek.co
 # Pro: 强推理/长代码（3元/M入, 6元/M出），64K 给大型重构留空间
 MODEL_PRO: str = os.getenv("MODEL_PRO", "deepseek-v4-pro")
 PRO_MAX_TOKENS: int = int(os.getenv("PRO_MAX_TOKENS", "65536"))
+# Flash: 同 provider 的快/省档（deepseek-v4-flash）。切到它会换 KV 缓存命名空间、
+# 前缀缓存另起一份——缓存已判定为服务端问题、不再是约束，故按需可切。
+MODEL_FLASH: str = os.getenv("MODEL_FLASH", "deepseek-v4-flash")
+FLASH_MAX_TOKENS: int = int(os.getenv("FLASH_MAX_TOKENS", "8192"))
 
 # Tavily 搜索（多 key 轮换：逗号分隔，遇额度耗尽自动切下一个）
 _TAVILY_KEYS_RAW: str = os.getenv("TAVILY_API_KEYS", os.getenv("TAVILY_API_KEY", ""))

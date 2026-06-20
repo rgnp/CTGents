@@ -89,40 +89,28 @@ def test_preread_citation_not_false_flagged(monkeypatch):
     assert not any(m.get("_citation_audit") for m in ctx.log)
 
 
-# ── volatile 信号不得在 ctx.log 上堆积 ────────────────────────
+# ── 纯追加默认:prefix 之后无 volatile system 尾(Reasonix 对齐) ──
 
-def test_volatile_signals_dont_accumulate(monkeypatch):
-    """Completion 审计跨轮不累积:播 stale 编辑后恒 ==1。"""
-    ctx = _prefix_ctx()
-    _mock_llm(monkeypatch, ("好", []), ("好", []), ("好", []))
-    for _ in range(3):
-        _drive_turn(ctx, "随便说点")
+def test_pure_append_no_system_tail_by_default(monkeypatch):
+    """默认(纯追加):跑完带 pin 的一轮,send() 里 prefix 之后再无 system 消息。
 
-    # 播一条"已改 .py 但没绿测" → completion 审计每轮重算、不堆积
-    ctx.log.append({"role": "tool", "tool_call_id": "e1",
-                    "_tool_name": "write_file", "content": "已写入: x.py（1 字符）"})
-    _mock_llm(monkeypatch, ("继续", []), ("再继续", []))
-    _drive_turn(ctx, "继续")
-    assert sum(1 for m in ctx.log if m.get("_completion_audit")) == 1
-    _drive_turn(ctx, "再继续")
-    assert sum(1 for m in ctx.log if m.get("_completion_audit")) == 1
-
-
-# ── 多 feature 的 volatile 在尾部并存，互不覆盖 ───────────────
-
-def test_features_coexist_at_tail(monkeypatch):
-    """同轮: pin 后尾部钉板存在，prefix 仍是干净的 AGENTS。"""
+    对话末尾即"输入结束位置",下轮首请求可靠命中缓存单元(见 [[ctgents-context-cache]])。
+    """
     sp.clear_pins()
     ctx = _prefix_ctx()
+    n_prefix = len(ctx.prefix)
     _mock_llm(monkeypatch,
               ("", [_tool_call("pin", {"content": "决定:走方案A"})]),
               ("钉好了", []))
     try:
         _drive_turn(ctx, "做个决定")
         api = ctx.send()
-        tail = "\n".join(m.get("content") or "" for m in api if m["role"] == "system")
-        assert sp.PINBOARD_MARKER in tail              # 钉板在尾
-        assert api[0]["role"] == "system"              # 前缀仍居首
+        # prefix 之后没有任何 system 消息(钉板/审计/任务都不挂尾)
+        after_prefix = api[n_prefix:]
+        assert all(m["role"] != "system" for m in after_prefix), \
+            f"prefix 之后混入了 system 消息: {[m['content'][:30] for m in after_prefix if m['role']=='system']}"
+        # 最后一条是对话(非 system) → 它就是缓存的输入结束单元
+        assert api[-1]["role"] != "system"
     finally:
         sp.clear_pins()
 
@@ -150,20 +138,6 @@ def test_send_wellformed_no_orphan_tool(monkeypatch):
 
 # ── 固定 stance 已搬前缀，缓存零成本 ──────────────────────────
 
-def test_thinking_stance_lives_in_prefix(monkeypatch):
-    """检索是线索不是答案的提醒在缓存前缀中, 常量文本放前缀缓存零成本。
-
-    原挂尾靠 recency, 但同义文本每轮完全一样, recency 无差异, 白付 miss token。
-    搬进前缀后 send() 仍含此提醒, 落 API payload 时复用前缀缓存, 零 miss。
-    """
-    ctx = _prefix_ctx()
-    _mock_llm(monkeypatch, ("好", []))
-    _drive_turn(ctx, "随便说点")
-    api = ctx.send()
-    prefix_text = "\n".join(m.get("content") or "" for m in api if m["role"] == "system")
-    assert "线索" in prefix_text, "思考提醒应在前缀中"
-
-
 def test_evidence_stance_lives_in_prefix(monkeypatch):
     """信心要匹配证据的提醒在缓存前缀中, 常量文本放前缀缓存零成本。
 
@@ -177,34 +151,6 @@ def test_evidence_stance_lives_in_prefix(monkeypatch):
     assert "证据" in prefix_text, "证据提醒应在前缀中"
 
 
-# ── 建任务建议:干了不少活却没 current.md → 提示建任务(一次/会话) ──
-
-def test_substantial_work_no_task_suggests(monkeypatch, tmp_path):
-    """多步干活后空手收尾、又没 current.md 任务 → 尾部提示用 create_task 落计划。
-
-    事实触发(请求数达阈值 + 无任务文件),判断('算不算长任务')连同 opt-out 留给 agent。
-    """
-    import src.tasks as tasks
-    monkeypatch.setattr("src.tasks.CURRENT_TASK_FILE", tmp_path / "current.md")  # 无任务
-    tasks.reset_gaps_cache()
-    monkeypatch.setattr(llm, "_TASK_SUGGEST_MIN_REQUESTS", 3)  # 压低阈值便于触发
-    ctx = _prefix_ctx()
-    rounds = [("", [_tool_call("think", {"thought": f"第{i}步"})]) for i in range(3)]
-    rounds.append(("这部分先做到这。", []))  # 空手收尾,requests_made=4>=3
-    _mock_llm(monkeypatch, *rounds)
-    _drive_turn(ctx, "帮我把这件事推进一下")
-    tail = "\n".join(m.get("content") or "" for m in ctx.log if m.get("role") == "system")
-    assert "任务建议" in tail, "干了不少活又没任务,应提示建任务"
-
-
-def test_short_turn_no_suggest(monkeypatch, tmp_path):
-    """活儿少(未达阈值)→ 不提示建任务,普通问答不被唠叨(防假阳性)。"""
-    import src.tasks as tasks
-    monkeypatch.setattr("src.tasks.CURRENT_TASK_FILE", tmp_path / "current.md")
-    tasks.reset_gaps_cache()
-    monkeypatch.setattr(llm, "_TASK_SUGGEST_MIN_REQUESTS", 5)
-    ctx = _prefix_ctx()
-    _mock_llm(monkeypatch, ("一句话答完。", []))  # requests_made=1 < 5
-    _drive_turn(ctx, "随便问")
-    tail = "\n".join(m.get("content") or "" for m in ctx.log if m.get("role") == "system")
-    assert "任务建议" not in tail
+# 建任务建议(maybe_suggest_task_nudge 挂尾)随挂尾机制整体删除,对应的
+# test_substantial_work_no_task_suggests / test_short_turn_no_suggest 已移除。
+# 逻辑保留为 dormant,回归须按 append-only 重做。见 [[ctgents-context-cache]]。

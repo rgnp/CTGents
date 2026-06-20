@@ -498,6 +498,39 @@ def _list_backups(filepath: Path) -> list[Path]:
     return sorted(backup_dir.iterdir(), reverse=True)
 
 
+def _git_diff(filepath: Path) -> str:
+    """对已改文件跑 git diff，返回 '+'/'-' 格式的变更摘要。空 = 无变动。"""
+    import subprocess
+    try:
+        r = subprocess.run(
+            ["git", "diff", "--no-color", "--", str(filepath)],
+            capture_output=True, text=True, timeout=5,
+            cwd=_PROJECT_ROOT,
+        )
+        raw = r.stdout
+        if not raw and filepath.exists():
+            # 暂存过或新文件：对比 HEAD
+            r2 = subprocess.run(
+                ["git", "diff", "--no-color", "HEAD", "--", str(filepath)],
+                capture_output=True, text=True, timeout=5,
+                cwd=_PROJECT_ROOT,
+            )
+            raw = r2.stdout
+        if not raw:
+            return ""
+        lines = []
+        for line in raw.splitlines():
+            if line.startswith("--- ") or line.startswith("+++ "):
+                continue
+            if line.startswith("@@ ") or line.startswith("+") or line.startswith("-"):
+                lines.append(line)
+        if len(lines) > 60:
+            lines = lines[:60] + [f"⋯（diff 截断，共 {len(lines)} 行）"]
+        return "变更:\n```diff\n" + "\n".join(lines) + "\n```"
+    except Exception:
+        return ""
+
+
 # ── 读取 ──
 
 
@@ -595,7 +628,11 @@ def write_file(path: str, content: str) -> str:
     err = _post_write_check(filepath, backup)
     if err:
         return err
-    return f"已写入: {filepath}（{len(content)} 字符）"
+    diff = _git_diff(filepath)
+    r = f"已写入: {filepath}（{len(content)} 字符）"
+    if diff:
+        r += "\n" + diff
+    return r
 
 
 # ── 行级编辑（核心）──
@@ -664,11 +701,15 @@ def edit_file_lines(path: str, action: str, start_line: int,
     elif action == "insert":
         changed_range += f"后（插入 {new_count} 行）"
 
-    return (
+    r = (
         f"已编辑: {filepath}\n"
         f"操作: {action} {changed_range}\n"
         f"文件现在共 {len(result)} 行"
     )
+    diff = _git_diff(filepath)
+    if diff:
+        r += "\n" + diff
+    return r
 
 
 # ── 撤销 ──
@@ -768,7 +809,11 @@ def delete_file(path: str) -> str:
         return f"路径不是文件: {path}"
     try:
         filepath.unlink()
-        return f"已删除: {filepath}"
+        r = f"已删除: {filepath}"
+        diff = _git_diff(filepath)
+        if diff:
+            r += "\n" + diff
+        return r
     except OSError as e:
         return f"删除失败: {e}"
 
@@ -778,7 +823,11 @@ def delete_file(path: str) -> str:
 
 def execute(name: str, args: dict) -> str | None:
     if name == "read_file":
-        return read_file(args.get("path", ""))
+        return read_file(
+            args.get("path", ""),
+            args.get("start_line"),
+            args.get("end_line"),
+        )
     if name == "read_file_lines":
         return read_file_lines(
             args.get("path", ""),

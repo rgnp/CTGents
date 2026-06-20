@@ -93,10 +93,13 @@ class RuntimeParams:
     max_requests_per_turn: int = _env_int("CTG_MAX_REQUESTS_PER_TURN", 60)
     # 一轮请求数达此值却没有 current.md 任务 → 提示 agent 建任务（事实触发，判断留 agent）。
     task_suggest_min_requests: int = _env_int("CTG_TASK_SUGGEST_MIN_REQUESTS", 6)
-    # 长任务自主续跑：agent 推进 current.md 后，REPL 最多自主驱动多少步（防失控；
-    # 每步内仍受 max_requests_per_turn 熔断）。停由 agent 判断（停止推进/标 [!]）触发，
-    # 这只是兜底上限。
-    task_continue_budget: int = _env_int("CTG_TASK_CONTINUE_BUDGET", 10)
+    # 长任务自主续跑：一次用户回合内最多自主驱动多少步（不用反复手动"继续"）。真正的
+    # 失控守卫是 task_stall_limit（连续没推进就停）+ 每步 max_requests_per_turn 熔断；
+    # 本值只是"跑多久回来跟用户对一次"的生成性上限，故给得较宽（超长任务少打断）。
+    task_continue_budget: int = _env_int("CTG_TASK_CONTINUE_BUDGET", 30)
+    # 长任务续跑卡死保险：连续多少步没推进 current.md 就停下交还用户（容一次忘勾标记的
+    # 宽限，不像旧版一步没改就停；停的正式信号是 agent 调 need_user/task_done，这只是兜底）。
+    task_stall_limit: int = _env_int("CTG_TASK_STALL_LIMIT", 2)
     # 单条工具结果允许占用的上下文比例上限
     tool_result_budget: float = _env_float("CTG_TOOL_RESULT_BUDGET", 0.15)
     # 工具结果超过此字符数即压缩（read_file 等除外，见 SKIP_COMPRESS_TOOLS）
