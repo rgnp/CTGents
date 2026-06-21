@@ -291,6 +291,53 @@ def _check_git_hook_bypass(parts: list[str]) -> str:
     return ""
 
 
+def _check_git_destructive(parts: list[str]) -> str:
+    """拦"毁工作区/丢未提交工作"的 git 命令。
+
+    根因事故：agent 自驱自我修改时跑 `git reset --hard`（reflog 一串），把用户未提交
+    的活整片冲掉（靠 pre-commit 的 stash 才捞回）。这些命令对"放手的助手"是负价值——
+    要回退/丢弃由用户拍板，agent 不该一把梭。见 [[ctgents-agent-loop]] 自驱事故。
+    """
+    if not parts or Path(parts[0]).stem.lower() != "git":
+        return ""
+    p = [x.lower() for x in parts]
+    if "reset" in p and "--hard" in p:
+        return "git reset --hard 会丢弃工作区所有未提交改动"
+    if "clean" in p and any(a.startswith("-") and "f" in a for a in p):
+        return "git clean -f 会删除未跟踪文件（含未提交的新文件/数据）"
+    if "checkout" in p and ("--" in p or "." in p) and "-b" not in p:
+        return "git checkout -- / . 会丢弃工作区改动"
+    if "restore" in p and "--staged" not in p and "-s" not in p:
+        return "git restore（非 --staged）会丢弃工作区改动"
+    if "stash" in p and ("clear" in p or "drop" in p):
+        return "git stash clear/drop 会删除暂存的工作（可能是待恢复的活）"
+    return ""
+
+
+def _git_guard_block(parts: list[str]) -> str:
+    """Git 命令护栏：绕质量门 / 毁工作区 → 返回拦截消息，否则空串。两个执行入口共用。"""
+    bypass = _check_git_hook_bypass(parts)
+    if bypass:
+        return (
+            f"⛔ 命令被拦截: {bypass}。\n"
+            f"门超时不等于门失败——质量门要跑全量测试（~40s+）。正道：\n"
+            f"1. 用 git_commit 工具提交（推荐），或 run_command 不传 timeout"
+            f"（commit 自动抬到 {RUNTIME.git_commit_timeout_floor}s 地板）；\n"
+            f"2. 门真失败时，修复失败的测试/lint，再提交；\n"
+            f"3. 人工放行是用户的决定——向用户报告障碍，不要替用户决定绕过。"
+        )
+    destructive = _check_git_destructive(parts)
+    if destructive:
+        return (
+            f"⛔ 命令被拦截: {destructive}。\n"
+            f"自我修改/自驱时这会把用户未提交的活冲掉（已发生过一次，靠 stash 才捞回）。正道：\n"
+            f"1. 要回到干净状态：先 git stash 保存，别用 --hard / clean -f 一把梭；\n"
+            f"2. 只想撤销自己刚加的改动：用具体文件路径精确操作；\n"
+            f"3. 真要强制丢弃是用户的决定——向用户报告，别替用户决定。"
+        )
+    return ""
+
+
 def _is_test_command(parts: list[str]) -> bool:
     """命令是否在跑 pytest——用于抬高超时地板。
 
@@ -365,16 +412,9 @@ def run_command(command: str, timeout: int = 30, workdir: str | None = None) -> 
     if isinstance(cmd_parts, str):
         return cmd_parts
 
-    bypass_reason = _check_git_hook_bypass(cmd_parts)
-    if bypass_reason:
-        return (
-            f"⛔ 命令被拦截: {bypass_reason}。\n"
-            f"门超时不等于门失败——质量门要跑全量测试（~40s+）。正道：\n"
-            f"1. 用 git_commit 工具提交（推荐），或 run_command 不传 timeout"
-            f"（commit 自动抬到 {RUNTIME.git_commit_timeout_floor}s 地板）；\n"
-            f"2. 门真失败时，修复失败的测试/lint，再提交；\n"
-            f"3. 人工放行是用户的决定——向用户报告障碍，不要替用户决定绕过。"
-        )
+    guard_block = _git_guard_block(cmd_parts)
+    if guard_block:
+        return guard_block
 
     if cmd_parts and Path(cmd_parts[0]).stem.lower() == "git" and "commit" in cmd_parts:
         timeout = max(timeout, RUNTIME.git_commit_timeout_floor)
@@ -416,6 +456,9 @@ def run_async(command: str, timeout: int = 120, workdir: str | None = None) -> s
     cmd_parts = _split_command(command)
     if isinstance(cmd_parts, str):
         return cmd_parts
+    guard_block = _git_guard_block(cmd_parts)
+    if guard_block:
+        return guard_block
     if _is_test_command(cmd_parts):
         timeout = max(timeout, RUNTIME.test_timeout_floor)
     try:

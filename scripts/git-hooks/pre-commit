@@ -56,8 +56,14 @@ fi
 
 restore_worktree() {
     if [ "$STASHED" = "1" ]; then
-        git stash pop --quiet 2>/dev/null \
-            || echo "[pre-commit] ⚠️ stash pop 失败，未暂存改动仍在 stash 中，请手动 git stash pop。"
+        if ! git stash pop --quiet 2>/dev/null; then
+            # pop 失败=未暂存改动有冲突，仍躺在 stash 里。绝不能"提交照样成功+活被孤立到
+            # stash"（自驱事故就是这么丢的，见 [[ctgents-agent-loop]]）——直接中止提交，
+            # 逼人来解决，活在 stash 里安全可恢复。
+            echo "[pre-commit] ⛔ stash pop 失败：未暂存改动有冲突，仍在 stash 中。"
+            echo "[pre-commit]    为防丢失，提交已中止。请 git stash list 找到它、手动 pop 解决冲突后再提交。"
+            exit 1
+        fi
     fi
 }
 trap restore_worktree EXIT

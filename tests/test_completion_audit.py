@@ -11,10 +11,12 @@ import json
 from src.completion_audit import (
     _EDIT_OK,
     _EXIT_PREFIX,
+    _NO_MEMORY_CONSULT_NUDGE,
     _NUDGE,
     _WRITE_OK,
     _WRITE_WITHOUT_READ_NUDGE,
     audit_completion,
+    audit_memory_consult,
     audit_read_before_write,
 )
 from src.tools.exec import run_command
@@ -254,3 +256,36 @@ def test_no_user_boundary_returns_none():
         _call_assist("e1", "edit_file_lines"),
         _result("e1", "edit_file_lines", "已编辑: m.py"),
     ]) is None
+
+
+# ── audit_memory_consult（记忆-行为闭环）────────────────────────
+
+def test_work_without_consult_nudges():
+    """改文件但整个会话没 recall/rag_search → 提示先查内部记忆。"""
+    log = _turn([_call_assist("w1", "write_file")])
+    assert audit_memory_consult(log) == _NO_MEMORY_CONSULT_NUDGE
+
+
+def test_external_research_without_internal_consult_nudges():
+    """只 search_web（外部调研）、没先查内部记忆 → 也提示。"""
+    log = _turn([_call_assist("s1", "search_web")])
+    assert audit_memory_consult(log) == _NO_MEMORY_CONSULT_NUDGE
+
+
+def test_consult_earlier_in_session_silences():
+    """会话前面 recall 过 → 本轮改文件不再唠叨。"""
+    log = [_user_msg(), _call_assist("r1", "recall"),
+           _user_msg(), _call_assist("w1", "write_file")]
+    assert audit_memory_consult(log) is None
+
+
+def test_rag_search_this_turn_silences():
+    """本轮先 rag_search 再动手 → 不提示。"""
+    log = _turn([_call_assist("g1", "rag_search"), _call_assist("w1", "write_file")])
+    assert audit_memory_consult(log) is None
+
+
+def test_no_substantive_work_no_nudge():
+    """只读/跑命令、没实质改动或调研 → 不提示。"""
+    log = _turn([_call_assist("c1", "run_command"), _call_assist("r1", "read_file")])
+    assert audit_memory_consult(log) is None

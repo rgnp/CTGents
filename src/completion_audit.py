@@ -126,3 +126,33 @@ def audit_read_before_write(log: list[dict]) -> str | None:
     if writes & names and "read_file" not in names:
         return _WRITE_WITHOUT_READ_NUDGE
     return None
+
+
+# ── 记忆-行为闭环：内部记忆/知识库咨询 ──
+_MEMORY_CONSULT = {"recall", "rag_search", "rag_query"}      # 查"我以前记过/研究过吗"
+_SUBSTANTIVE_WORK = {                                         # 本该先查再动手的实质活
+    "write_file", "replace_in_file", "edit_file_lines", "delete_file",
+    "move_file", "copy_file", "search_web", "learn", "scan_papers",
+}
+_NO_MEMORY_CONSULT_NUDGE = (
+    "⚠️ 记忆未咨询：这轮干了实质活（改文件 / 外部调研），但整个会话还没 recall / "
+    "rag_search 过内部记忆和知识库。你有「任务开始先查（我之前研究过 / 踩过坑吗）」的规则——"
+    "下次动手或外部调研前先查一次内部记忆，别每次从零开始、重复造轮子。"
+)
+
+
+def audit_memory_consult(log: list[dict]) -> str | None:
+    """本轮干实质活 + 整个会话没 recall/rag_search 过 → 提示先查内部记忆。
+
+    断点取证（2026-06-21）：「任务开始先 rag_search/recall」是 strategy 规则、每会话全文
+    注入进前缀，但前缀=最弱影响层（5a96363）——实测最近 15 会话 771 次工具调用里 rag_search
+    0 次、recall ~1/会话。规则记了、注入了、就是不执行。唯一被验证能改行为的是 append-only
+    recency 审计通道，故在此戳一下让 agent 自己去查（不替它检索，区别于已删的 auto_recall）。
+    """
+    if not (_SUBSTANTIVE_WORK & _tool_names_this_turn(log)):
+        return None
+    for m in log:  # 整个会话任意处咨询过内部记忆 → 不再唠叨
+        for tc in m.get("tool_calls") or []:
+            if tc.get("function", {}).get("name", "") in _MEMORY_CONSULT:
+                return None
+    return _NO_MEMORY_CONSULT_NUDGE

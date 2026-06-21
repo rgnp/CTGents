@@ -238,10 +238,15 @@ def _run_post_turn_audits(ctx: CacheContext, disp) -> None:
     返回，不去重会堆积刷屏。命中即同时打印给用户（你来抓 agent 谎报）。
     """
     from .citation_audit import audit_citations
-    from .completion_audit import audit_completion, audit_read_before_write
+    from .completion_audit import (
+        audit_completion,
+        audit_memory_consult,
+        audit_read_before_write,
+    )
 
     log = ctx.all
-    nudges = [a(log) for a in (audit_completion, audit_citations, audit_read_before_write)]
+    nudges = [a(log) for a in (
+        audit_completion, audit_citations, audit_read_before_write, audit_memory_consult)]
     existing = {m.get("content") for m in ctx.log if m.get("_audit")}
     # 每条 nudge 单独成一条 _audit 消息——去重按单条比对（join 后整体比对会让
     # 单条 nudge 永远 != 历史里的 join 文本、每轮重复追加）。

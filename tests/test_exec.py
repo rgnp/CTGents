@@ -7,6 +7,7 @@ import time
 
 import src.tools.exec as exec_mod
 from src.tools.exec import (
+    _check_git_destructive,
     _check_git_hook_bypass,
     _is_blocked,
     _truncate_output,
@@ -67,6 +68,41 @@ class TestGitHookBypassGuard:
 
     def test_run_command_rejects(self):
         out = run_command("git commit --no-verify -m msg")
+        assert "拦截" in out
+
+
+class TestGitDestructiveGuard:
+    """拦"毁工作区/丢未提交工作"的 git——自驱事故根因（reset --hard 冲掉未提交的活）。"""
+
+    def test_reset_hard_blocked(self):
+        assert _check_git_destructive(_parts("git reset --hard HEAD"))
+
+    def test_clean_force_blocked(self):
+        assert _check_git_destructive(_parts("git clean -fd"))
+
+    def test_checkout_discard_blocked(self):
+        assert _check_git_destructive(_parts("git checkout -- ."))
+
+    def test_restore_worktree_blocked(self):
+        assert _check_git_destructive(_parts("git restore src/main.py"))
+
+    def test_stash_clear_blocked(self):
+        assert _check_git_destructive(_parts("git stash clear"))
+
+    def test_safe_git_allowed(self):
+        # 这些不毁未提交工作，必须放行
+        assert _check_git_destructive(_parts("git reset HEAD~1")) == ""      # 软重置(留改动)
+        assert _check_git_destructive(_parts("git checkout -b feature")) == ""
+        assert _check_git_destructive(_parts("git restore --staged f.py")) == ""  # 仅取消暂存
+        assert _check_git_destructive(_parts("git clean -n")) == ""          # dry-run
+        assert _check_git_destructive(_parts("git status")) == ""
+
+    def test_run_command_rejects_reset_hard(self):
+        out = run_command("git reset --hard HEAD")
+        assert "拦截" in out and "未提交" in out
+
+    def test_run_async_rejects_reset_hard(self):
+        out = run_async("git reset --hard HEAD")
         assert "拦截" in out
 
 
