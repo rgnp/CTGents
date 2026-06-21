@@ -178,6 +178,24 @@ class TestChatScreen:
         await pilot.pause()
         assert await _wait_screen(app, pilot, "ChatScreen")
 
+    def test_busy_keeps_prompt_typeable_and_preserves_text(self, monkeypatch):
+        """跑动时输入框不禁用、busy 下回车不清空也不提交——修"按 Esc 后不能打字"。"""
+        async def go():
+            app = self._fresh_chat_app()
+            async with app.run_test() as pilot:
+                await self._enter_chat(app, pilot)
+                s = app.screen
+                p = s.query_one("#prompt")
+                s._busy = True                       # 模拟 agent 在跑
+                p.text = "正在编辑的下一句"
+                p.focus()
+                await pilot.pause()
+                assert p.disabled is False, "跑动时输入框不应被禁用"
+                s.action_submit_prompt()             # busy 下回车
+                assert p.text == "正在编辑的下一句", "busy 下回车应保留正在编辑的文本"
+
+        asyncio.run(go())
+
     def test_idle_esc_clears_no_interrupt(self, monkeypatch):
         async def go():
             app = self._fresh_chat_app()

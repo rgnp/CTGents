@@ -615,8 +615,10 @@ class ChatScreen(Screen):
             ta.clear()
             self._resume_after_interrupt(text)
             return
+        if self._busy:
+            return  # agent 还在跑：保留正在编辑的内容、不清空也不提交（按 Esc 截停后再发）
         ta.clear()
-        if not text or self._busy:
+        if not text:
             return
         self._history.append(text)
         self._history_idx = -1
@@ -721,7 +723,9 @@ class ChatScreen(Screen):
     def _run_turn(self, text: str) -> None:
         self._busy = True
         self._turn_started = time.monotonic()
-        self.query_one("#prompt", TextArea).disabled = True
+        # 不禁用输入框——禁用会让"按 Esc 后到本轮真正收尾(done)之间"无法打字（中断在下一个
+        # LLM 流检查点才生效，工具/网络期间可能好几秒）。保持可输入：用户随时能边跑边写下一句/
+        # 截停指令；_busy 守卫负责"跑着时别提交新一轮"。
         self._agent_worker(text)
 
     @work(thread=True, exclusive=True)
@@ -822,9 +826,7 @@ class ChatScreen(Screen):
                 elif kind == "done":
                     self._collapse_active()  # 整轮结束：确保无残留展开块
                     self._busy = False
-                    inp = self.query_one("#prompt", TextArea)
-                    inp.disabled = False
-                    inp.focus()
+                    self.query_one("#prompt", TextArea).focus()  # 焦点回输入框（输入框全程未禁用）
                     if self._interrupt_pending:
                         self._enter_interrupted()  # 本轮收尾 → 进中断态(断点线+状态栏)
                 changed = True
