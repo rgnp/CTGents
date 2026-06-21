@@ -141,6 +141,29 @@ _NO_MEMORY_CONSULT_NUDGE = (
 )
 
 
+# ── 质量自检 ──
+_QUALITY_CHECK_MARKER = "[x] 质量自检"          # current.md 中质量步骤已完成
+_NO_QUALITY_CHECK_NUDGE = (
+    "⚠️ 质量未自检：这轮干了实质活（改文件 / 外部调研 / 研究），但整个会话还没做质量自检。"
+    "你有「三问质量方法论」规则——交付前先问自己：真的做好了吗？"
+    "若在复杂任务中，给 current.md 加 `- [ ] 质量自检` 步骤，做完后标 `[x]` 再调 task_done。"
+)
+
+
+def audit_quality_check(log: list[dict]) -> str | None:
+    """本轮干了实质活 + 整个会话没做过质量自检 → 提示先自检。
+
+    质量自检 = 在 current.md 中完成 `[x] 质量自检` 步骤（log 中出现该标记即为已做）。
+    """
+    if not (_SUBSTANTIVE_WORK & _tool_names_this_turn(log)):
+        return None
+    for msg in log:
+        content = msg.get("content") or ""
+        if _QUALITY_CHECK_MARKER in content:
+            return None
+    return _NO_QUALITY_CHECK_NUDGE
+
+
 def audit_memory_consult(log: list[dict]) -> str | None:
     """本轮干实质活 + 整个会话没 recall/rag_search 过 → 提示先查内部记忆。
 

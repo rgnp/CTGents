@@ -59,6 +59,47 @@ def list_session_names(session_ids: list[str]) -> dict[str, str]:
 
 
 
+def get_sessions_info(session_ids: list[str]) -> dict[str, dict]:
+    """批量获取会话信息：名字 + 格式化的日期/时间。
+
+    返回 {sid: {"name": str, "date": str, "time": str}}
+    date 为空串表示"今天"，date 非空表示"月-日"。
+    """
+    now = datetime.now()
+    result: dict[str, dict] = {}
+    for sid in session_ids:
+        info: dict[str, str] = {"name": sid, "date": "", "time": ""}
+        # 名字：从 meta.json 读取
+        try:
+            with open(_meta_path(sid), encoding="utf-8") as f:
+                meta = json.load(f)
+                info["name"] = meta.get("name", sid)
+        except Exception:
+            pass
+        # 时间：从 session ID（时间戳）解析
+        try:
+            dt = datetime.strptime(sid, "%Y-%m-%d-%H%M%S")
+            if dt.date() == now.date():
+                info["time"] = dt.strftime("%H:%M")
+            else:
+                info["date"] = dt.strftime("%m-%d")
+                info["time"] = dt.strftime("%H:%M")
+        except ValueError:
+            # 回退到文件修改时间
+            try:
+                mtime = os.path.getmtime(_messages_path(sid))
+                dt = datetime.fromtimestamp(mtime)
+                if dt.date() == now.date():
+                    info["time"] = dt.strftime("%H:%M")
+                else:
+                    info["date"] = dt.strftime("%m-%d")
+                    info["time"] = dt.strftime("%H:%M")
+            except Exception:
+                pass
+        result[sid] = info
+    return result
+
+
 def delete_session(session_id: str) -> None:
     """删除指定会话目录。"""
     import shutil

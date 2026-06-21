@@ -12,11 +12,13 @@ from src.completion_audit import (
     _EDIT_OK,
     _EXIT_PREFIX,
     _NO_MEMORY_CONSULT_NUDGE,
+    _NO_QUALITY_CHECK_NUDGE,
     _NUDGE,
     _WRITE_OK,
     _WRITE_WITHOUT_READ_NUDGE,
     audit_completion,
     audit_memory_consult,
+    audit_quality_check,
     audit_read_before_write,
 )
 from src.tools.exec import run_command
@@ -289,3 +291,43 @@ def test_no_substantive_work_no_nudge():
     """只读/跑命令、没实质改动或调研 → 不提示。"""
     log = _turn([_call_assist("c1", "run_command"), _call_assist("r1", "read_file")])
     assert audit_memory_consult(log) is None
+
+
+# ── audit_quality_check（质量自检）────────────────────────────
+
+def test_work_without_quality_check_nudges():
+    """改文件但没做过质量自检 → 提示。"""
+    log = _turn([_call_assist("w1", "write_file")])
+    assert audit_quality_check(log) == _NO_QUALITY_CHECK_NUDGE
+
+
+def test_external_research_without_quality_check_nudges():
+    """外部调研没做质量自检 → 也提示。"""
+    log = _turn([_call_assist("s1", "search_web")])
+    assert audit_quality_check(log) == _NO_QUALITY_CHECK_NUDGE
+
+
+def test_quality_check_done_silences():
+    """会话里做过质量自检（[x] 质量自检 出现在 log 中）→ 不唠叨。"""
+    log = [_user_msg(), _call_assist("w1", "write_file"),
+           _result("q1", "write_file", "已写入: current.md\n\n- [x] 质量自检")]
+    assert audit_quality_check(log) is None
+
+
+def test_quality_check_in_any_tool_result_silences():
+    """质量自检标记出现在任意 tool result 中（不必是当前轮）→ 不唠叨。"""
+    log = [
+        _user_msg(),
+        _call_assist("r1", "replace_in_file"),
+        _result("r1", "replace_in_file", "已编辑: current.md\n- [x] 质量自检"),
+        _user_msg(),
+        _call_assist("w1", "write_file"),
+        _result("w1", "write_file", "已写入: src/foo.py"),
+    ]
+    assert audit_quality_check(log) is None
+
+
+def test_no_substantive_work_no_quality_nudge():
+    """没干实质活 → 不提示。"""
+    log = _turn([_call_assist("r1", "read_file"), _call_assist("c1", "run_command")])
+    assert audit_quality_check(log) is None

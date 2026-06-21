@@ -19,7 +19,6 @@
 from __future__ import annotations
 
 import contextlib
-import json
 import time
 from collections import deque
 from typing import TYPE_CHECKING
@@ -61,67 +60,72 @@ NES_THEME = Theme(
     dark=True,
 )
 
-# ── 像素大字 banner：密度抗锯齿 + 行渐变着色 + 投影 ──
-# 字形：8×8 密度矩阵。密度 0=空格, 1=░, 2=▓, 3=█。
+# ── 像素大字 banner：10×8 宽体，密度抗锯齿 + 行渐变着色 + 投影 ──
+# 字形：10×8 密度矩阵。密度 0=空格, 1=░, 2=▓, 3=█。
 # 六字母 CTGENT，SplashScreen 和 SaveSelectScreen 两处复用。
 _GLYPHS: dict[str, list[list[int]]] = {
+    # C: 宽弧，开口适中
     "C": [
-        [0,1,2,3,3,3,2,1],
-        [1,3,3,2,1,0,0,0],
-        [2,3,1,0,0,0,0,0],
-        [3,2,0,0,0,0,0,0],
-        [3,2,0,0,0,0,0,0],
-        [2,3,1,0,0,0,0,0],
-        [1,3,3,2,1,0,0,0],
-        [0,1,2,3,3,3,2,1],
+        [0,1,2,3,3,3,3,2,1,0],
+        [1,3,3,2,1,0,0,0,0,0],
+        [2,3,1,0,0,0,0,0,0,0],
+        [3,3,2,0,0,0,0,0,0,0],
+        [3,3,2,0,0,0,0,0,0,0],
+        [2,3,1,0,0,0,0,0,0,0],
+        [1,3,3,2,1,0,0,0,0,0],
+        [0,1,2,3,3,3,3,2,1,0],
     ],
+    # T: 3px 竖干 + 10px 横杆
     "T": [
-        [3,3,3,3,3,3,3,3],
-        [0,0,2,3,3,2,0,0],
-        [0,0,1,3,3,1,0,0],
-        [0,0,0,3,3,0,0,0],
-        [0,0,0,3,3,0,0,0],
-        [0,0,0,3,3,0,0,0],
-        [0,0,0,3,3,0,0,0],
-        [0,0,0,2,2,0,0,0],
+        [3,3,3,3,3,3,3,3,3,3],
+        [0,0,0,2,3,3,3,2,0,0],
+        [0,0,0,1,3,3,3,1,0,0],
+        [0,0,0,0,3,3,3,0,0,0],
+        [0,0,0,0,3,3,3,0,0,0],
+        [0,0,0,0,3,3,3,0,0,0],
+        [0,0,0,0,3,3,3,0,0,0],
+        [0,0,0,0,3,3,3,0,0,0],
     ],
+    # G: 留白清晰的 G，crossbar 从右下切入
     "G": [
-        [0,1,2,3,3,3,2,1],
-        [1,3,3,2,1,0,0,0],
-        [2,3,1,0,0,0,0,0],
-        [3,2,0,0,1,3,2,0],
-        [3,2,0,0,0,2,3,1],
-        [2,3,1,0,0,1,3,2],
-        [1,3,3,2,0,2,3,1],
-        [0,1,2,3,3,3,1,0],
+        [0,1,2,3,3,3,3,2,1,0],
+        [1,3,3,2,1,0,0,0,0,0],
+        [2,3,1,0,0,0,0,0,0,0],
+        [3,3,2,0,0,0,0,1,2,0],
+        [3,3,2,0,0,0,0,2,3,0],
+        [2,3,1,0,0,0,0,1,3,0],
+        [1,3,3,2,1,0,0,1,3,0],
+        [0,1,2,3,3,3,3,2,1,0],
     ],
+    # E: 全宽横杆，脊柱 2px
     "E": [
-        [3,3,3,3,3,3,3,3],
-        [3,2,0,0,0,0,0,0],
-        [3,1,0,0,0,0,0,0],
-        [3,3,3,3,3,2,0,0],
-        [3,2,0,0,0,0,0,0],
-        [3,1,0,0,0,0,0,0],
-        [3,2,0,0,0,0,0,0],
-        [3,3,3,3,3,3,3,3],
+        [3,3,3,3,3,3,3,3,3,3],
+        [3,2,0,0,0,0,0,0,0,0],
+        [3,1,0,0,0,0,0,0,0,0],
+        [3,3,3,3,3,3,3,3,2,0],
+        [3,2,0,0,0,0,0,0,0,0],
+        [3,1,0,0,0,0,0,0,0,0],
+        [3,2,0,0,0,0,0,0,0,0],
+        [3,3,3,3,3,3,3,3,3,3],
     ],
+    # N: 对角线阶梯每行均匀递增 1px
     "N": [
-        [3,3,0,0,0,0,3,3],
-        [3,3,2,0,0,0,3,3],
-        [3,3,3,2,0,0,3,3],
-        [3,3,1,3,2,0,3,3],
-        [3,3,0,2,3,2,3,3],
-        [3,3,0,0,2,3,3,3],
-        [3,3,0,0,0,2,3,3],
-        [3,3,0,0,0,0,3,3],
+        [3,3,0,0,0,0,0,0,3,3],
+        [3,3,2,0,0,0,0,0,3,3],
+        [3,3,3,2,0,0,0,0,3,3],
+        [3,3,0,3,2,0,0,0,3,3],
+        [3,3,0,0,3,2,0,0,3,3],
+        [3,3,0,0,0,3,2,0,3,3],
+        [3,3,0,0,0,0,3,2,3,3],
+        [3,3,0,0,0,0,0,0,3,3],
     ],
 }
 
 _GLYPH_H = 8           # 字形高度
 _GLYPH_GAP = 3         # 字母间距
-_BANNER_LEAD = [4, 3, 3, 2, 2, 1, 1, 0]  # 斜体右倾（每行缩进）
+_BANNER_LEAD = [3, 3, 2, 2, 1, 1, 0, 0]  # 斜体右倾（每 2 行均匀右移 1px）
 _DENSITY_CHAR = {0: " ", 1: "░", 2: "▓", 3: "█"}
-
+_BANNER_LEAD = [2, 1, 1, 1, 0, 0, 0, 0]  # 微斜右倾（每行递增约 1px）
 # 行渐变：从上到下 8 行，亮青 → 深蓝
 _GRADIENT = [
     "#a8e8ff", "#78d8ff", "#4dc8f8", "#38b8ee",
@@ -150,11 +154,11 @@ def _build_canvas(text: str) -> list[list[str]]:
         for j, d in enumerate(rows_density[i]):
             canvas[i][offset + j] = ("░" if d == 1 else "▓" if d == 2 else "█" if d == 3 else " ")
 
-    # 右下投影
+    # 右下投影（仅从实心像素 ▓/█ 投影、防字母间隙被溢出填充）
     for i in range(_GLYPH_H - 1):
         limit = len(canvas[i + 1]) - 1
         for j in range(limit):
-            if canvas[i][j] != " " and canvas[i + 1][j + 1] == " ":
+            if canvas[i][j] in ("▓", "█") and canvas[i + 1][j + 1] == " ":
                 canvas[i + 1][j + 1] = "·"
 
     return canvas
@@ -300,22 +304,6 @@ def _fmt_tool(name: str, args: dict) -> tuple[str, str]:
     return label, detail
 
 
-def _colorize_diff(text: str) -> str:
-    """把 diff 中的 +/- 行染成背景色 Rich markup。
-
-    只取 +/- 行，最多 30 行；超出返回简版统计，不细展。
-    """
-    lines = []
-    for line in text.splitlines():
-        if line.startswith("+") and not line.startswith("+++"):
-            lines.append(f"[black on green]{line}[/]")
-        elif line.startswith("-") and not line.startswith("---"):
-            lines.append(f"[black on red]{line}[/]")
-    if not lines:
-        return ""
-    if len(lines) > 30:
-        return f"变更: {len(lines)} 行改动（过多，略）"
-    return "变更:\n" + "\n".join(lines)
 
 
 def _strip_user_wrappers(content: str) -> str:
@@ -459,35 +447,108 @@ class SplashScreen(Screen):
 # 存档选择
 # ═══════════════════════════════════════════════════════
 class SaveSelectScreen(Screen):
+    """存档选择屏：紧凑列表 + NEW GAME 按钮 + 删除功能。"""
+
     CSS = """
     SaveSelectScreen { align: center middle; background: $background; }
     #selectwrap { width: auto; height: auto; align: center top; }
-    #savebox { border: round $primary; padding: 1 2; width: 56; height: auto; background: $surface; }
-    #savetitle { color: $accent; text-style: bold; content-align: center middle; margin-bottom: 1; }
-    #saves { height: auto; max-height: 14; background: $surface; }
-    #saves > ListItem { padding: 0 1; color: $foreground; }
-    #saves > ListItem.--highlight { background: $primary; color: $background; text-style: bold; }
-    #savehint { color: $primary-darken-1; content-align: center middle; margin-top: 1; }
+    #savetitle {
+        color: $accent; text-style: bold; content-align: center middle;
+    }
+    #savebox {
+        border: round $primary; padding: 0 1; width: 38; height: auto;
+        background: $surface;
+    }
+    #saves { height: auto; max-height: 16; background: $surface; }
+    #saves > ListItem { padding: 0 1; min-height: 1; }
+    #saves > ListItem.--highlight {
+        background: $primary; color: $background; text-style: bold;
+    }
+    #newbtn {
+        width: 100%; border: none; background: transparent;
+        color: $success; text-style: bold;
+    }
+    #newbtn:hover { color: $accent; text-style: bold underline; }
+    #hint {
+        color: $primary-darken-1; content-align: center middle;
+    }
+    .warn { color: $warning !important; text-style: bold; }
     """
 
+    def __init__(self) -> None:
+        super().__init__()
+        self._confirm_delete: str | None = None
+
     def compose(self) -> ComposeResult:
-        from .session import list_session_names
-        names = list_session_names(self.app.sessions)
+        from .session import get_sessions_info
+        sessions = sorted(self.app.sessions, reverse=True)
+        if not sessions:
+            self.app.goto_chat(None)
+            return
+        infos = get_sessions_info(sessions)
+        # 计算最长名字，右对齐时间
+        max_name = max((len(infos.get(s, {}).get("name", s)) for s in sessions), default=20)
         items: list[ListItem] = []
-        for sid in self.app.sessions:
-            items.append(ListItem(Label(names.get(sid, sid)), name=sid))
-        items.append(ListItem(Label("+ NEW GAME"), name="__new__"))
-        with Vertical(id="selectwrap"), Vertical(id="savebox"):
+        for sid in sessions:
+            info = infos.get(sid, {"name": sid, "date": "", "time": ""})
+            name = info["name"]
+            time_text = f"{info['date']} {info['time']}".strip()
+            if time_text:
+                # 填空格让时间右对齐，pad 保证对齐
+                pad = max_name - len(name) + 2
+                text = name + " " * max(pad, 1) + time_text
+            else:
+                text = name
+            items.append(ListItem(Label(text), name=sid))
+        with Vertical(id="selectwrap"):
             yield Static("◆ SELECT  SAVE ◆", id="savetitle")
-            yield ListView(*items, id="saves")
-            yield Static("↑↓ 选择   ·   Enter 进入   ·   Ctrl+Q 退出", id="savehint")
+            with Vertical(id="savebox"):
+                yield ListView(*items, id="saves")
+                yield Button("+ NEW GAME", id="newbtn")
+            yield Static("↑↓ 选择  Enter 进入  d 删除  Ctrl+Q 退出", id="hint")
 
     def on_mount(self) -> None:
         self.query_one("#saves", ListView).focus()
 
     def on_list_view_selected(self, event: ListView.Selected) -> None:
-        name = event.item.name
-        self.app.goto_chat(None if name == "__new__" else name)
+        self.app.goto_chat(event.item.name)
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        if event.button.id == "newbtn":
+            self.app.goto_chat(None)
+
+    def key_d(self) -> None:
+        lv = self.query_one("#saves", ListView)
+        if lv.index is None:
+            return
+        target = lv.children[lv.index].name
+        if self._confirm_delete == target:
+            from .session import delete_session
+            delete_session(target)
+            self.app.sessions.remove(target)
+            if not self.app.sessions:
+                self.app.goto_chat(None)
+            else:
+                self.app.switch_screen(SaveSelectScreen())
+        else:
+            self._confirm_delete = target
+            h = self.query_one("#hint", Static)
+            h.update("⚠️ 确认删除？再按 d 确认，其他键取消")
+            h.add_class("warn")
+
+    def key_escape(self) -> None:
+        if self._confirm_delete:
+            self._reset_hint()
+
+    def on_key(self, event) -> None:
+        if self._confirm_delete and event.key not in ("d", "escape"):
+            self._reset_hint()
+
+    def _reset_hint(self) -> None:
+        self._confirm_delete = None
+        h = self.query_one("#hint", Static)
+        h.update("↑↓ 选择  Enter 进入  d 删除  Ctrl+Q 退出")
+        h.remove_class("warn")
 
 
 # ═══════════════════════════════════════════════════════
@@ -498,20 +559,32 @@ class ChatScreen(Screen):
     ChatScreen { background: $background; }
     #transcript { padding: 0 1; }
     #transcript > * { width: 100%; }
-    .user { margin: 0 0 0 1; padding: 0 0 0 1; border-left: vkey $accent; }
-    /* 每轮回复左侧状态线：正常蓝 / 错误红（中断=黄，走 .brk 分隔线）——像 IDE 日志 */
-    .agent { margin: 0 0 0 1; padding: 0 0 0 1; border-left: vkey $primary; }
-    .tool { color: $secondary; margin: 0 0 0 2; }
+    /* 消息容器：左粗条 + 底部间距 + 0 背景色 */
+    .user-bubble, .agent-bubble {
+        margin: 0 1 1 0; padding: 1 1 0 1;
+        height: auto;
+    }
+    .user-bubble { border-left: heavy $accent; }
+    .agent-bubble { border-left: heavy $primary; }
+    .msg-role {
+        text-style: bold; margin-bottom: 1;
+    }
+    .msg-role.user { color: $accent; }
+    .msg-role.agent { color: $primary; }
+    .bubble-time {
+        color: $primary-darken-3; margin-top: 1;
+        text-style: dim;
+    }
+    .tool { color: $secondary-darken-2; margin: 0 0 1 2; text-style: dim; }
     .meta { color: $primary-darken-1; margin: 0 0 0 2; }
     .err  { color: $error; margin: 0 0 0 1; padding: 0 0 0 1; border-left: vkey $error; }
-    .role-header { margin: 2 0 0 0; text-style: bold; }
-    .role-user { color: $accent; }
-    .role-agent { color: $primary; }
     .brk  { color: $warning; text-style: bold; content-align: center middle; margin: 1 0; }
     .thinking { color: $text-disabled; }
-    .sep { border-top: dashed $primary-darken-3; margin: 1 0; color: $primary-darken-3; text-style: dim; }
     Collapsible { margin: 0 0 0 2; border: none; }
-    .collapsible-chat { margin: 0 0 0 2; border-left: vkey $primary-darken-3; padding: 0 0 0 1; }
+    .collapsible-chat {
+        margin: 0 0 0 2; border-left: vkey $primary-darken-3;
+        padding: 0 0 0 1; color: $primary-darken-2;
+    }
     #bottombar { dock: bottom; height: auto; }
     #prompt {
         border: none;
@@ -564,7 +637,7 @@ class ChatScreen(Screen):
         self._turn_started: float = 0.0
         self._turn_count: int = 0
         self._echo_max_turns: int = 3  # 回放最多渲染的轮数
-        self._tool_result_bodies: list[Static] = []  # 记录工具 body → 供结果填充
+        self._tool_names: list[str] = []  # 本轮聚合的工具名
     # ── 布局 ──
     def compose(self) -> ComposeResult:
         yield VerticalScroll(id="transcript")
@@ -625,9 +698,13 @@ class ChatScreen(Screen):
         self._history_draft = ""
         stamp = time.strftime("%H:%M")
         t = self.query_one("#transcript", VerticalScroll)
-        t.mount(Label("你  " + stamp, classes="role-header role-user"))
-        user_md = Markdown(text, classes="user")
-        t.mount(user_md)
+        from textual.containers import Vertical
+        t.mount(Vertical(
+            Label("─ 你", classes="msg-role user"),
+            Markdown(text),
+            Label(stamp, classes="bubble-time"),
+            classes="user-bubble",
+        ))
         t.scroll_end(animate=False)
         if text.startswith("/"):
             self._handle_command(text)
@@ -788,41 +865,24 @@ class ChatScreen(Screen):
                 await self._flush_reasoning(transcript)
                 await self._flush_md(transcript)
                 if kind == "tool":
-                    # 上一阶段(思考/工具)折叠，本工具开一个展开的折叠块；调用完(下一阶段
-                    # 来临)自动折叠。明细完整放体内，不截断。
-                    self._collapse_active()
-                    self._reset_reasoning()
-                    label, detail = rest[0], rest[1]
-                    body = Static(detail or "(无参数)", classes="thinking", markup=False)
-                    self._tool_result_bodies.append(body)
-                    box = Collapsible(
-                        body,
-                        title=f"🔧 {label}", collapsed=False,
-                        collapsed_symbol="▸ ", expanded_symbol="▾ ", classes="collapsible-chat")
-                    await transcript.mount(box)
-                    self._activate(box)
+                    # 工具调用：只收集名，不渲染 UI
+                    label = rest[0]
+                    if label not in self._tool_names:
+                        self._tool_names.append(label)
                 elif kind == "footer":
                     self._mount_footer(rest[0])
                 elif kind == "status":
                     self._mount(rest[0], "meta")
                 elif kind == "error":
                     self._mount(f"💥 {rest[0]}", "err")
-                elif kind == "tool_result":
-                    result = rest[1]
-                    if self._tool_result_bodies:
-                        body = self._tool_result_bodies.pop(0)
-                        colored = _colorize_diff(result)
-                        if colored:
-                            # 切换到 markup 模式显示背景色，再切回来避免后续干扰
-                            body.markup = True
-                            body.update(colored)
-                            body.markup = False
                 elif kind == "end":
-                    self._collapse_active()  # 收尾：把最后一个展开块(思考/工具)折上
-                    self._reset_reasoning()  # 下条消息的思考另起折叠区
+                    self._collapse_active()
+                    self._reset_reasoning()
                     self._turn_count += 1
-                    sep = Static(f"─── [{self._turn_count}] ───────────────────────────────", classes="sep")
-                    await transcript.mount(sep)
+                    if self._tool_names:
+                        line = "⚙ " + " · ".join(self._tool_names)
+                        self._tool_names.clear()
+                        await transcript.mount(Static(line, classes="tool"))
                 elif kind == "done":
                     self._collapse_active()  # 整轮结束：确保无残留展开块
                     self._busy = False
@@ -847,11 +907,15 @@ class ChatScreen(Screen):
     async def _flush_md(self, transcript, finalize: bool = True) -> None:
         if self._cur_text:
             if self._cur_md is None:
-                self._collapse_active()  # 答案开始 → 折叠上一个思考/工具块
+                self._collapse_active()
                 stamp = time.strftime("%H:%M")
-                await transcript.mount(Label("CTGents  " + stamp, classes="role-header role-agent"))
-                self._cur_md = Markdown(self._cur_text, classes="agent")
-                await transcript.mount(self._cur_md)
+                from textual.containers import Vertical
+                bubble = Vertical(classes="agent-bubble")
+                await transcript.mount(bubble)
+                await bubble.mount(Label("─ CTGents", classes="msg-role agent"))
+                self._cur_md = Markdown(self._cur_text)
+                await bubble.mount(self._cur_md)
+                await bubble.mount(Label(stamp, classes="bubble-time"))
             else:
                 await self._cur_md.update(self._cur_text)
             self._dirty = False
@@ -910,10 +974,16 @@ class ChatScreen(Screen):
         t.scroll_end(animate=False)
 
     def _mount_md(self, text: str) -> None:
+        """回放：挂 agent 气泡（Markdown + 时间戳 + 角色头）。"""
         t = self.query_one("#transcript", VerticalScroll)
         stamp = time.strftime("%H:%M")
-        t.mount(Label("CTGents  " + stamp, classes="role-header role-agent"))
-        t.mount(Markdown(text, classes="agent"))
+        from textual.containers import Vertical
+        t.mount(Vertical(
+            Label("─ CTGents", classes="msg-role agent"),
+            Markdown(text),
+            Label(stamp, classes="bubble-time"),
+            classes="agent-bubble",
+        ))
         t.scroll_end(animate=False)
 
     def _echo_conversation(self) -> None:
@@ -933,39 +1003,46 @@ class ChatScreen(Screen):
             folded = len([m for m in all_msgs[:skip_up_to] if m.get("role") in ("user", "assistant")])
             t.mount(Static(f"⋯ 省略前 {len(user_indices) - n} 轮（{folded} 条消息）", classes="meta"))
 
+        pending_tools: list[str] = []
         for i, m in enumerate(all_msgs):
             if i < skip_up_to:
                 continue
             role = m.get("role")
             content = (m.get("content") or "").strip()
             if role == "user":
+                # 新用户消息前 flush 上一轮的工具行
+                if pending_tools:
+                    t.mount(Static("⚙ " + " · ".join(pending_tools), classes="tool"))
+                    pending_tools.clear()
                 text = _strip_user_wrappers(content)
                 if text:
                     stamp = time.strftime("%H:%M")
-                    t.mount(Label("你  " + stamp, classes="role-header role-user"))
-                    user_md = Markdown(text, classes="user")
-                    t.mount(user_md)
+                    from textual.containers import Vertical
+                    t.mount(Vertical(
+                        Label("─ 你", classes="msg-role user"),
+                        Markdown(text),
+                        Label(stamp, classes="bubble-time"),
+                        classes="user-bubble",
+                    ))
                     t.scroll_end(animate=False)
             elif role == "assistant":
-                # 思考折叠（持久化的 _reasoning，本就不进 API，仅供回放）
+                # 思考折叠
                 reasoning = (m.get("_reasoning") or "").strip()
                 if reasoning:
                     self._mount_collapsed("💭 思考", reasoning)
-                # 工具调用折叠
+                # 收集工具名（暂不渲染）
                 for tc in m.get("tool_calls") or []:
                     fn = tc.get("function", {})
                     name = fn.get("name", "")
-                    if not name:
-                        continue
-                    try:
-                        args = json.loads(fn.get("arguments", "{}"))
-                    except Exception:
-                        args = {}
-                    label, detail = _fmt_tool(name, args)
-                    self._mount_collapsed(f"🔧 {label}", detail or "(无参数)")
+                    if name:
+                        from .tools._tool_meta import TOOL_LABELS
+                        pending_tools.append(TOOL_LABELS.get(name, name))
                 # 答案文字
                 if content:
                     self._mount_md(content)
+        # 最后一条消息之后 flush
+        if pending_tools:
+            t.mount(Static("⚙ " + " · ".join(pending_tools), classes="tool"))
         t.scroll_end(animate=False)
 
     def _mount_collapsed(self, title: str, body: str) -> None:

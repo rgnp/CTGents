@@ -95,26 +95,24 @@ class TestPureHelpers:
 
 # ── 多屏流程 ──
 class TestScreenFlow:
-    def test_splash_to_select_to_chat(self, monkeypatch):
+    def test_splash_to_select_to_new_game(self, monkeypatch):
+        """开屏 → 存档选择（有存档）→ 选 NEW GAME → 进聊天。"""
         monkeypatch.setattr("src.session.get_session_name", lambda sid: f"会话-{sid}")
 
         async def go():
-            app = CTGentsApp(CacheContext(), None, ["a", "b"])
+            app = CTGentsApp(CacheContext(), None, ["a"])
             async with app.run_test() as pilot:
                 for _ in range(20):
                     await pilot.pause(0.1)
                     if app.screen.query("#load_game"):
                         break
                 from textual.widgets import Button
-                btn = app.screen.query_one("#load_game", Button)
-                btn.press()
+                app.screen.query_one("#load_game", Button).press()
                 await pilot.pause()
                 assert await _wait_screen(app, pilot, "SaveSelectScreen"), "应切到存档选择"
-                from textual.widgets import ListView
-                lv = app.screen.query_one("#saves", ListView)
-                lv.index = len(app.sessions)   # NEW GAME（最后一项）
+                # 按 + NEW GAME 按钮
+                app.screen.query_one("#newbtn", Button).press()
                 await pilot.pause()
-                await pilot.press("enter")
                 assert await _wait_screen(app, pilot, "ChatScreen"), "选定后应进聊天屏"
                 assert app.ctx.prefix, "开屏后台应已初始化 ctx"
 
@@ -138,7 +136,7 @@ class TestScreenFlow:
 
 
 class TestSaveSelect:
-    def test_has_new_game_item(self, monkeypatch):
+    def test_has_new_game_button(self, monkeypatch):
         monkeypatch.setattr("src.session.get_session_name", lambda sid: f"会话-{sid}")
 
         async def go():
@@ -152,10 +150,12 @@ class TestSaveSelect:
                 app.screen.query_one("#load_game", Button).press()
                 await pilot.pause()
                 assert await _wait_screen(app, pilot, "SaveSelectScreen")
+                btn = app.screen.query_one("#newbtn", Button)
+                assert btn.label.plain == "+ NEW GAME"
                 from textual.widgets import ListView
                 lv = app.screen.query_one("#saves", ListView)
                 names = [c.name for c in lv.children]
-                assert "__new__" in names and "x" in names
+                assert "x" in names
 
         asyncio.run(go())
 
@@ -228,8 +228,8 @@ class TestChatScreen:
                 await pilot.pause()
                 # 用户消息现按 markdown 渲染(classes=user)，agent 回复 classes=agent；
                 # 工具结果/system 注入仍被跳过(不渲染)。
-                assert len(list(app.screen.query(".user"))) == 1
-                assert len(list(app.screen.query(".agent"))) == 1
+                assert len(list(app.screen.query(".user-bubble"))) == 1
+                assert len(list(app.screen.query(".agent-bubble"))) == 1
 
         asyncio.run(go())
 
@@ -252,9 +252,12 @@ class TestChatScreen:
                 app.screen._echo_conversation()
                 await pilot.pause()
                 cols = list(app.screen.query(Collapsible))
-                # 2 思考折叠 + 1 工具折叠 = 3，全部默认折叠
-                assert len(cols) == 3, f"应有 3 个折叠块，实得 {len(cols)}"
+                # 2 思考折叠 = 2，工具已聚合为单行文字
+                assert len(cols) == 2, f"应有 2 个折叠块(思考)，实得 {len(cols)}"
                 assert all(c.collapsed for c in cols), "回放的折叠块应默认折叠"
+                # 工具调用聚合为一行
+                tool_lines = app.screen.query(".tool")
+                assert len(tool_lines) == 1, "工具应聚合为一行"
 
         asyncio.run(go())
 
