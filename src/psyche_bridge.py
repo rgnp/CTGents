@@ -59,6 +59,14 @@ def inject_psyche(ctx: CacheContext, name: str) -> str:
     version = _extract_meta(core_text, "版本")
     coverage = _extract_meta(core_text, "覆盖精度")
 
+    # ── 子 Psyche 父依赖检查 ──
+    parent = _check_parent_dependency(core_path, existing)
+    if parent:
+        return (
+            f"❌ 子 Psyche「{name}」的父 Psyche「{parent}」未加载。\n"
+            f"请先加载父 Psyche: /psyche load {parent}"
+        )
+
     system_msg = {
         "role": "system",
         "content": f"【Psyche: {name} v{version or '?'} | {coverage or ''}】\n\n{core_text}",
@@ -120,6 +128,30 @@ def _extract_meta(text: str, field: str) -> str:
     """从核心文件的 meta 块提取字段值。"""
     m = re.search(rf"^>\s*{field}:\s*(.+)$", text, re.MULTILINE)
     return m.group(1).strip() if m else ""
+
+def _check_parent_dependency(core_path: str, loaded: list[dict]) -> str | None:
+    """检测子 Psyche 的父依赖是否已加载。
+
+    子 Psyche 的 core 文件在 psyche/software-development/sub/{name}/ 下。
+    只有子 Psyche 需要父依赖检查；顶层 Psyche 不检查。
+
+    Returns:
+        None = 无父依赖 / 父依赖已满足
+        str = 缺失的父 Psyche 名称
+    """
+    # 判断是否是子 Psyche：core 路径包含 /sub/
+    path_normalized = core_path.replace("\\", "/")
+    if "/sub/" not in path_normalized:
+        return None  # 顶层 psyche，无需父依赖
+
+    # 从路径推断父 Psyche 名称（/sub/ 前的目录名）
+    parent_name = os.path.basename(path_normalized.split("/sub/")[0])
+
+    for meta in loaded:
+        if meta.get("name") == parent_name:
+            return None  # 父已加载
+    return parent_name
+
 
 
 def _list_available() -> str:
