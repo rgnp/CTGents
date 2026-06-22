@@ -19,7 +19,6 @@
 from __future__ import annotations
 
 import contextlib
-import math
 import time
 from collections import deque
 from typing import TYPE_CHECKING
@@ -378,61 +377,6 @@ def _status_line(ctx, session_id: str) -> str:
 # ═══════════════════════════════════════════════════════
 
 
-def _make_wave_pixel(phase: float, amplitude: int, width: int) -> tuple[str, str]:
-    """返回 (顶行, 底行) — 2 行像素海浪，多频率叠加产生多方向流动感。
-
-    三个不同速度的正弦波互相干涉，产生看似从不同方向涌来的复杂波浪。
-    """
-    top = []
-    bot = []
-    for x in range(width):
-        # 三波叠加：主波 + 次级反向波 + 微扰波
-        a1 = (x / max(width, 1)) * 4 * math.pi + phase * 1.0
-        a2 = (x / max(width, 1)) * 7 * math.pi + phase * 0.6
-        a3 = (x / max(width, 1)) * 2 * math.pi + phase * 1.5
-        raw = math.sin(a1) * 0.55 + math.sin(a2) * 0.30 + math.sin(a3) * 0.15
-        h = (raw + 1) * 0.5  # normalize 0→1
-        # 像素化：每列 2 像素高
-        if h > 0.72:
-            top.append("█")
-            bot.append("█")
-        elif h > 0.38:
-            top.append(" ")
-            bot.append("▄")
-        else:
-            top.append(" ")
-            bot.append(" ")
-    return "".join(top), "".join(bot)
-
-
-def _mount_moonlight(screen: Screen) -> None:
-    """在屏幕顶部渲染月牙 + 辐射辉光。"""
-    with contextlib.suppress(Exception):
-        ml = screen.query_one("#moonlight", Vertical)
-        # 清除旧内容（重入时）
-        ml.remove_children()
-        _mount_moon_glow(ml)
-
-
-def _mount_moon_glow(container: Vertical) -> None:
-    """挂载月牙 + 多层同心辉光，从亮到暗向外辐射。"""
-    # 月牙：像素圆 + 辉光圈
-    # 从内到外：█ 月牙本体 → ▓ 内辉 → ▒ 中辉 → ░ 外辉
-    rings = [
-        "                ░░▓██▓░░                ",
-        "              ░▓██████▓░                ",
-        "            ░░▓████████▓░░              ",
-        "           ░▓████████████▓░             ",
-        "         ░░▓██████████████▓░░           ",
-        "        ░▓██████████████████▓░          ",
-        "       ░░▓████████████████████▓░░       ",
-    ]
-    for line in rings:
-        label = Label(line)
-        label.styles.text_align = "center"
-        container.mount(label)
-
-
 class SplashScreen(Screen):
     """逐行动画展示 CTGENT Logo → 双选项按钮（新存档 / 继续游玩）。
 
@@ -447,10 +391,6 @@ class SplashScreen(Screen):
 
     CSS = """
     SplashScreen { align: center middle; background: $background; }
-    #moonlight {
-        dock: top; width: 100%; height: auto;
-    }
-    #moonlight > Label { width: 100%; height: 1; }
     #logo_area { width: auto; height: auto; }
     #logo_area > Static { width: auto; height: 1; }
     #buttons { width: auto; height: auto; margin-top: 4; }
@@ -462,12 +402,10 @@ class SplashScreen(Screen):
     """
 
     def compose(self) -> ComposeResult:
-        yield Vertical(id="moonlight")
         yield Vertical(id="logo_area")
         yield Horizontal(id="buttons")
 
     def on_mount(self) -> None:
-        _mount_moonlight(self)
         self._rows = _banner_rows("CTGENT")
         self._revealed = 0
         self._ctx_ready = False
@@ -676,13 +614,8 @@ class ChatScreen(Screen):
     .err  { color: $error; margin: 0; }
     .thinking { }  /* 折叠态标题由 Textual Collapsible 内置样式处理；展开后内容继承 $foreground */
     .brk  { color: $warning; text-style: bold; content-align: center middle; margin: 1 0; }
-    /* ── 顶部月光光晕 ── */
-    #moonlight { dock: top; width: 100%; height: auto; }
-    #moonlight > Label { width: 100%; height: 1; }
     /* ── 底部栏 ── */
     #bottombar { dock: bottom; height: auto; }
-    #wavebar { height: 2; color: $primary; background: transparent; text-style: dim; }
-    #wavebar > Static { height: 1; padding: 0 1; margin: 0; }
     #prompt {
         border: none; border-top: solid $primary-darken-1;
         border-bottom: solid $panel;
@@ -741,19 +674,10 @@ class ChatScreen(Screen):
         self._turn_started: float = 0.0
         self._turn_count: int = 0
         self._echo_max_turns: int = 3  # 回放最多渲染的轮数
-        # ── 海浪动画 ──
-        self._wave_phase: float = 0.0
-        self._wave_amplitude: float = 1.0
-        self._wave_target: float = 1.0
-        self._last_typing: float = 0.0
     # ── 布局 ──
     def compose(self) -> ComposeResult:
-        yield Vertical(id="moonlight")
         yield VerticalScroll(id="transcript")
         with Vertical(id="bottombar"):
-            with Vertical(id="wavebar"):
-                yield Static("", id="wavetop")
-                yield Static("", id="wavebot")
             yield TextArea(
                 "",
                 placeholder="> 输入消息（/help 查看指令）",
@@ -764,48 +688,15 @@ class ChatScreen(Screen):
             yield Static("", id="status")
 
     def on_mount(self) -> None:
-        _mount_moonlight(self)
         self._load_pending()
         self._refresh_status()
         self.query_one("#prompt", TextArea).focus()
         self.set_interval(0.03, self._drain_events)
         self.set_interval(0.5, self._refresh_status)
         self.set_interval(0.5, self._drain_jobs)
-        self.set_interval(0.08, self._update_wave)
-
-    def _update_wave(self) -> None:
-        """逐帧更新海浪动画，振幅随打字/回复动态变化。"""
-        now = time.monotonic()
-        # 用户打字涟漪：2s 内打字触发小浪，逐渐消退
-        if now - self._last_typing < 2.0:
-            self._wave_target = max(self._wave_target, 2.5)
-        # agent 回复：大浪
-        if self._busy and not self._interrupt_pending:
-            self._wave_target = max(self._wave_target, 5.0)
-        else:
-            self._wave_target = min(self._wave_target, 2.5)
-        # 空闲回落
-        if not self._busy and now - self._last_typing > 3.0:
-            self._wave_target = 1.0
-        # 平滑过渡
-        self._wave_amplitude += (self._wave_target - self._wave_amplitude) * 0.12
-        if abs(self._wave_amplitude - self._wave_target) < 0.05:
-            self._wave_amplitude = self._wave_target
-        # 相位步进（波浪流动感）
-        self._wave_phase += 0.15 * (1.0 + self._wave_amplitude * 0.1)
-        # 渲染 2 行像素海浪
-        try:
-            amp = round(self._wave_amplitude)
-            w = self.query_one("#wavebar", Vertical)
-            width = w.region.width
-            top_s, bot_s = _make_wave_pixel(self._wave_phase, amp, width)
-            self.query_one("#wavetop", Static).update(top_s)
-            self.query_one("#wavebot", Static).update(bot_s)
-        except Exception:
-            pass
 
     def on_text_area_changed(self, event: TextArea.Changed) -> None:
-        """内容非空时给输入框加 has-text 样式类 + 打字触发小浪。"""
+        """内容非空时给输入框加 has-text 样式类。"""
         if event.text_area.id != "prompt":
             return
         p = self.query_one("#prompt", TextArea)
@@ -813,8 +704,6 @@ class ChatScreen(Screen):
             p.add_class("has-text")
         else:
             p.remove_class("has-text")
-        # 每次输入触发电波浪涟漪
-        self._last_typing = time.monotonic()
 
     def _load_pending(self) -> None:
         """进聊天屏时按存档选择结果加载会话（NEW=不加载，沿用 splash 初始化的空会话）。"""
@@ -1009,11 +898,9 @@ class ChatScreen(Screen):
             if kind == "token":
                 self._cur_text += rest[0]
                 self._dirty = True
-                self._wave_target = max(self._wave_target, 4.5)  # token 流驱动大浪
             elif kind == "reasoning":
                 self._cur_reasoning += rest[0]
                 self._reasoning_dirty = True
-                self._wave_target = max(self._wave_target, 3.5)  # 思考时中浪
             else:
                 # 思考在答案之前 → 先 flush 思考(挂折叠区)、再 flush 答案，顺序正确。
                 await self._flush_reasoning(transcript)
