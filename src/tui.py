@@ -44,20 +44,20 @@ if TYPE_CHECKING:
     from .cache_context import CacheContext
 
 
-# ── Tokyo Night 深色主题 ──
+# ── Catppuccin Latte 暖白主题 ──
 DARK_THEME = Theme(
     name="dark-pro",
-    primary="#7aa2f7",      # 对话蓝（Tokyo Night 蓝，柔和高对比）
-    secondary="#8a90b0",    # 灰紫（辅助文字，AA 过检）
-    accent="#ff9e64",       # 暖橙（用户角色色，高对比）
-    foreground="#c0caf5",   # 正文（淡紫白）
-    background="#1a1b26",   # 深紫黑（Tokyo Night 基底）
-    surface="#24283b",      # 表面（输入框/面板，略高一层）
-    panel="#1f2335",        # 面板（介于 bg 和 surface 之间）
-    success="#9ece6a",      # 柔绿
-    warning="#e0af68",      # 金黄
-    error="#f7768e",        # 粉红（Tokyo Night 标志红）
-    dark=True,
+    primary="#1450c4",      # 对话蓝（agent 角色色，深蓝沉稳）
+    secondary="#555869",    # 灰（辅助文字）
+    accent="#b84800",       # 暖橙（用户角色色）
+    foreground="#3a3d4e",   # 正文（深灰，不刺眼）
+    background="#eff1f5",   # 暖白基底
+    surface="#e6e9ef",      # 表面（输入框/面板，略深一层）
+    panel="#dce0e8",        # 面板（状态栏/代码块）
+    success="#237312",      # 绿
+    warning="#735a08",      # 棕黄
+    error="#b80c28",        # 红
+    dark=False,
 )
 
 # ── 像素大字 banner：10×8 宽体，密度抗锯齿 + 行渐变着色 ──
@@ -126,10 +126,10 @@ _GLYPH_GAP = 3         # 字母间距
 _BANNER_LEAD = [3, 3, 2, 2, 1, 1, 0, 0]  # 斜体右倾（每 2 行均匀右移 1px）
 _DENSITY_CHAR = {0: " ", 1: "░", 2: "▓", 3: "█"}
 _BANNER_LEAD = [2, 1, 1, 1, 0, 0, 0, 0]  # 微斜右倾（每行递增约 1px）
-# 行渐变：从上到下 8 行，亮蓝 → 深海蓝（Tokyo Night 色系）
+# 行渐变：从上到下 8 行，暖橙 → 深赭石
 _GRADIENT = [
-    "#b8dcff", "#9ac4ff", "#7aa2f7", "#6188e8",
-    "#4a6fd0", "#3a5bb8", "#2a47a0", "#1a3388",
+    "#ff8a5c", "#f07a3e", "#d96824", "#c05513",
+    "#a84408", "#8f3502", "#752a00", "#5c2100",
 ]
 
 
@@ -598,10 +598,7 @@ class ChatScreen(Screen):
     .msg-header.agent { color: $primary; border-left: heavy $primary; }
     .msg-header .time { color: $secondary; text-style: dim; }
     .msg-body { margin: 0 0 2 0; padding: 0 0 0 2; }
-    .msg-body.user-body {
-        margin: 0 0 0 0; background: $surface; padding: 0 1 0 1;
-        border: none; border-left: heavy $accent;
-    }  /* 用户消息：卡片背景 + 左粗条，底部归零与 agent 回复贴紧 */
+    .msg-body.user-body { margin: 0 0 0 0; }  /* 用户消息底边归零，与 agent 回复贴紧 */
     /* ── 轮次分隔 ── */
     .turn-sep { color: $primary-darken-3; height: 1; margin: 1 0; }
     /* ── 折叠区（思考/工具）─ */
