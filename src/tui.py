@@ -590,6 +590,7 @@ class ChatScreen(Screen):
     .msg-header.agent { color: $primary; border-left: heavy $primary; }
     .msg-header .time { color: $secondary; text-style: dim; }
     .msg-body { margin: 0 0 1 0; padding: 0 0 0 2; }
+    .msg-body.user-body { margin: 0 0 0 0; }  /* 用户消息底边归零，与 agent 回复贴紧 */
     /* ── 轮次分隔 ── */
     .turn-sep { color: $primary-darken-3; height: 1; margin: 1 0; }
     /* ── 折叠区（思考/工具）─ */
@@ -603,7 +604,7 @@ class ChatScreen(Screen):
     .tool-meta { color: $primary-darken-2; margin: 0; text-style: dim; }
     .sys-meta { color: $secondary; margin: 0; text-style: dim; }
     .err  { color: $error; margin: 0; }
-    .thinking { color: $secondary; }
+    .thinking { }  /* 折叠态标题由 Textual Collapsible 内置样式处理；展开后内容继承 $foreground */
     .brk  { color: $warning; text-style: bold; content-align: center middle; margin: 1 0; }
     /* ── 底部栏 ── */
     #bottombar { dock: bottom; height: auto; }
@@ -649,6 +650,7 @@ class ChatScreen(Screen):
         self._tool_dirty = False
         self._current_tool = ""           # 状态栏实时显示当前工具名
         self._agent_header_mounted = False  # 一轮内只挂一次 CTGents 头部
+        self._last_user_stamp = ""          # 本轮用户时间戳（供 agent header 降噪用）
         self._active_collapsible: Collapsible | None = None
         self._busy = False
         # 中断态：用户 Esc 截停本轮后进入。_interrupt_pending=已请求、等本轮真正收尾(done)；
@@ -726,10 +728,13 @@ class ChatScreen(Screen):
         self._history.append(text)
         self._history_idx = -1
         self._history_draft = ""
-        stamp = time.strftime("%H:%M")
+        # 本轮新起：记录用户时间戳（供 agent header 降噪用）+ 重置 header 守卫
+        self._last_user_stamp = time.strftime("%H:%M")
+        self._agent_header_mounted = False
+        stamp = self._last_user_stamp
         t = self.query_one("#transcript", VerticalScroll)
         t.mount(Label(f"━ 你  ·  {stamp}", classes="msg-header user"))
-        t.mount(Markdown(text, classes="msg-body"))
+        t.mount(Markdown(text, classes="msg-body user-body"))
         t.scroll_end(animate=False)
         if text.startswith("/"):
             self._handle_command(text)
@@ -940,8 +945,10 @@ class ChatScreen(Screen):
             if self._cur_md is None:
                 if not self._agent_header_mounted:
                     self._collapse_active()
-                    stamp = time.strftime("%H:%M")
-                    await transcript.mount(Label(f"━ CTGents  ·  {stamp}", classes="msg-header agent"))
+                    now = time.strftime("%H:%M")
+                    # 同一分钟内不重复显示时间（降噪）
+                    time_part = f"  ·  {now}" if now != self._last_user_stamp else ""
+                    await transcript.mount(Label(f"━ CTGents{time_part}", classes="msg-header agent"))
                     self._agent_header_mounted = True
                 self._cur_md = Markdown(self._cur_text, classes="msg-body")
                 await transcript.mount(self._cur_md)
@@ -1062,7 +1069,7 @@ class ChatScreen(Screen):
                 if text:
                     stamp = time.strftime("%H:%M")
                     t.mount(Label(f"━ 你  ·  {stamp}", classes="msg-header user"))
-                    t.mount(Markdown(text, classes="msg-body"))
+                    t.mount(Markdown(text, classes="msg-body user-body"))
                     t.scroll_end(animate=False)
             elif role == "assistant":
                 # 思考折叠
@@ -1170,7 +1177,7 @@ class ChatScreen(Screen):
             stamp = time.strftime("%H:%M")
             t = self.query_one("#transcript", VerticalScroll)
             t.mount(Label(f"━ 你  ·  {stamp}", classes="msg-header user"))
-            user_md = Markdown(instruction, classes="msg-body")
+            user_md = Markdown(instruction, classes="msg-body user-body")
             t.mount(user_md)
             t.scroll_end(animate=False)
             self._mount("──────── ▶ 按指示继续 ────────", "brk")
