@@ -44,23 +44,23 @@ if TYPE_CHECKING:
     from .cache_context import CacheContext
 
 
-# ── 深色专业配色主题（GitHub Dark 衍生）──
+# ── Tokyo Night 深色主题 ──
 DARK_THEME = Theme(
     name="dark-pro",
-    primary="#58a6ff",      # 对话蓝（agent 角色色，高对比）
-    secondary="#8b949e",    # 灰（辅助文字/次要信息）
-    accent="#d29922",       # 暖橙（用户角色色，高对比）
-    foreground="#e6edf3",   # 正文白（高对比）
-    background="#0d1117",   # 暖黑（GitHub 深色）
-    surface="#161b22",      # 表面（输入框/面板，略高一层）
-    panel="#21262d",        # 面板（微亮层）
-    success="#3fb950",      # 绿
-    warning="#e3b341",      # 琥珀黄（与 accent #d29922 解耦，语义不同）
-    error="#f85149",        # 红
+    primary="#7aa2f7",      # 对话蓝（Tokyo Night 蓝，柔和高对比）
+    secondary="#8a90b0",    # 灰紫（辅助文字，AA 过检）
+    accent="#ff9e64",       # 暖橙（用户角色色，高对比）
+    foreground="#c0caf5",   # 正文（淡紫白）
+    background="#1a1b26",   # 深紫黑（Tokyo Night 基底）
+    surface="#24283b",      # 表面（输入框/面板，略高一层）
+    panel="#1f2335",        # 面板（介于 bg 和 surface 之间）
+    success="#9ece6a",      # 柔绿
+    warning="#e0af68",      # 金黄
+    error="#f7768e",        # 粉红（Tokyo Night 标志红）
     dark=True,
 )
 
-# ── 像素大字 banner：10×8 宽体，密度抗锯齿 + 行渐变着色 + 投影 ──
+# ── 像素大字 banner：10×8 宽体，密度抗锯齿 + 行渐变着色 ──
 # 字形：10×8 密度矩阵。密度 0=空格, 1=░, 2=▓, 3=█。
 # 六字母 CTGENT，SplashScreen 和 SaveSelectScreen 两处复用。
 _GLYPHS: dict[str, list[list[int]]] = {
@@ -126,16 +126,15 @@ _GLYPH_GAP = 3         # 字母间距
 _BANNER_LEAD = [3, 3, 2, 2, 1, 1, 0, 0]  # 斜体右倾（每 2 行均匀右移 1px）
 _DENSITY_CHAR = {0: " ", 1: "░", 2: "▓", 3: "█"}
 _BANNER_LEAD = [2, 1, 1, 1, 0, 0, 0, 0]  # 微斜右倾（每行递增约 1px）
-# 行渐变：从上到下 8 行，亮青 → 深蓝
+# 行渐变：从上到下 8 行，亮蓝 → 深海蓝（Tokyo Night 色系）
 _GRADIENT = [
-    "#a8e8ff", "#78d8ff", "#4dc8f8", "#38b8ee",
-    "#30a8de", "#2e98ce", "#2c88be", "#1a78b0",
+    "#b8dcff", "#9ac4ff", "#7aa2f7", "#6188e8",
+    "#4a6fd0", "#3a5bb8", "#2a47a0", "#1a3388",
 ]
-_SHADOW_COLOR = "#0a1a3a"  # 投影色（深海军蓝）
 
 
 def _build_canvas(text: str) -> list[list[str]]:
-    """共享管线：密度矩阵 → canvas（含投影标记 '·'）。"""
+    """共享管线：密度矩阵 → canvas（纯像素，无投影）。"""
     rows_density: list[list[int]] = [[] for _ in range(_GLYPH_H)]
     for ch in text:
         glyph = _GLYPHS.get(ch)
@@ -153,13 +152,6 @@ def _build_canvas(text: str) -> list[list[str]]:
         offset = _BANNER_LEAD[i]
         for j, d in enumerate(rows_density[i]):
             canvas[i][offset + j] = ("░" if d == 1 else "▓" if d == 2 else "█" if d == 3 else " ")
-
-    # 右下投影（仅从实心像素 ▓/█ 投影、防字母间隙被溢出填充）
-    for i in range(_GLYPH_H - 1):
-        limit = len(canvas[i + 1]) - 1
-        for j in range(limit):
-            if canvas[i][j] in ("▓", "█") and canvas[i + 1][j + 1] == " ":
-                canvas[i + 1][j + 1] = "·"
 
     return canvas
 
@@ -190,11 +182,6 @@ def _banner_rows(text: str) -> list[str]:
                     _flush(parts)
                     cur_color = body_color
                 cur_text.append(ch)
-            elif ch == "·":
-                if cur_color != _SHADOW_COLOR:
-                    _flush(parts)
-                    cur_color = _SHADOW_COLOR
-                cur_text.append("░")
             else:
                 _flush(parts)
                 parts.append(" ")
@@ -212,7 +199,7 @@ def _banner_plain(text: str) -> str:
     canvas = _build_canvas(text)
     rows = []
     for row in canvas:
-        line = "".join(ch if ch != "·" else "░" for ch in row)
+        line = "".join(row)
         rows.append(line.rstrip())
     return "\n".join(rows)
 
@@ -398,6 +385,7 @@ class SplashScreen(Screen):
 
     MIN_SECONDS = 0.0       # 测试可调，默认 0（动画本身已有节奏）
     ROW_INTERVAL = 0.08     # 每行间隔（秒）—— 0.08s×8行≈0.64s，足够感知逐行浮现
+    GLOW_DURATION = 1.5     # 呼吸渐亮持续时间（秒），测试可置 0 跳过
 
     CSS = """
     SplashScreen { align: center middle; background: $background; }
@@ -422,6 +410,7 @@ class SplashScreen(Screen):
         self._revealed = 0
         self._ctx_ready = False
         self._buttons_shown = False
+        self._glow_done = False
         self._timer = self.set_interval(self.ROW_INTERVAL, self._reveal_row)
         self._init_ctx()
 
@@ -429,15 +418,31 @@ class SplashScreen(Screen):
         if self._revealed < len(self._rows):
             row_text = self._rows[self._revealed]
             with contextlib.suppress(Exception):
-                self.query_one("#logo_area").mount(Static(row_text, markup=True))
+                row = Static(row_text, markup=True)
+                row.styles.opacity = 0.3  # 初始暗态，为呼吸渐亮做准备
+                self.query_one("#logo_area").mount(row)
             self._revealed += 1
         if self._revealed >= len(self._rows):
             self._timer.stop()
-            self._try_show_buttons()
+            self._start_glow()
+
+    def _start_glow(self) -> None:
+        """全行揭示后，呼吸渐亮：从暗 0.3 → 满亮 1.0，然后显示按钮。"""
+        dur = self.GLOW_DURATION
+        for row in self.query("#logo_area > Static"):
+            row.styles.animate("opacity", 1.0, duration=dur)
+        if dur > 0:
+            self.set_timer(dur, self._on_glow_done)
+        else:
+            self._on_glow_done()
+
+    def _on_glow_done(self) -> None:
+        self._glow_done = True
+        self._try_show_buttons()
 
     def _try_show_buttons(self) -> None:
-        # 按钮只等 Logo 动画完成——不等 ctx（ctx 在后台建好，进聊天前足够完成）。
-        if self._buttons_shown or self._revealed < len(self._rows):
+        # 按钮等 Logo 渐亮完成 + ctx 就绪。ctx 在后台建好，渐亮(1.5s)期间已就绪。
+        if self._buttons_shown or not self._glow_done:
             return
         self._buttons_shown = True
         with contextlib.suppress(Exception):
@@ -592,8 +597,11 @@ class ChatScreen(Screen):
     .msg-header.user { color: $accent; border-left: heavy $accent; }
     .msg-header.agent { color: $primary; border-left: heavy $primary; }
     .msg-header .time { color: $secondary; text-style: dim; }
-    .msg-body { margin: 0 0 1 0; padding: 0 0 0 2; }
-    .msg-body.user-body { margin: 0 0 0 0; }  /* 用户消息底边归零，与 agent 回复贴紧 */
+    .msg-body { margin: 0 0 2 0; padding: 0 0 0 2; }
+    .msg-body.user-body {
+        margin: 0 0 0 0; background: $surface; padding: 0 1 0 1;
+        border: none; border-left: heavy $accent;
+    }  /* 用户消息：卡片背景 + 左粗条，底部归零与 agent 回复贴紧 */
     /* ── 轮次分隔 ── */
     .turn-sep { color: $primary-darken-3; height: 1; margin: 1 0; }
     /* ── 折叠区（思考/工具）─ */
@@ -608,6 +616,8 @@ class ChatScreen(Screen):
     .sys-meta { color: $secondary; margin: 0; text-style: dim; }
     .err  { color: $error; margin: 0; }
     .thinking { }  /* 折叠态标题由 Textual Collapsible 内置样式处理；展开后内容继承 $foreground */
+    /* ── Markdown 代码块 ── */
+    .msg-body MarkdownBlock { background: $panel; margin: 1 0; }
     .brk  { color: $warning; text-style: bold; content-align: center middle; margin: 1 0; }
     /* ── 底部栏 ── */
     #bottombar { dock: bottom; height: auto; }

@@ -1,7 +1,7 @@
-"""像素 TUI（多屏 + NES 主题）测试。
+"""像素 TUI 测试。
 
 纯函数确定性钉死；多屏流程/交互用 headless run_test（轮询到目标屏，避免计时 flaky），
-不入慢测。SplashScreen.MIN_SECONDS 置 0 跳过开屏最短等待。
+不入慢测。SplashScreen.MIN_SECONDS 和 GLOW_DURATION 置 0 跳过开屏动画。
 """
 
 import asyncio
@@ -18,6 +18,10 @@ from src.tui import (
     _status_line,
     _strip_user_wrappers,
 )
+
+# 测试模式：跳过所有开屏动画等待
+SplashScreen.MIN_SECONDS = 0.0
+SplashScreen.GLOW_DURATION = 0.0
 
 
 async def _wait_screen(app, pilot, name: str, ticks: int = 20) -> bool:
