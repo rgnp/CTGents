@@ -34,21 +34,17 @@ def test_has_unfinished_true(_isolate_tasks):
     _isolate_tasks[0].write_text(_UNFINISHED, encoding="utf-8")
     assert tasks.has_unfinished() is True
 
-def test_has_unfinished_false_when_all_done(_isolate_tasks):
-    _isolate_tasks[0].write_text(_DONE, encoding="utf-8")
-    assert tasks.has_unfinished() is False
 
-def test_has_unfinished_false_when_missing(_isolate_tasks):
+@pytest.mark.parametrize("content,desc", [
+    (_DONE, "全 [x]"),
+    ("__absent__", "文件不存在"),
+    (_HAS_RETRY, "全 [r]"),
+    (_HAS_BLOCKED, "全 [!]"),
+], ids=["done", "missing", "retry", "blocked"])
+def test_has_unfinished_false(content, desc, _isolate_tasks):
+    if content != "__absent__":
+        _isolate_tasks[0].write_text(content, encoding="utf-8")
     assert tasks.has_unfinished() is False
-
-def test_has_unfinished_false_when_all_retry(_isolate_tasks):
-    """[r] 不算活跃未完成——agent 不需要自动续做。"""
-    _isolate_tasks[0].write_text(_HAS_RETRY, encoding="utf-8")
-    assert tasks.has_unfinished() is False
-
-def test_has_unfinished_false_when_all_blocked(_isolate_tasks):
-    """[!] 不算活跃未完成。"""
-    _isolate_tasks[0].write_text(_HAS_BLOCKED, encoding="utf-8")
     assert tasks.has_unfinished() is False
 
 class TestIsAllDone:

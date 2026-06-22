@@ -14,14 +14,15 @@ class TestDetectLanguage:
     def test_detect_python(self, tmp_project):
         """pyproject.toml → Python + setuptools + pytest。"""
         info = _detect_language_and_framework(tmp_project)
-        assert "Python" in info["languages"]
+        assert set(info["languages"]) == {"Python", "C/C++"}
         assert any("setup" in f.lower() for f in info["frameworks"])
         assert "pytest" in info["test_commands"]
+        assert "Make" in info["frameworks"]
 
     def test_empty_project_fallback(self, tmp_empty_project):
         """无配置文件的纯 .py 项目 → 通过文件扩展名检测。"""
         info = _detect_language_and_framework(tmp_empty_project)
-        assert "Python" in info["languages"]
+        assert info["languages"] == ["Python"]
 
     def test_docker_not_detected_when_not_present(self, tmp_project):
         """没有 Dockerfile → Docker 不在框架列表。"""
@@ -35,17 +36,17 @@ class TestDetectLanguage:
         assert "Docker" in info["frameworks"]
 
     def test_detect_wildcard_csproj(self, tmp_path):
-        """*.csproj 通配符 → 检测到 C#。"""
+        """*.csproj 通配符 → 检测到 C#，含 test/build 命令。"""
         (tmp_path / "test.csproj").write_text("<Project />")
         info = _detect_language_and_framework(tmp_path)
-        assert "C#" in info["languages"]
-        assert "dotnet test" in info["test_commands"]
+        assert info["languages"] == ["C#"]
+        assert set(info["test_commands"]) == {"dotnet test", "dotnet build"}
 
     def test_detect_wildcard_sln(self, tmp_path):
         """*.sln 通配符 → 检测到 .NET Solution。"""
         (tmp_path / "test.sln").write_text("\n")
         info = _detect_language_and_framework(tmp_path)
-        assert "C#" in info["languages"]
+        assert info["languages"] == ["C#"]
 
     def test_detect_package_json(self, tmp_path):
         """package.json 含 scripts → 检测 JS/TS。"""
@@ -60,11 +61,11 @@ class TestDetectLanguage:
             "devDependencies": {"jest": "^29.0"},
         }))
         info = _detect_language_and_framework(tmp_path)
-        assert "JavaScript/TypeScript" in info["languages"]
+        assert info["languages"] == ["JavaScript/TypeScript"]
         assert "npm run test" in info["test_commands"]
         assert "npm run build" in info["build_commands"]
         assert "npm run dev" in info["run_commands"]
-        # 依赖也应该被捕获
+        # 依赖也应被捕获
         assert any("express" in d for d in info["dependencies"])
         assert any("jest (dev)" in d for d in info["dependencies"])
 
@@ -76,7 +77,7 @@ class TestDetectLanguage:
             'dependencies = ["requests", "click", "rich"]\n'
         )
         info = _detect_language_and_framework(tmp_path)
-        assert "Python" in info["languages"]
+        assert info["languages"] == ["Python"]
         assert "requests" in info["dependencies"]
         assert "click" in info["dependencies"]
 
@@ -92,7 +93,7 @@ class TestDetectLanguage:
             ']\n'
         )
         info = _detect_language_and_framework(tmp_path)
-        assert "Python" in info["languages"]
+        assert info["languages"] == ["Python"]
         assert "requests" in info["dependencies"]
 
     def test_detect_makefile_targets(self, tmp_path):
@@ -126,13 +127,13 @@ class TestDetectLanguage:
         """go.mod → Go。"""
         (tmp_path / "go.mod").write_text("module test\n")
         info = _detect_language_and_framework(tmp_path)
-        assert "Go" in info["languages"]
+        assert info["languages"] == ["Go"]
 
     def test_detect_cargo_toml(self, tmp_path):
         """Cargo.toml → Rust。"""
         (tmp_path / "Cargo.toml").write_text("[package]\n")
         info = _detect_language_and_framework(tmp_path)
-        assert "Rust" in info["languages"]
+        assert info["languages"] == ["Rust"]
 
 
 class TestBuildTree:
