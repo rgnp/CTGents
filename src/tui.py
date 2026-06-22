@@ -19,6 +19,7 @@
 from __future__ import annotations
 
 import contextlib
+import math
 import time
 from collections import deque
 from typing import TYPE_CHECKING
@@ -376,11 +377,29 @@ def _status_line(ctx, session_id: str) -> str:
 # 开屏
 # ═══════════════════════════════════════════════════════
 
+
+_WAVE_CHARS = ["▁", "▂", "▃", "▄", "▅", "▆", "▇", "█", "▇", "▆", "▅", "▄", "▃", "▂"]
+_WAVE_CENTER = len(_WAVE_CHARS) // 2
+
+
+def _make_wave(phase: float, amplitude: int, width: int) -> str:
+    """生成一行海浪波型。amplitude=波高(1-7)，phase=动画相位。"""
+    chars = []
+    for x in range(width):
+        angle = (x / max(width, 1)) * 4 * math.pi + phase
+        raw = math.sin(angle)
+        idx = int(_WAVE_CENTER + raw * amplitude)
+        idx = max(0, min(len(_WAVE_CHARS) - 1, idx))
+        chars.append(_WAVE_CHARS[idx])
+    return "".join(chars)
+
+
 def _mount_moonlight(screen: Screen) -> None:
-    """在屏幕顶部叠 4 层极淡的蓝白辉光，模拟月光洒落。"""
+    """在屏幕顶部叠 4 层蓝白辉光（陡峭衰减），模拟月光从海面洒落。"""
     with contextlib.suppress(Exception):
         moonlight = screen.query_one("#moonlight", Vertical)
-        layers = ["#151d2a", "#101724", "#0d1320", "#0b111e"]
+        # 陡峭衰减：亮→暗，形成海面月光焦点
+        layers = ["#232d3c", "#171f2d", "#111825", "#0d1420"]
         for color in layers:
             bar = Static("")
             bar.styles.background = color
@@ -635,6 +654,10 @@ class ChatScreen(Screen):
     #moonlight > Static { width: 100%; height: 1; }
     /* ── 底部栏 ── */
     #bottombar { dock: bottom; height: auto; }
+    #wavebar {
+        height: 1; color: $primary-darken-2; background: transparent;
+        text-style: dim; padding: 0 1; margin: 0;
+    }
     #prompt {
         border: none; border-top: solid $primary-darken-1;
         border-bottom: solid $panel;
@@ -693,11 +716,17 @@ class ChatScreen(Screen):
         self._turn_started: float = 0.0
         self._turn_count: int = 0
         self._echo_max_turns: int = 3  # 回放最多渲染的轮数
+        # ── 海浪动画 ──
+        self._wave_phase: float = 0.0
+        self._wave_amplitude: float = 1.0
+        self._wave_target: float = 1.0
+        self._last_typing: float = 0.0
     # ── 布局 ──
     def compose(self) -> ComposeResult:
         yield Vertical(id="moonlight")
         yield VerticalScroll(id="transcript")
         with Vertical(id="bottombar"):
+            yield Static("", id="wavebar")
             yield TextArea(
                 "",
                 placeholder="> 输入消息（/help 查看指令）",
@@ -715,9 +744,37 @@ class ChatScreen(Screen):
         self.set_interval(0.03, self._drain_events)
         self.set_interval(0.5, self._refresh_status)
         self.set_interval(0.5, self._drain_jobs)
+        self.set_interval(0.08, self._update_wave)
+
+    def _update_wave(self) -> None:
+        """逐帧更新海浪动画，振幅随打字/回复动态变化。"""
+        now = time.monotonic()
+        # 用户打字涟漪：2s 内打字触发小浪，逐渐消退
+        if now - self._last_typing < 2.0:
+            self._wave_target = max(self._wave_target, 2.5)
+        # agent 回复：大浪
+        if self._busy and not self._interrupt_pending:
+            self._wave_target = max(self._wave_target, 5.0)
+        else:
+            self._wave_target = min(self._wave_target, 2.5)
+        # 空闲回落
+        if not self._busy and now - self._last_typing > 3.0:
+            self._wave_target = 1.0
+        # 平滑过渡
+        self._wave_amplitude += (self._wave_target - self._wave_amplitude) * 0.12
+        if abs(self._wave_amplitude - self._wave_target) < 0.05:
+            self._wave_amplitude = self._wave_target
+        # 相位步进（波浪流动感）
+        self._wave_phase += 0.15 * (1.0 + self._wave_amplitude * 0.1)
+        # 渲染
+        try:
+            w = self.query_one("#wavebar", Static)
+            w.update(_make_wave(self._wave_phase, round(self._wave_amplitude), w.region.width))
+        except Exception:
+            pass
 
     def on_text_area_changed(self, event: TextArea.Changed) -> None:
-        """内容非空时给输入框加 has-text 样式类（上边框变绿）。"""
+        """内容非空时给输入框加 has-text 样式类 + 打字触发小浪。"""
         if event.text_area.id != "prompt":
             return
         p = self.query_one("#prompt", TextArea)
@@ -725,6 +782,8 @@ class ChatScreen(Screen):
             p.add_class("has-text")
         else:
             p.remove_class("has-text")
+        # 每次输入触发电波浪涟漪
+        self._last_typing = time.monotonic()
 
     def _load_pending(self) -> None:
         """进聊天屏时按存档选择结果加载会话（NEW=不加载，沿用 splash 初始化的空会话）。"""
@@ -919,9 +978,11 @@ class ChatScreen(Screen):
             if kind == "token":
                 self._cur_text += rest[0]
                 self._dirty = True
+                self._wave_target = max(self._wave_target, 4.5)  # token 流驱动大浪
             elif kind == "reasoning":
                 self._cur_reasoning += rest[0]
                 self._reasoning_dirty = True
+                self._wave_target = max(self._wave_target, 3.5)  # 思考时中浪
             else:
                 # 思考在答案之前 → 先 flush 思考(挂折叠区)、再 flush 答案，顺序正确。
                 await self._flush_reasoning(transcript)
