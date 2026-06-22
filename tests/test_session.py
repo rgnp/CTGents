@@ -2,10 +2,6 @@
 
 import json
 import os
-import sys
-from pathlib import Path
-
-sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from src.session import (
     _sanitize_surrogates,
@@ -40,7 +36,6 @@ class TestSanitizeSurrogates:
 
     def test_non_str_passthrough(self):
         assert _sanitize_surrogates(42) == 42
-
 
 class TestSessionIO:
     def test_save_and_load(self, tmp_path, monkeypatch):

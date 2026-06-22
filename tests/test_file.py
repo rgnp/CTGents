@@ -7,8 +7,6 @@ from pathlib import Path
 
 import pytest
 
-sys.path.insert(0, str(Path(__file__).parent.parent))
-
 from src.tools.file import (
     _backup,
     _find_affected_files,
@@ -61,7 +59,6 @@ class TestBackup:
         finally:
             os.chdir(old_cwd)
 
-
 class TestValidatePy:
     """语法校验测试。"""
 
@@ -94,7 +91,6 @@ class TestValidatePy:
         err = _validate_py(f, None)
         assert err is not None
         assert not f.exists()
-
 
 class TestReadWrite:
     """读写测试。"""
@@ -195,7 +191,6 @@ class TestReadWrite:
         assert "已写入" not in result
         assert f.read_text(encoding="utf-8") == "good = 1\n", "应回滚到原内容"
 
-
 class TestEditFileLines:
     """行级编辑：成功路径 + 语法错自动回滚。"""
 
@@ -252,7 +247,6 @@ class TestEditFileLines:
         assert "语法" in result or "SyntaxError" in result
         assert f.read_text(encoding="utf-8") == original, "应回滚到编辑前"
 
-
 class TestResolve:
     """路径解析测试。"""
 
@@ -267,7 +261,6 @@ class TestResolve:
     def test_nonexistent_path(self):
         p = _resolve("nonexistent_xyz.file")
         assert not p.exists()
-
 
 class TestReadCached:
     """文件缓存测试。"""
@@ -297,7 +290,6 @@ class TestReadCached:
         assert r1 == "v1"
         assert r2 == "v2"
 
-
 class TestCountLines:
     """行数统计测试。"""
 
@@ -312,7 +304,6 @@ class TestCountLines:
         """count_lines 对不存在的文件抛异常。"""
         with pytest.raises(FileNotFoundError):
             count_lines("/nonexistent.txt")
-
 
 class TestListFiles:
     """目录列表测试。"""
@@ -336,7 +327,6 @@ class TestListFiles:
         r2 = list_files(str(tmp_path))
         assert r1 == r2
 
-
 class TestInvalidatePyc:
     """字节码缓存清理测试。"""
 
@@ -348,7 +338,6 @@ class TestInvalidatePyc:
         f.write_text("x=1", encoding="utf-8")
         _invalidate_pyc(f)
         assert not list(pyc_dir.iterdir())
-
 
 class TestTrackChanges:
     """变更追踪测试。"""
@@ -370,7 +359,6 @@ class TestTrackChanges:
         monkeypatch.chdir(tmp_path)
         result = _track_changes("test.py")
         assert isinstance(result, str)
-
 
 if __name__ == "__main__":
     import inspect

@@ -4,12 +4,9 @@ rag.py 此前无测试。最关键的不变式：倒排表里的每个 doc_id �
 documents 范围内，且 num_docs == len(documents)，否则 search() 会 IndexError
 或返回错块。
 """
-import sys
 from pathlib import Path
 
 import pytest
-
-sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from src.tools import rag
 
@@ -18,7 +15,6 @@ def _make_project(tmp_path: Path) -> Path:
     (tmp_path / ".git").mkdir()
     return tmp_path
 
-
 def _assert_index_consistent(idx) -> None:
     assert idx.num_docs == len(idx.documents), "num_docs 与 documents 数不一致"
     max_doc_id = max(
@@ -26,7 +22,6 @@ def _assert_index_consistent(idx) -> None:
         default=-1,
     )
     assert max_doc_id < len(idx.documents), "倒排表 doc_id 越界 → 索引损坏"
-
 
 # ═══ chunk patterns ═══
 
@@ -39,18 +34,15 @@ def test_all_chunk_patterns_compile():
     re.compile(rag._DEFAULT_FN_PATTERN)
     re.compile(rag._DEFAULT_COMMENT_PATTERN)
 
-
 def test_get_chunk_patterns_known_language():
     fn, cmt = rag._get_chunk_patterns("python")
     assert fn is not None
     assert cmt is not None
 
-
 def test_get_chunk_patterns_unknown_language():
     """未知语言 → 默认 pattern。"""
     fn, cmt = rag._get_chunk_patterns("elvish")
     assert fn == rag._DEFAULT_FN_PATTERN
-
 
 # ═══ index / query ═══
 
@@ -63,12 +55,10 @@ def test_index_and_query(tmp_path):
     out = rag.query_index("alpha_func", path=str(proj))
     assert "alpha.py" in out
 
-
 def test_query_no_index(tmp_path):
     proj = _make_project(tmp_path)
     out = rag.query_index("anything", path=str(proj))
     assert "尚未建立" in out
-
 
 def test_query_no_keywords(tmp_path):
     proj = _make_project(tmp_path)
@@ -77,7 +67,6 @@ def test_query_no_keywords(tmp_path):
     out = rag.query_index("a b c", path=str(proj))
     assert "无法" in out or "未找到" in out
 
-
 def test_query_no_results(tmp_path):
     proj = _make_project(tmp_path)
     (proj / "x.py").write_text("def foo():\n    pass\n", encoding="utf-8")
@@ -85,12 +74,10 @@ def test_query_no_results(tmp_path):
     out = rag.query_index("xyznonexistent12345", path=str(proj))
     assert "未找到" in out
 
-
 def test_index_no_files(tmp_path):
     proj = _make_project(tmp_path)
     out = rag.index_project(str(proj), force=True)
     assert "未找到" in out
-
 
 def test_index_force_rebuild(tmp_path):
     proj = _make_project(tmp_path)
@@ -98,14 +85,12 @@ def test_index_force_rebuild(tmp_path):
     out = rag.index_project(str(proj), force=True)
     assert "全量索引" in out
 
-
 def test_index_incremental_no_change(tmp_path):
     proj = _make_project(tmp_path)
     (proj / "a.py").write_text("def f():\n    pass\n", encoding="utf-8")
     rag.index_project(str(proj), force=True)
     out = rag.index_project(str(proj), force=False)
     assert "已是最新" in out
-
 
 def test_incremental_update_keeps_index_consistent(tmp_path):
     proj = _make_project(tmp_path)
@@ -120,7 +105,6 @@ def test_incremental_update_keeps_index_consistent(tmp_path):
     _assert_index_consistent(idx)
     assert "func_a_renamed" in rag.query_index("func_a_renamed", path=str(proj))
 
-
 def test_incremental_handles_deleted_file(tmp_path):
     proj = _make_project(tmp_path)
     (proj / "keep.py").write_text("def keeper():\n    return 1\n", encoding="utf-8")
@@ -132,13 +116,11 @@ def test_incremental_handles_deleted_file(tmp_path):
     _assert_index_consistent(idx)
     assert all("gone.py" not in d.file_path for d in idx.documents)
 
-
 def test_incremental_no_existing_index(tmp_path):
     proj = _make_project(tmp_path)
     (proj / "a.py").write_text("def f():\n    pass\n", encoding="utf-8")
     out = rag.index_project(str(proj), force=False)
     assert "全量索引" in out
-
 
 def test_status(tmp_path):
     proj = _make_project(tmp_path)
@@ -147,12 +129,10 @@ def test_status(tmp_path):
     out = rag.get_index_status(path=str(proj))
     assert "RAG" in out
 
-
 def test_status_no_index(tmp_path):
     proj = _make_project(tmp_path)
     out = rag.get_index_status(path=str(proj))
     assert "未建立" in out
-
 
 # ═══ file ignore ═══
 
@@ -165,22 +145,18 @@ def test_min_js_glob_ignored(tmp_path):
     assert all("vendor.min.js" not in d.file_path for d in idx.documents)
     assert any("app.js" in d.file_path for d in idx.documents)
 
-
 def test_should_ignore_dir():
     assert rag._should_ignore_dir(".git")
     assert rag._should_ignore_dir("__pycache__")
     assert rag._should_ignore_dir(".hidden")
     assert not rag._should_ignore_dir("src")
 
-
 def test_should_ignore_file_exact():
     assert rag._should_ignore_file("package-lock.json", ".json")
     assert not rag._should_ignore_file("app.py", ".py")
 
-
 def test_should_ignore_file_pyc():
     assert rag._should_ignore_file("module.pyc", ".pyc")
-
 
 # ═══ identifier extraction ═══
 
@@ -191,13 +167,11 @@ def test_extract_identifiers():
     assert "world" in ids
     assert "arg1" in ids
 
-
 def test_extract_identifiers_camel_case():
     ids = rag._extract_identifiers("camelCase\n")
     assert "camelCase" in ids
     assert "camel" in ids
     assert "Case" in ids
-
 
 def test_extract_keywords_from_query():
     kws = rag._extract_keywords_from_query("find all python functions")
@@ -205,7 +179,6 @@ def test_extract_keywords_from_query():
     assert "functions" in kws
     assert "the" not in kws
     assert "all" not in kws
-
 
 # ═══ chunking ═══
 
@@ -217,7 +190,6 @@ def test_chunk_python_file_with_function(tmp_path):
     assert chunks[0].name == "foo"
     assert chunks[1].name == "bar"
 
-
 def test_chunk_python_file_with_class(tmp_path):
     f = tmp_path / "test.py"
     f.write_text("class MyClass:\n    def method(self):\n        pass\n", encoding="utf-8")
@@ -226,7 +198,6 @@ def test_chunk_python_file_with_class(tmp_path):
     assert chunks[0].name == "MyClass"
     assert chunks[0].chunk_type == "class"
 
-
 def test_chunk_python_file_no_fn(tmp_path):
     f = tmp_path / "test.py"
     f.write_text("x = 1\ny = 2\n", encoding="utf-8")
@@ -234,13 +205,11 @@ def test_chunk_python_file_no_fn(tmp_path):
     assert len(chunks) == 1
     assert chunks[0].chunk_type == "block"
 
-
 def test_chunk_generic_file(tmp_path):
     f = tmp_path / "test.js"
     f.write_text("function hello() {\n  return 1;\n}\n", encoding="utf-8")
     chunks = rag._chunk_generic_file(f, f.read_text(), "javascript")
     assert len(chunks) >= 1
-
 
 def test_chunk_generic_file_no_fn(tmp_path):
     f = tmp_path / "test.md"
@@ -249,14 +218,12 @@ def test_chunk_generic_file_no_fn(tmp_path):
     chunks = rag._chunk_generic_file(f, content, "markdown")
     assert len(chunks) > 0
 
-
 def test_chunk_file_unicode_decode_error(tmp_path):
     """二进制文件 → 空列表或替换字符块（取决于 OS）。"""
     f = tmp_path / "test.py"
     f.write_bytes(b"\x80\x81\x82")
     rag._chunk_file(f, "python")
     # 不崩溃就是通过
-
 
 def test_chunk_file_empty(tmp_path):
     """空文件不崩溃。"""
@@ -265,7 +232,6 @@ def test_chunk_file_empty(tmp_path):
     rag._chunk_file(f, "python")
     # 不崩溃就是通过
 
-
 def test_split_large_chunk():
     lines = ["x = 1\n"] * 100
     content = "".join(lines)
@@ -273,7 +239,6 @@ def test_split_large_chunk():
     assert len(chunks) > 1
     for c in chunks:
         assert "BigClass" in c.name
-
 
 # ═══ CodeChunk / serialization ═══
 
@@ -284,14 +249,12 @@ def test_codechunk_to_dict_from_dict():
     assert c2.name == "foo"
     assert c2.file_path == "a.py"
 
-
 # ═══ TfIdfIndex ═══
 
 def test_tfidf_search_empty():
     idx = rag.TfIdfIndex()
     results = idx.search(["test"])
     assert results == []
-
 
 def test_tfidf_serialization_roundtrip():
     idx = rag.TfIdfIndex()
@@ -302,7 +265,6 @@ def test_tfidf_serialization_roundtrip():
     assert idx2.num_docs == 1
     assert idx2.documents[0].name == "foo"
 
-
 # ═══ research indexing ═══
 
 def test_doc_index_roundtrip():
@@ -311,7 +273,6 @@ def test_doc_index_roundtrip():
     c2 = rag.DocChunk.from_dict(d)
     assert c2.source == "arxiv:1234"
     assert c2.title == "Test Paper"
-
 
 def test_index_doc_chunks(tmp_path):
     chunks = [
@@ -326,16 +287,13 @@ def test_index_doc_chunks(tmp_path):
     assert len(results) >= 1
     assert results[0]["source"] == "src:1"
 
-
 def test_load_doc_index_missing():
     assert rag._load_doc_index("_nonexistent_xyz") is None
-
 
 def test_search_doc_index_empty_query():
     idx = {"idf": {}, "vectors": [], "chunks": [], "doc_count": 0}
     results = rag._search_doc_index(idx, "   ")
     assert results == []
-
 
 # ═══ execute ═══
 
@@ -343,12 +301,10 @@ def test_execute_unknown_tool():
     result = rag.execute("unknown_tool", {})
     assert result is None
 
-
 @pytest.mark.slow
 def test_execute_rag_status():
     result = rag.execute("rag_status", {})
     assert isinstance(result, str)
-
 
 @pytest.mark.slow
 def test_execute_rag_index():
@@ -357,12 +313,10 @@ def test_execute_rag_index():
     result = rag.execute("rag_index", {"path": None})
     assert isinstance(result, str)
 
-
 @pytest.mark.slow
 def test_execute_rag_query():
     result = rag.execute("rag_query", {"query": "def main"})
     assert isinstance(result, str)
-
 
 # ═══ hash cache ═══
 
@@ -373,13 +327,11 @@ def test_hash_cache(tmp_path):
     loaded = rag._read_hash_cache(proj)
     assert loaded == hashes
 
-
 def test_get_file_hash(tmp_path):
     f = tmp_path / "x.py"
     f.write_text("hello", encoding="utf-8")
     h = rag._get_file_hash(f)
     assert "-" in h
-
 
 # ═══ rebuild_from_documents ═══
 
@@ -390,14 +342,12 @@ def test_rebuild_from_documents():
     assert idx.num_docs == 2
     _assert_index_consistent(idx)
 
-
 # ═══ find_project_root ═══
 
 def test_find_project_root_git(tmp_path):
     proj = _make_project(tmp_path)
     found = rag._find_project_root(str(proj / "src"))
     assert found == proj.resolve()
-
 
 def test_find_project_root_no_marker(tmp_path):
     found = rag._find_project_root(str(tmp_path))

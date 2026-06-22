@@ -1,8 +1,5 @@
 """器官生命体征 census 测试 — 派生自产物、非探针的衰竭检测。"""
-import sys
 from pathlib import Path
-
-sys.path.insert(0, str(Path(__file__).parent.parent))
 
 import pytest
 
@@ -14,7 +11,6 @@ def _touch(p: Path, mtime: float) -> None:
     p.write_text("---\nname: x\nmetadata:\n  type: strategy\n---\nbody\n", encoding="utf-8")
     import os
     os.utime(p, (mtime, mtime))
-
 
 @pytest.fixture
 def iso_dirs(tmp_path, monkeypatch):
@@ -29,7 +25,6 @@ def iso_dirs(tmp_path, monkeypatch):
     monkeypatch.setattr(organs, "_SESSIONS", sess)
     return tmp_path, stats, mem, sess
 
-
 # ── _sessions_ago：核心心跳算法 ──
 
 def test_sessions_ago_zero_when_artifact_newest():
@@ -37,17 +32,14 @@ def test_sessions_ago_zero_when_artifact_newest():
     timeline = [100.0, 90.0, 80.0]
     assert organs._sessions_ago(150.0, timeline) == 0
 
-
 def test_sessions_ago_counts_newer_sessions():
     """有 2 个会话比产物新 → 2 个会话没跳了。"""
     timeline = [100.0, 90.0, 80.0, 70.0]
     assert organs._sessions_ago(85.0, timeline) == 2
 
-
 def test_sessions_ago_minus_one_when_never():
     """从无产物 → -1。"""
     assert organs._sessions_ago(None, [100.0]) == -1
-
 
 # ── _memory_by_type：按 frontmatter type 过滤 + 排除前缀 ──
 
@@ -62,7 +54,6 @@ def test_memory_by_type_filters_and_excludes_prefix(iso_dirs):
     strat = organs._memory_by_type("strategy", exclude_prefix="pin-")
     names = {p.name for p in strat}
     assert names == {"lesson-a.md"}, "只 strategy、排除 pin-、排除 MEMORY.md/user"
-
 
 # ── census + render：端到端，衰竭器官能被标红 ──
 
@@ -86,13 +77,11 @@ def test_census_flags_silent_organ(iso_dirs):
     assert vitals["用户档案"].sessions_ago == 3
     assert vitals["会话存档"].sessions_ago == 0     # 会话存档自己永远是最新心跳
 
-
 def test_census_never_fired_is_minus_one(iso_dirs):
     """无任何产物的器官 sessions_ago=-1（从未）。"""
     vitals = {o.name: o for o in organs.census()}
     assert vitals["用户档案"].last is None
     assert vitals["用户档案"].sessions_ago == -1
-
 
 def test_render_contains_markers_and_baseline(iso_dirs):
     out = organs.render_census()
@@ -100,7 +89,6 @@ def test_render_contains_markers_and_baseline(iso_dirs):
     assert "心跳基准" in out
     # 空目录下所有器官从未跳 → 全红
     assert "🔴" in out
-
 
 def test_render_is_readonly(iso_dirs):
     """只读保证：render 不写任何文件。"""

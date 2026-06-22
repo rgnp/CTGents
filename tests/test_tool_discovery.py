@@ -4,11 +4,6 @@
 且坏文件/坏模块被隔离跳过而非崩溃启动——消除"手改注册表导致启动崩溃"的整类故障。
 """
 
-import sys
-from pathlib import Path
-
-sys.path.insert(0, str(Path(__file__).parent.parent))
-
 import src.tools as tools_pkg
 from src.tools import _tool_meta, get_failed_modules, get_tools
 
@@ -24,7 +19,6 @@ def test_discovers_real_tool_modules():
         assert tools_attr.startswith("TOOLS_")
         assert exec_attr == "execute"
 
-
 def test_skips_underscore_and_helper_files():
     """私有文件（_ 前缀）与无 TOOLS_* 的辅助文件不入清单。"""
     stems = {p for p, _, _ in _tool_meta._discover_builtin_modules()}
@@ -32,7 +26,6 @@ def test_skips_underscore_and_helper_files():
     assert "._tool_meta" not in stems
     # storm/tokens 是辅助模块，无 TOOLS_*
     assert ".storm" not in stems
-
 
 def test_syntax_error_file_skipped_not_crash(tmp_path, monkeypatch):
     """工具目录里有语法错误文件 → 被跳过并记录，不让发现崩溃。"""
@@ -56,7 +49,6 @@ def test_syntax_error_file_skipped_not_crash(tmp_path, monkeypatch):
     skipped = {name for name, _ in _tool_meta.get_discovery_skipped()}
     assert "badtool.py" in skipped       # 语法错误被记录
 
-
 def test_registry_isolates_broken_module(monkeypatch):
     """导入会失败的模块被隔离，其余工具照常注册，系统保持可用。"""
     real = list(_tool_meta._BUILTIN_MODULES)
@@ -75,7 +67,6 @@ def test_registry_isolates_broken_module(monkeypatch):
     finally:
         monkeypatch.undo()
         tools_pkg._init_registry()  # 还原真实注册表
-
 
 def test_healthy_registry_no_failures():
     """正常初始化后无故障模块。"""

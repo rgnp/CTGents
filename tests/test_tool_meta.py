@@ -1,8 +1,4 @@
 """工具元数据自洽验证 — _meta 完整性、派生集合一致性。"""
-import sys
-from pathlib import Path
-
-sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from src.tools import get_tools
 from src.tools._tool_meta import (
@@ -55,7 +51,6 @@ class TestMetaPresence:
             assert name not in DEDUP_BLACKLIST
             assert name not in TOOL_LABELS, f"{name} 不应出现在 TOOL_LABELS"
 
-
 class TestMetaStripping:
     """_meta 从 API 可见工具列表中剥离。"""
 
@@ -76,7 +71,6 @@ class TestMetaStripping:
         for n in ("read_file", "write_file", "self", "run_async", "poll"):
             assert n in names
 
-
 class TestLabelCoverage:
     """TOOL_LABELS 覆盖所有工具。"""
 
@@ -92,7 +86,6 @@ class TestLabelCoverage:
     def test_read_file_lines_alias_label(self):
         assert "read_file_lines" in TOOL_LABELS
         assert TOOL_LABELS["read_file_lines"] == "读取文件"
-
 
 class TestHotReloadPreservesMeta:
     """热加载后元数据正确刷新。"""
@@ -110,7 +103,6 @@ class TestHotReloadPreservesMeta:
         assert len(labels) >= 50
         assert len(psafe) >= 28
         assert "poll" in no_dedup, "poll 是时变读，必须在 no_dedup 集合"
-
 
 class TestDispatchContract:
     """execute_tool 责任链契约：execute 对不归自己的名字必须返回 None。

@@ -4,10 +4,6 @@ _finalize_session 串联子步骤：会话落盘 → 被动反思 → 记忆收�
 每个子步骤被 except Exception 包裹——改坏任何一个，只有 logger.warning，
 测试不红。这里 mock 所有子步骤，验证调用链和故障隔离。
 """
-import sys
-from pathlib import Path
-
-sys.path.insert(0, str(Path(__file__).parent.parent))
 
 import pytest
 
@@ -28,7 +24,6 @@ def _turn_ran():
     yield
     main._session_state["turn_ran"] = False
 
-
 def _ctx_with_assistant() -> CacheContext:
     """含一条 assistant 回复的上下文。"""
     ctx = CacheContext()
@@ -36,16 +31,13 @@ def _ctx_with_assistant() -> CacheContext:
     ctx.log.append({"role": "assistant", "content": "hello"})
     return ctx
 
-
 def _ctx_empty() -> CacheContext:
     """空上下文。"""
     return CacheContext()
 
-
 # ═══════════════════════════════════════════════════════════════
 # 各子步骤全部调用
 # ═══════════════════════════════════════════════════════════════
-
 
 def test_substeps_all_called(monkeypatch):
     """开启关闭时收割后，含 assistant 消息的会话 → save + reflect + lessons + pins 全调。"""
@@ -83,11 +75,9 @@ def test_substeps_all_called(monkeypatch):
     assert "promote" in calls
     assert any("退出" in ln for ln in lines)
 
-
 # ═══════════════════════════════════════════════════════════════
 # 空会话不保存/不反思
 # ═══════════════════════════════════════════════════════════════
-
 
 def test_empty_session_skips_save_reflect(monkeypatch):
     """无 assistant 消息 → 不保存、不反思（避免空文件/无效反思）。
@@ -127,11 +117,9 @@ def test_empty_session_skips_save_reflect(monkeypatch):
     assert "extract" in calls, "记忆收割不受 assistant 存在条件约束"
     assert "promote" in calls, "钉板转存不受 assistant 存在条件约束"
 
-
 # ═══════════════════════════════════════════════════════════════
 # 故障隔离：一个子步骤抛异常不阻断后续
 # ═══════════════════════════════════════════════════════════════
-
 
 def test_reflect_failure_does_not_block_lessons(monkeypatch):
     """reflect_on_session 抛异常 → extract_lessons 仍被调用（收割开启时）。"""
@@ -162,7 +150,6 @@ def test_reflect_failure_does_not_block_lessons(monkeypatch):
     assert "reflect" in calls
     assert "extract" in calls, "reflect 抛异常不能阻断记忆收割"
 
-
 def test_lessons_failure_does_not_block_pins(monkeypatch):
     """extract_lessons 抛异常 → promote_durable 仍被调用（收割开启时）。"""
     calls = []
@@ -191,11 +178,9 @@ def test_lessons_failure_does_not_block_pins(monkeypatch):
     assert "extract" in calls
     assert "promote" in calls, "extract 抛异常不能阻断钉板转存"
 
-
 # ═══════════════════════════════════════════════════════════════
 # 有 lessons 时调用 save_lessons
 # ═══════════════════════════════════════════════════════════════
-
 
 def test_lessons_saved_when_found(monkeypatch):
     """extract_lessons 返回非空 → save_lessons 被调用且计入返回行（收割开启时）。"""
@@ -226,11 +211,9 @@ def test_lessons_saved_when_found(monkeypatch):
     assert saved_count == [1]
     assert any("收割" in ln for ln in lines)
 
-
 # ═══════════════════════════════════════════════════════════════
 # 关闭时收割默认关：save/reflect/pin 照常，但不跑 lessons/档案收割
 # ═══════════════════════════════════════════════════════════════
-
 
 def test_harvest_off_by_default_skips_lessons(monkeypatch):
     """默认 _HARVEST_ON_CLOSE=False → save/reflect/promote 照常，extract 不调。
@@ -254,11 +237,9 @@ def test_harvest_off_by_default_skips_lessons(monkeypatch):
     assert "promote" in calls
     assert "extract" not in calls, "收割默认关，不应调用 extract_lessons"
 
-
 # ═══════════════════════════════════════════════════════════════
 # 没真跑过一轮（空会话 / 加载后未改动就退出）→ 啥也不收割
 # ═══════════════════════════════════════════════════════════════
-
 
 def test_no_turn_skips_everything(monkeypatch):
     """turn_ran=False → 早退，save/reflect/extract/promote 全不调（不白烧 LLM）。"""

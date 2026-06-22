@@ -11,8 +11,6 @@ import json
 import os
 import sys
 
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-
 # ── 模拟环境 ──
 os.environ.setdefault("DEEPSEEK_API_KEY", "sk-test")
 os.environ.setdefault("TAVILY_API_KEY", "tvly-test")
@@ -28,7 +26,6 @@ def api_bytes(messages: list[dict]) -> str:
     payload = json.dumps(messages, ensure_ascii=False)
     return payload
 
-
 def cache_prefix_messages(prev: list[dict], curr: list[dict]) -> int:
     """计算两次 payload 在消息层面的共同前缀长度（消息数）。"""
     n = 0
@@ -37,7 +34,6 @@ def cache_prefix_messages(prev: list[dict], curr: list[dict]) -> int:
             break
         n += 1
     return n
-
 
 def cacheable_prefix_bytes(prev_payload: str, curr_payload: str) -> int:
     """计算实际可缓存的字节前缀长度。
@@ -56,10 +52,8 @@ def cacheable_prefix_bytes(prev_payload: str, curr_payload: str) -> int:
         i += 1
     return i
 
-
 def sha(s: str) -> str:
     return hashlib.sha256(s.encode()).hexdigest()[:16]
-
 
 # ═══════════════════════════════════════════════════════════════
 # 模拟最小依赖（不触发网络/文件 IO）
@@ -77,14 +71,12 @@ def mock_env_msg():
         "_volatile": True,
     }
 
-
 def mock_project_msg():
     return {
         "role": "system",
         "content": "当前项目: test-project | 语言: Python",
         "_volatile": True,
     }
-
 
 def mock_rag_msg():
     return {
@@ -93,10 +85,8 @@ def mock_rag_msg():
         "_volatile": True,
     }
 
-
 def mock_safety_msg():
     return {"role": "system", "content": "安全模式: MANUAL", "_volatile": True}
-
 
 def mock_memory_msg(idx: int = 0):
     return {
@@ -105,13 +95,11 @@ def mock_memory_msg(idx: int = 0):
         "_volatile": True,
     }
 
-
 # ═══════════════════════════════════════════════════════════════
 # 测试套件
 # ═══════════════════════════════════════════════════════════════
 
 results: list[dict] = []
-
 
 def _run_check(name: str, fn):
     """运行一个检查并记录结果（独立脚本模式用）。
@@ -126,7 +114,6 @@ def _run_check(name: str, fn):
     except Exception as e:
         results.append({"name": name, "status": "ERROR", "error": str(e)})
 
-
 # ── 测试 1: 空会话前缀稳定性 ──
 
 def test_empty_startup():
@@ -140,7 +127,6 @@ def test_empty_startup():
     p2 = api_bytes(ctx.send(validate=False))
 
     assert p1 == p2, "未加对话时两次 send() 字节应完全一致"
-
 
 # ── 测试 2: 追加对话后，前缀部分不变 ──
 
@@ -175,7 +161,6 @@ def test_conversation_growth():
         prev_msgs = curr_msgs
         prev_payload = curr_payload
 
-
 # ── 测试 3: log system 消息放末尾，不影响前缀 ──
 
 def test_volatile_log_system_dropped():
@@ -198,7 +183,6 @@ def test_volatile_log_system_dropped():
     assert msgs[0]["content"] == mock_env_msg()["content"]
     assert msgs[-1]["role"] != "system"   # 末条是对话,不是挂尾
     assert all("安全模式" not in (m.get("content") or "") for m in msgs)
-
 
 # ── 测试 4: 压缩后的前缀稳定性 ──
 
@@ -248,7 +232,6 @@ def test_compaction_prefix():
     # 验证历史消息数 = 原始 + 1（仅多了一条摘要）
     assert len(msgs) == len(json.loads(before_payload)) + 1
 
-
 # ── 测试 5: 记忆变更后原地替换 ──
 
 def test_memory_update():
@@ -278,7 +261,6 @@ def test_memory_update():
     # 前 5 条（prefix 3 + user 1 + assistant 1）应该一致
     for i in range(5):
         assert msgs_before[i] == msgs_after[i], f"第 {i} 条消息发生了改变"
-
 
 # ── 测试 6: 会话保存/加载周期 ──
 
@@ -315,7 +297,6 @@ def test_save_load_cycle():
     assert project_count == 1, f"project 消息应只有 1 份，实际 {project_count}"
     assert rag_count == 1, f"RAG 消息应只有 1 份，实际 {rag_count}"
 
-
 # ── 测试 7: 跨会话前缀哈希一致性 ──
 
 def test_cross_session_hash():
@@ -336,7 +317,6 @@ def test_cross_session_hash():
     ctx1.log.append({"role": "user", "content": "A"})
     ctx2.log.append({"role": "user", "content": "B"})
     assert ctx1.prefix_hash == ctx2.prefix_hash, "不同对话不应改变 prefix hash"
-
 
 # ── 测试 8: 工具调用后前缀不变 ──
 
@@ -373,7 +353,6 @@ def test_tool_cycle():
     )
 
     assert before_prefix_bytes == after_prefix_bytes, "工具调用不应改变 prefix 字节"
-
 
 # ── 测试 9: 优化建议 - 计算可缓存前缀占比 ──
 
@@ -414,7 +393,6 @@ def test_cache_efficiency():
         # 缓存命中率应该稳定在高位
         for turn, _, _, _, ratio in stats:
             assert ratio >= 70.0, f"第 {turn} 轮缓存命中率过低: {ratio:.1f}%"
-
 
 # ═══════════════════════════════════════════════════════════════
 # 独立脚本模式：python tests/test_prefix_cache.py 跑全部并出报告。

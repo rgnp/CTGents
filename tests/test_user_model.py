@@ -5,11 +5,6 @@
 """
 
 import dataclasses
-import sys
-from pathlib import Path
-
-sys.path.insert(0, str(Path(__file__).parent.parent))
-
 import importlib
 
 import pytest
@@ -34,22 +29,18 @@ def iso_mem(monkeypatch, tmp_path):
     mem.mark_dirty()
     return d, mem
 
-
 def _log(*pairs: tuple[str, str]) -> list[dict]:
     return [{"role": r, "content": c} for r, c in pairs]
-
 
 def _patch_params(monkeypatch, **kw):
     monkeypatch.setattr(user_model, "USER_MODEL",
                         dataclasses.replace(user_model.USER_MODEL, **kw))
-
 
 # ── digest / 计数 ──
 
 def test_count_user_messages_ignores_blank():
     log = _log(("user", "a"), ("assistant", "b"), ("user", "c"), ("user", "   "))
     assert user_model._count_user_messages(log) == 2
-
 
 def test_digest_drops_tool_noise():
     log = [
@@ -64,13 +55,11 @@ def test_digest_drops_tool_noise():
     assert "工具结果" not in d        # tool 消息被去掉
     assert "好的我查一下" not in d    # 带 tool_calls 的中间 assistant 被去掉
 
-
 def test_digest_truncates_to_budget_tail():
     log = _log(("user", "早期消息"), ("user", "结尾消息ABC" * 100))
     d = user_model._conversation_digest(log, 50)
     assert len(d) <= 50 + len("…（前略）\n")
     assert "ABC" in d  # 保尾部近因
-
 
 # ── 清洗 ──
 
@@ -80,12 +69,10 @@ def test_clean_output_strips_markdown_fence():
     assert "```" not in out
     assert "markdown" not in out.split("\n")[0]
 
-
 def test_clean_output_hard_caps_length(monkeypatch):
     _patch_params(monkeypatch, max_profile_chars=10)
     out = user_model._clean_output("x" * 200)
     assert len(out) <= 20  # 硬地板 = max_profile_chars * 2
-
 
 # ── 跳过条件（绝不触发 LLM）──
 
@@ -95,11 +82,9 @@ def test_skip_when_disabled(monkeypatch):
     assert user_model.harvest_user_profile(
         _log(("user", "a"), ("user", "b"), ("user", "c"))) is None
 
-
 def test_skip_when_too_few_user_messages(monkeypatch):
     _patch_params(monkeypatch, min_user_messages=3)
     assert user_model.harvest_user_profile(_log(("user", "a"), ("user", "b"))) is None
-
 
 # ── 收割（mock 隔离 backend）──
 
@@ -124,14 +109,12 @@ def test_harvest_calls_backend_isolated_and_cleans(monkeypatch, iso_mem):
     payload = captured["messages"][1]["content"]
     assert "现有档案" in payload and "本次对话" in payload  # 喂进了档案+对话
 
-
 def test_harvest_empty_output_returns_none(monkeypatch, iso_mem):
     from src import llm
     monkeypatch.setattr(llm.AVAILABLE_MODELS["pro"], "chat_non_stream",
                         lambda *_a, **_k: ("", None))
     log = _log(("user", "a"), ("user", "b"), ("user", "c"), ("assistant", "x"))
     assert user_model.harvest_user_profile(log) is None
-
 
 def test_harvest_network_failure_returns_none(monkeypatch, iso_mem):
     from src import llm
@@ -145,7 +128,6 @@ def test_harvest_network_failure_returns_none(monkeypatch, iso_mem):
     log = _log(("user", "a"), ("user", "b"), ("user", "c"), ("assistant", "x"))
     assert user_model.harvest_user_profile(log) is None
 
-
 # ── 落盘 + 注入（核心不变量：写了真被读）──
 
 def test_save_profile_type_user_no_severity(iso_mem):
@@ -157,12 +139,10 @@ def test_save_profile_type_user_no_severity(iso_mem):
     assert "type: user" in text
     assert "severity" not in text  # 无 severity → 不会被 _build_context 当 lesson 跳过
 
-
 def test_save_empty_is_noop(iso_mem):
     d, _mem = iso_mem
     assert user_model.save_user_profile("   ") is False
     assert not (d / "user-profile.md").exists()
-
 
 def test_saved_profile_is_injected_into_context(iso_mem):
     """关键不变量：落盘的档案出现在每轮注入文本里（不是只写不读）。"""
@@ -171,7 +151,6 @@ def test_saved_profile_is_injected_into_context(iso_mem):
     ctx = mem._build_context()
     assert ctx is not None
     assert "偏好简洁中文回复" in ctx
-
 
 def test_harvest_and_save_end_to_end(monkeypatch, iso_mem):
     _d, mem = iso_mem

@@ -6,10 +6,6 @@ type=knowledge → 注入的是一行摘要（非全文），故断言名字+首
 
 import dataclasses
 import importlib
-import sys
-from pathlib import Path
-
-sys.path.insert(0, str(Path(__file__).parent.parent))
 
 import pytest
 
@@ -28,15 +24,12 @@ def iso_mem(monkeypatch, tmp_path):
     mem.mark_dirty()
     return d, mem
 
-
 def _log(*pairs: tuple[str, str]) -> list[dict]:
     return [{"role": r, "content": c} for r, c in pairs]
-
 
 def _patch_params(monkeypatch, **kw):
     monkeypatch.setattr(project_model, "PROJECT_KNOWLEDGE",
                         dataclasses.replace(project_model.PROJECT_KNOWLEDGE, **kw))
-
 
 # ── 跳过条件（绝不触发 LLM）──
 
@@ -45,11 +38,9 @@ def test_skip_when_disabled(monkeypatch):
     assert project_model.harvest_project_knowledge(
         _log(("user", "a"), ("user", "b"), ("user", "c"))) is None
 
-
 def test_skip_when_too_few_user_messages(monkeypatch):
     _patch_params(monkeypatch, min_user_messages=3)
     assert project_model.harvest_project_knowledge(_log(("user", "a"), ("user", "b"))) is None
-
 
 # ── 收割（mock 隔离 backend）──
 
@@ -75,7 +66,6 @@ def test_harvest_isolated_and_cleans(monkeypatch, iso_mem):
     payload = captured["messages"][1]["content"]
     assert "现有档案" in payload and "本次对话" in payload
 
-
 def test_harvest_network_failure_returns_none(monkeypatch, iso_mem):
     from src import llm
     monkeypatch.setattr(project_model.time, "sleep", lambda *_a: None)
@@ -88,7 +78,6 @@ def test_harvest_network_failure_returns_none(monkeypatch, iso_mem):
     log = _log(("user", "a"), ("user", "b"), ("user", "c"), ("assistant", "x"))
     assert project_model.harvest_project_knowledge(log) is None
 
-
 # ── 落盘 + 注入（核心不变量：写了真被读）──
 
 def test_save_type_knowledge_no_severity(iso_mem):
@@ -98,12 +87,10 @@ def test_save_type_knowledge_no_severity(iso_mem):
     assert "type: knowledge" in text
     assert "severity" not in text  # 无 severity → 不被 _build_context 当 lesson 跳过
 
-
 def test_save_empty_is_noop(iso_mem):
     d, _mem = iso_mem
     assert project_model.save_project_knowledge("   ") is False
     assert not (d / "project-knowledge.md").exists()
-
 
 def test_saved_knowledge_indexed_into_context(iso_mem):
     """关键不变量：落盘的项目知识出现在每轮注入索引里（摘要形态，非全文）。"""
@@ -113,7 +100,6 @@ def test_saved_knowledge_indexed_into_context(iso_mem):
     assert ctx is not None
     assert "project-knowledge" in ctx       # 被索引
     assert "DATASET_XYZ" in ctx             # 首句关键内容进了摘要
-
 
 def test_harvest_and_save_end_to_end(monkeypatch, iso_mem):
     _d, mem = iso_mem

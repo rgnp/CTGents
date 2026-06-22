@@ -1,12 +1,9 @@
 """validate.py 测试 — 验证流水线的三阶段检查逻辑。"""
 
-import sys
 import tempfile
 from pathlib import Path
 
 import pytest
-
-sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from src.validate import (
     Phase,
@@ -51,7 +48,6 @@ class TestASTCheck:
         err = _ast_check(str(f))
         assert err is None
 
-
 class TestImportCheck:
     def test_stdlib_import(self, tmp_path):
         f = tmp_path / "m.py"
@@ -71,7 +67,6 @@ class TestImportCheck:
         err = _import_check(str(f))
         assert err is None
 
-
 class TestRuffCheck:
     def test_ruff_check_empty(self):
         """空文件列表 → 0 错误。"""
@@ -85,7 +80,6 @@ class TestRuffCheck:
         count, _ = _ruff_check([str(f)])
         # ruff 可能报告一些风格问题，但我们只关心不崩
         assert isinstance(count, int)
-
 
 class TestPreCommitChecks:
     def test_all_valid(self, tmp_path):
@@ -110,7 +104,6 @@ class TestPreCommitChecks:
         result = pre_commit_checks([str(f)])
         assert result.result == Result.PASS
 
-
 class TestSandboxTests:
     @pytest.mark.slow  # 真起子进程跑整套测试（实测 ~11s），移出快速门
     def test_quick_sandbox(self):
@@ -119,7 +112,6 @@ class TestSandboxTests:
         assert result.phase == Phase.SANDBOX_TEST
         assert isinstance(result.result, Result)
 
-
 class TestGetCoverage:
     def test_get_coverage(self):
         """_get_coverage 返回合法浮点数。"""
@@ -127,13 +119,11 @@ class TestGetCoverage:
         assert isinstance(cov, float)
         assert 0.0 <= cov <= 1.0
 
-
 class TestCountLintIssues:
     def test_count_lint(self):
         """_count_lint_issues 返回整数。"""
         count = _count_lint_issues()
         assert isinstance(count, int)
-
 
 class TestPostTestChecks:
     def test_coverage_not_decreased(self):
@@ -147,7 +137,6 @@ class TestPostTestChecks:
     def test_new_lint_errors(self):
         result = post_test_checks(0.50, 0.55, 3, 7)
         assert result.result == Result.FAIL
-
 
 class TestValidationReport:
     def test_format_report(self):
@@ -171,7 +160,6 @@ class TestValidationReport:
         formatted = format_report(report)
         assert "PASS" in formatted
 
-
 class TestValidate:
     def test_validate_no_files(self):
         """Validate 空文件列表 — 不崩。
@@ -193,7 +181,6 @@ class TestValidate:
         report = validate([str(f)])
         assert report.overall == Result.FAIL
         assert len(report.phases) == 1  # 只跑了 Phase 1
-
 
 if __name__ == "__main__":
     import inspect

@@ -1,10 +1,5 @@
 """差距检测框架测试：多信号源汇聚 + 排序 + 去重 + 缓存查询。"""
 
-import sys
-from pathlib import Path
-
-sys.path.insert(0, str(Path(__file__).parent.parent))
-
 import pytest
 
 from src.gaps import (
@@ -30,7 +25,6 @@ _CANNED_STATIC = Gap(
     suggestion="delete or mark", confidence=0.9, actionable=True,
 )
 
-
 def test_gap_defaults():
     g = Gap(source="test", gap_type="test", severity="medium", detail="test")
     assert g.affected_files == []
@@ -38,37 +32,30 @@ def test_gap_defaults():
     assert g.confidence == 0.0
     assert g.actionable is True
 
-
 def test_gapreport_defaults():
     r = GapReport()
     assert r.gaps == []
     assert r.sources_scanned == 0
     assert r.sources_failed == 0
 
-
 # 排序
-
 
 def test_gap_score_higher_for_more_severe():
     high = Gap(source="t", gap_type="t", severity="high", detail="", confidence=0.9, actionable=True)
     low = Gap(source="t", gap_type="t", severity="low", detail="", confidence=0.9, actionable=True)
     assert _gap_score(high) > _gap_score(low)
 
-
 def test_gap_score_higher_for_actionable():
     a = Gap(source="t", gap_type="t", severity="medium", detail="", confidence=0.9, actionable=True)
     b = Gap(source="t", gap_type="t", severity="medium", detail="", confidence=0.9, actionable=False)
     assert _gap_score(a) > _gap_score(b)
-
 
 def test_gap_score_higher_for_confident():
     a = Gap(source="t", gap_type="t", severity="medium", detail="", confidence=0.9, actionable=True)
     b = Gap(source="t", gap_type="t", severity="medium", detail="", confidence=0.3, actionable=True)
     assert _gap_score(a) > _gap_score(b)
 
-
 # 去重
-
 
 def test_deduplicate_removes_same_file_type():
     gaps = [
@@ -77,14 +64,12 @@ def test_deduplicate_removes_same_file_type():
     ]
     assert len(_deduplicate(gaps)) == 1
 
-
 def test_deduplicate_keeps_different_types_same_file():
     gaps = [
         Gap(source="s", gap_type="dead_code", severity="high", detail="a", affected_files=["src/a.py"]),
         Gap(source="s", gap_type="complexity", severity="high", detail="b", affected_files=["src/a.py"]),
     ]
     assert len(_deduplicate(gaps)) == 2
-
 
 def test_deduplicate_keeps_same_type_different_files():
     gaps = [
@@ -93,9 +78,7 @@ def test_deduplicate_keeps_same_type_different_files():
     ]
     assert len(_deduplicate(gaps)) == 2
 
-
 # 优先排序
-
 
 def test_prioritize_caps_at_top_n():
     gaps = [
@@ -105,18 +88,14 @@ def test_prioritize_caps_at_top_n():
     ]
     assert len(_prioritize(gaps, top_n=3)) == 3
 
-
 def test_prioritize_handles_empty():
     assert _prioritize([], top_n=5) == []
 
-
 # 探测器 — 用预置 gap 替代全项目实时扫描（7s→0s）
-
 
 def test_performance_detector_returns_list():
     result = _detect_performance_gaps()
     assert isinstance(result, list)
-
 
 def test_static_detector_returns_list(monkeypatch):
     import src.gaps as g
@@ -126,13 +105,10 @@ def test_static_detector_returns_list(monkeypatch):
     assert len(result) <= 3
     assert result[0].gap_type == "dead_code"
 
-
 # 格式化
-
 
 def test_format_empty_report():
     assert "未发现" in format_gap_report(GapReport())
-
 
 def test_format_report_with_gaps():
     report = GapReport(
@@ -145,7 +121,6 @@ def test_format_report_with_gaps():
     assert "主动进化" in output
     assert "test tool" in output
 
-
 def test_format_report_with_failures():
     report = GapReport(
         gaps=[Gap(source="t", gap_type="t", severity="medium", detail="d")],
@@ -153,9 +128,7 @@ def test_format_report_with_failures():
     )
     assert "信号源失败" in format_gap_report(report)
 
-
 # 报告缓存
-
 
 def test_get_last_report_none_before_detection():
     """首次调用前返回 None。"""
@@ -167,7 +140,6 @@ def test_get_last_report_none_before_detection():
     finally:
         gaps._LAST_REPORT = old
 
-
 def test_get_gap_by_index_out_of_range():
     from src import gaps
     old = gaps._LAST_REPORT
@@ -177,7 +149,6 @@ def test_get_gap_by_index_out_of_range():
         assert get_gap_by_index(2) is None
     finally:
         gaps._LAST_REPORT = old
-
 
 def test_get_gap_by_index_valid():
     from src import gaps
@@ -191,9 +162,7 @@ def test_get_gap_by_index_valid():
     finally:
         gaps._LAST_REPORT = old
 
-
 # 修复 prompt
-
 
 def test_make_fix_prompt_includes_details():
     gap = Gap(
@@ -207,9 +176,7 @@ def test_make_fix_prompt_includes_details():
     assert "delete or mark" in prompt
     assert "主动进化" in prompt
 
-
 # 集成 — 用预置替换静态扫描，保持管线接线测试价值
-
 
 def test_detect_all_gaps_does_not_crash(monkeypatch):
     import src.gaps as g

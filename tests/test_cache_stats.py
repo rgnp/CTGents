@@ -5,11 +5,6 @@
 - /context 尾部「× 请求数」高估 → 改每请求实测 payload 尾部（skip_volatile 的记 0）。
 """
 
-import sys
-from pathlib import Path
-
-sys.path.insert(0, str(Path(__file__).parent.parent))
-
 from src import llm
 
 
@@ -19,7 +14,6 @@ class _Usage:
         self.completion_tokens = c
         self.prompt_cache_hit_tokens = h
         self.prompt_cache_miss_tokens = p - h
-
 
 # ── 尾部实测 ──
 
@@ -39,11 +33,9 @@ def test_trailing_system_tokens_counts_only_tail():
     assert llm._trailing_system_tokens(full) == llm._trailing_system_tokens(tail_only)
     assert llm._trailing_system_tokens(full) > 0
 
-
 def test_trailing_zero_when_last_is_nonsystem():
     msgs = [{"role": "system", "content": "x"}, {"role": "user", "content": "hi"}]
     assert llm._trailing_system_tokens(msgs) == 0
-
 
 # ── 单轮累加器 + history 尾部 ──
 
@@ -77,7 +69,6 @@ def test_turn_accum_and_tail_history(monkeypatch, tmp_path):
     assert hist[0]["n"] == 1 and hist[1]["n"] == 1  # 各一条非 system 消息
     llm.reset_turn_accum()
 
-
 # ── 突刺取证：payload 结构指纹 ──
 
 def test_payload_fingerprint_front_hash_stable_when_front_unchanged(monkeypatch):
@@ -94,7 +85,6 @@ def test_payload_fingerprint_front_hash_stable_when_front_unchanged(monkeypatch)
     assert fp1["fe"] == fp2["fe"]      # 前沿（最早 3 条非 sys）没变，尾部追加不影响
     assert fp2["n"] > fp1["n"]         # 中段条数增长
 
-
 def test_payload_fingerprint_front_hash_changes_when_front_rewritten(monkeypatch):
     """靠前旧消息被改写 → fe 变（这正是要抓的"原地改写"信号）。"""
     monkeypatch.setattr(llm, "_last_req_time", None)
@@ -102,14 +92,12 @@ def test_payload_fingerprint_front_hash_changes_when_front_rewritten(monkeypatch
     b = [{"role": "user", "content": "Q1-REWRITTEN"}, {"role": "assistant", "content": "A1"}]
     assert llm._payload_fingerprint(a)["fe"] != llm._payload_fingerprint(b)["fe"]
 
-
 def test_payload_fingerprint_gap_grows(monkeypatch):
     """第二次调用记录与上次的间隔（>=0），首次为 0。"""
     monkeypatch.setattr(llm, "_last_req_time", None)
     assert llm._payload_fingerprint([{"role": "user", "content": "x"}])["g"] == 0.0
     g2 = llm._payload_fingerprint([{"role": "user", "content": "x"}])["g"]
     assert g2 >= 0.0
-
 
 def test_payload_fingerprint_detects_tools_change(monkeypatch):
     """工具表变化要被 th_chg 抓到（lcpr 只看 messages 会漏）。首次无基准→False。"""
@@ -129,7 +117,6 @@ def test_payload_fingerprint_detects_tools_change(monkeypatch):
                                                      {"function": {"name": "b"}}]})
     fp3 = llm._payload_fingerprint(msgs)
     assert fp3["th_chg"] is True
-
 
 def test_dump_payload_writes_canonical_and_hashes(monkeypatch, tmp_path):
     """CTG_DUMP_PAYLOADS 开时落盘 canonical_request + 三个哈希 + system_fingerprint。"""
@@ -152,7 +139,6 @@ def test_dump_payload_writes_canonical_and_hashes(monkeypatch, tmp_path):
     assert rec["messages_hash"] == llm._hash_obj(msgs)
     assert "request_hash" in rec
 
-
 def test_reset_turn_accum_zeroes(monkeypatch):
     monkeypatch.setattr(llm, "_current_session_id", "")
     monkeypatch.setattr(llm, "_CACHE_STATS", {"pro": dict(llm._EMPTY_STATS)})
@@ -161,7 +147,6 @@ def test_reset_turn_accum_zeroes(monkeypatch):
     assert llm.get_turn_accum()["requests"] >= 1
     llm.reset_turn_accum()
     assert llm.get_turn_accum() == {"requests": 0, "completion_tokens": 0, "miss": 0}
-
 
 # ── 新会话 ""→真 id 切换：首请求统计不丢 ──
 
@@ -180,7 +165,6 @@ def test_first_request_carried_over_on_session_assign(monkeypatch, tmp_path):
     assert st["total"]["requests"] == 2          # 首请求没丢
     assert st["total"]["prompt_tokens"] == 2100
 
-
 def test_first_request_carried_over_for_flash(monkeypatch, tmp_path):
     """切到 Flash 时首请求也要搬过去——曾因 carry-over 判据写死 'pro'，Flash 首轮
     被漏判为空：状态栏首次对话不显示 cache、/context 误报"本会话暂无请求"。
@@ -195,7 +179,6 @@ def test_first_request_carried_over_for_flash(monkeypatch, tmp_path):
     st = llm.get_cache_stats("sess-flash")  # 真 id 无文件，应从内存搬运（非只看 pro）
     assert st["total"]["requests"] == 1
     assert st["total"]["cache_hit_tokens"] == 600
-
 
 def test_resume_existing_session_loads_not_carries(monkeypatch, tmp_path):
     """恢复已有会话（真 id 已有统计文件）→ 正常加载，不把空的无名累计搬上去。"""
@@ -213,7 +196,6 @@ def test_resume_existing_session_loads_not_carries(monkeypatch, tmp_path):
     st = llm.get_cache_stats("sess-old")
     assert st["total"]["requests"] == 8          # 7 加载 + 1 本次
 
-
 # ── /context：无请求时显示提示而非静默省略整段 ──
 
 def test_cache_section_note_when_zero_requests(monkeypatch):
@@ -230,7 +212,6 @@ def test_cache_section_note_when_zero_requests(monkeypatch):
     commands._append_cache_section(lines, _Ctx(), "sid")
     assert any("API 缓存" in ln for ln in lines)
     assert any("暂无 API 请求" in ln for ln in lines)
-
 
 # ── 突刺取证判词 ──
 
@@ -258,7 +239,6 @@ def test_spike_verdict_classifies():
     # 首请求（prev=None）大半没命中 = 冷启动，不误判
     assert "冷启动" in _spike_verdict({"fe": "a", "lcpr": 0.0}, None, 11176, 3968, 36.0)
 
-
 def test_miss_attribution_credits_cold_and_caps_tail_per_request():
     """归因逐请求拆：首请求大面积 miss=冷启动；尾部 miss 每条 ≤ 该条总 miss（不虚高）。"""
     from unittest.mock import patch
@@ -284,7 +264,6 @@ def test_miss_attribution_credits_cold_and_caps_tail_per_request():
     assert tail_val <= 601
     assert "4,607" in text or "对话增量" in text             # 工具输出进对话增量
 
-
 def test_isolated_single_shot_not_called_cold_start():
     """隔离单发(会话收割等:n=1、独立上下文)不得被喊成主会话冷启动。
 
@@ -303,7 +282,6 @@ def test_isolated_single_shot_not_called_cold_start():
     assert "冷启动" in _spike_verdict({"n": 1, "lcpr": 0.0}, None, 7524, 0, 0.0)
     # 压缩后(n 缩到几十、非 1~2)不误判为隔离单发
     assert not _is_isolated_single_shot({"n": 30}, {"n": 202})
-
 
 def test_miss_attribution_isolates_single_shot_call():
     """隔离单发的 miss 进『隔离单发』桶，不污染『对话增量』。"""

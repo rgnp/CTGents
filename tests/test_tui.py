@@ -20,7 +20,8 @@ from src.tui import (
 )
 
 
-async def _wait_screen(app, pilot, name: str, ticks: int = 40) -> bool:
+async def _wait_screen(app, pilot, name: str, ticks: int = 20) -> bool:
+    """轮询直到目标屏出现（默认 20×0.05=1s 兜底），替代长盲等。"""
     for _ in range(ticks):
         if type(app.screen).__name__ == name:
             return True
@@ -41,7 +42,7 @@ class TestSplashLogoVisible:
             app = CTGentsApp(CacheContext(), None, [])
             async with app.run_test(size=(100, 30)) as pilot:
                 await pilot.pause()
-                for _ in range(30):
+                for _ in range(10):
                     await pilot.pause(0.05)
                 if type(app.screen).__name__ != "SplashScreen":
                     return
@@ -228,8 +229,8 @@ class TestChatScreen:
                 await pilot.pause()
                 # 用户消息现按 markdown 渲染(classes=user)，agent 回复 classes=agent；
                 # 工具结果/system 注入仍被跳过(不渲染)。
-                assert len(list(app.screen.query(".user-bubble"))) == 1
-                assert len(list(app.screen.query(".agent-bubble"))) == 1
+                assert len(list(app.screen.query(".msg-role.user"))) == 1
+                assert len(list(app.screen.query(".msg-role.agent"))) == 1
 
         asyncio.run(go())
 
@@ -252,12 +253,9 @@ class TestChatScreen:
                 app.screen._echo_conversation()
                 await pilot.pause()
                 cols = list(app.screen.query(Collapsible))
-                # 2 思考折叠 = 2，工具已聚合为单行文字
+                # 2 思考折叠，工具不再渲染
                 assert len(cols) == 2, f"应有 2 个折叠块(思考)，实得 {len(cols)}"
                 assert all(c.collapsed for c in cols), "回放的折叠块应默认折叠"
-                # 工具调用聚合为一行
-                tool_lines = app.screen.query(".tool")
-                assert len(tool_lines) == 1, "工具应聚合为一行"
 
         asyncio.run(go())
 

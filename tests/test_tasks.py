@@ -3,18 +3,12 @@
 全程把 tasks 路径指向 tmp_path，绝不触碰真实 tasks/current.md。
 """
 
-import sys
-from pathlib import Path
-
-sys.path.insert(0, str(Path(__file__).parent.parent))
-
 import pytest
 
 import src.tasks as tasks
 from src.cache_context import CacheContext
 
 pytestmark = pytest.mark.slow
-
 
 @pytest.fixture(autouse=True)
 def _isolate_tasks(tmp_path, monkeypatch):
@@ -26,7 +20,6 @@ def _isolate_tasks(tmp_path, monkeypatch):
     monkeypatch.setattr(tasks, "ARCHIVE_DIR", archive)
     return current, archive
 
-
 _UNFINISHED = (
     "# 长任务：抓论文\n\n"
     "# 目标锚点\n找到最新的轨迹预测论文并分析其方法论。\n\n"
@@ -37,32 +30,26 @@ _HAS_RETRY = "# 出问题了\n\n# 目标锚点\n修复。\n\n- [r] Step 1: 验�
 _HAS_BLOCKED = "# 等确认\n\n# 目标锚点\n等。\n\n- [!] Step 1: 等用户确认\n"
 _ANCHORED_UNFINISHED = _UNFINISHED
 
-
 def test_has_unfinished_true(_isolate_tasks):
     _isolate_tasks[0].write_text(_UNFINISHED, encoding="utf-8")
     assert tasks.has_unfinished() is True
-
 
 def test_has_unfinished_false_when_all_done(_isolate_tasks):
     _isolate_tasks[0].write_text(_DONE, encoding="utf-8")
     assert tasks.has_unfinished() is False
 
-
 def test_has_unfinished_false_when_missing(_isolate_tasks):
     assert tasks.has_unfinished() is False
-
 
 def test_has_unfinished_false_when_all_retry(_isolate_tasks):
     """[r] 不算活跃未完成——agent 不需要自动续做。"""
     _isolate_tasks[0].write_text(_HAS_RETRY, encoding="utf-8")
     assert tasks.has_unfinished() is False
 
-
 def test_has_unfinished_false_when_all_blocked(_isolate_tasks):
     """[!] 不算活跃未完成。"""
     _isolate_tasks[0].write_text(_HAS_BLOCKED, encoding="utf-8")
     assert tasks.has_unfinished() is False
-
 
 class TestIsAllDone:
     def test_true_when_all_x(self, _isolate_tasks):
@@ -102,7 +89,6 @@ class TestIsAllDone:
         )
         assert tasks.is_all_done() is False
 
-
 class TestCreateTask:
     def test_appends_archive_step(self, _isolate_tasks):
         current, _ = _isolate_tasks
@@ -128,7 +114,6 @@ class TestCreateTask:
         assert "# 目标锚点" in result
         assert not _isolate_tasks[0].exists()
 
-
 class TestExtractAnchor:
     def test_simple_anchor(self):
         anchor = tasks._extract_anchor("# 目标锚点\n一句话目标。\n\n正文")
@@ -145,7 +130,6 @@ class TestExtractAnchor:
         anchor = tasks._extract_anchor("# 目标锚点\n某目标。\n## 步骤\n- [ ] 1")
         assert anchor == "某目标。"
 
-
 class TestAnchorInjection:
     def test_anchor_injected_in_context(self, _isolate_tasks):
         _isolate_tasks[0].write_text(_UNFINISHED, encoding="utf-8")
@@ -161,7 +145,6 @@ class TestAnchorInjection:
         msg = tasks.make_task_context_message()
         assert msg is not None
         assert "🎯 目标锚点" not in msg["content"]
-
 
 class TestAutoArchive:
     def test_auto_archives_when_all_done(self, _isolate_tasks, monkeypatch):
@@ -188,7 +171,6 @@ class TestAutoArchive:
         assert msg is None
         assert current.read_text(encoding="utf-8") == _HAS_RETRY
 
-
 def test_context_message_injected_when_unfinished(_isolate_tasks):
     _isolate_tasks[0].write_text(_UNFINISHED, encoding="utf-8")
     msg = tasks.make_task_context_message()
@@ -197,7 +179,6 @@ def test_context_message_injected_when_unfinished(_isolate_tasks):
     assert msg["role"] == "system"
     assert "未完成的长任务" in msg["content"]
     assert "47/250" in msg["content"]
-
 
 def test_context_message_with_auto_archive_when_done(_isolate_tasks, monkeypatch):
     _isolate_tasks[0].write_text(_DONE, encoding="utf-8")
@@ -208,7 +189,6 @@ def test_context_message_with_auto_archive_when_done(_isolate_tasks, monkeypatch
     assert msg is not None
     assert "已自动归档" in msg["content"]
     assert _isolate_tasks[0].read_text(encoding="utf-8") == ""
-
 
 def test_archive_moves_and_clears(_isolate_tasks):
     current, archive = _isolate_tasks
@@ -221,13 +201,11 @@ def test_archive_moves_and_clears(_isolate_tasks):
     assert "Step 1" in archived[0].read_text(encoding="utf-8")
     assert current.read_text(encoding="utf-8") == ""
 
-
 def test_archive_derives_slug_from_title(_isolate_tasks):
     current, archive = _isolate_tasks
     current.write_text(_UNFINISHED, encoding="utf-8")
     tasks.archive_current()
     assert len(list(archive.glob("*.md"))) == 1
-
 
 def test_clear_empties_without_archive(_isolate_tasks):
     current, archive = _isolate_tasks
@@ -235,7 +213,6 @@ def test_clear_empties_without_archive(_isolate_tasks):
     tasks.clear_current()
     assert current.read_text(encoding="utf-8") == ""
     assert not archive.exists()
-
 
 class TestTaskCommand:
     def test_view_empty(self, _isolate_tasks):
@@ -261,7 +238,6 @@ class TestTaskCommand:
         _isolate_tasks[0].write_text(_UNFINISHED, encoding="utf-8")
         r = cmds.dispatch("/task archive ad-papers", CacheContext(), None)
         assert "已归档" in r.message
-
 
 class TestSuggestTaskNudge:
     """maybe_suggest_task_nudge: 事实触发(请求数+无任务)、判断留 agent、一会话一次。"""
