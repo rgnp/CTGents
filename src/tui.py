@@ -474,7 +474,7 @@ class SaveSelectScreen(Screen):
     SaveSelectScreen { align: center middle; background: $background; }
     #selectwrap { width: auto; height: auto; align: center top; }
     #savetitle {
-        color: $accent; text-style: bold; content-align: center middle;
+        color: $primary; text-style: bold; content-align: center middle;
         margin-bottom: 1; border-top: solid $primary-darken-3; padding-top: 1;
     }
     #savebox {
@@ -483,6 +483,8 @@ class SaveSelectScreen(Screen):
     }
     #saves { height: auto; max-height: 16; background: $surface; }
     #saves > ListItem { padding: 0 1; min-height: 1; }
+    #saves > ListItem:even { background: $panel; }
+    #saves > ListItem:odd { background: $surface; }
     #saves > ListItem.--highlight {
         background: $primary; color: $background; text-style: bold;
     }
@@ -511,16 +513,17 @@ class SaveSelectScreen(Screen):
         # 计算最长名字，右对齐时间
         max_name = max((len(infos.get(s, {}).get("name", s)) for s in sessions), default=20)
         items: list[ListItem] = []
-        for sid in sessions:
+        for i, sid in enumerate(sessions):
             info = infos.get(sid, {"name": sid, "date": "", "time": ""})
             name = info["name"]
             time_text = f"{info['date']} {info['time']}".strip()
+            prefix = "● " if i == 0 else "  "
             if time_text:
                 # 填空格让时间右对齐，pad 保证对齐
                 pad = max_name - len(name) + 2
-                text = name + " " * max(pad, 1) + time_text
+                text = prefix + name + " " * max(pad, 1) + time_text
             else:
-                text = name
+                text = prefix + name
             items.append(ListItem(Label(text), name=sid))
         with Vertical(id="selectwrap"):
             yield Static("◆ SELECT  SAVE ◆", id="savetitle")
@@ -615,6 +618,7 @@ class ChatScreen(Screen):
         min-height: 1; max-height: 30vh; padding: 0 1;
     }
     #prompt:focus { border-top: solid $primary; border-bottom: solid $primary; }
+    #prompt.has-text { border-top: solid $success; }
     #status {
         height: 1; color: $primary; background: $panel; padding: 0 1;
     }
@@ -686,6 +690,16 @@ class ChatScreen(Screen):
         self.set_interval(0.5, self._refresh_status)
         self.set_interval(0.5, self._drain_jobs)
 
+    def on_text_area_changed(self, event: TextArea.Changed) -> None:
+        """内容非空时给输入框加 has-text 样式类（上边框变绿）。"""
+        if event.text_area.id != "prompt":
+            return
+        p = self.query_one("#prompt", TextArea)
+        if p.text.strip():
+            p.add_class("has-text")
+        else:
+            p.remove_class("has-text")
+
     def _load_pending(self) -> None:
         """进聊天屏时按存档选择结果加载会话（NEW=不加载，沿用 splash 初始化的空会话）。"""
         sid = self.app.pending_load
@@ -728,12 +742,13 @@ class ChatScreen(Screen):
         self._history.append(text)
         self._history_idx = -1
         self._history_draft = ""
-        # 本轮新起：记录用户时间戳（供 agent header 降噪用）+ 重置 header 守卫
-        self._last_user_stamp = time.strftime("%H:%M")
+        # 用户时间戳降噪（同分钟不重复显示）+ 重置 header 守卫
+        stamp = time.strftime("%H:%M")
+        time_part = f"  ·  {stamp}" if stamp != self._last_user_stamp else ""
+        self._last_user_stamp = stamp
         self._agent_header_mounted = False
-        stamp = self._last_user_stamp
         t = self.query_one("#transcript", VerticalScroll)
-        t.mount(Label(f"━ 你  ·  {stamp}", classes="msg-header user"))
+        t.mount(Label(f"━ 你{time_part}", classes="msg-header user"))
         t.mount(Markdown(text, classes="msg-body user-body"))
         t.scroll_end(animate=False)
         if text.startswith("/"):
@@ -820,6 +835,7 @@ class ChatScreen(Screen):
     def _run_turn(self, text: str) -> None:
         self._busy = True
         self._turn_started = time.monotonic()
+        self._refresh_status()  # 即时反馈：状态栏立即闪烁，消除空档
         # 不禁用输入框——禁用会让"按 Esc 后到本轮真正收尾(done)之间"无法打字（中断在下一个
         # LLM 流检查点才生效，工具/网络期间可能好几秒）。保持可输入：用户随时能边跑边写下一句/
         # 截停指令；_busy 守卫负责"跑着时别提交新一轮"。
@@ -912,10 +928,13 @@ class ChatScreen(Screen):
                     self._reset_tool_calls()
                     self._agent_header_mounted = False
                     self._busy = False
-                    # 轮次分隔
+                    # 轮次分隔（全宽线 + 淡入动效）
                     if self._turn_count > 0:
                         try:
-                            transcript.mount(Static("╌╌╌", classes="turn-sep"))
+                            sep = Static("╌" * 40, classes="turn-sep")
+                            sep.styles.opacity = 0.0
+                            transcript.mount(sep)
+                            sep.styles.animate("opacity", 1.0, duration=0.3)
                             transcript.scroll_end(animate=False)
                         except Exception:
                             pass
@@ -974,6 +993,10 @@ class ChatScreen(Screen):
             self._activate(box)
         else:
             self._reasoning_box.update(self._cur_reasoning)
+            # 脉冲动效：微暗→恢复，让用户感知有新内容涌入
+            with contextlib.suppress(Exception):
+                self._reasoning_box.styles.animate("opacity", 0.85, duration=0.05)
+                self._reasoning_box.styles.animate("opacity", 1.0, duration=0.08)
         self._reasoning_dirty = False
 
     def _activate(self, box: Collapsible) -> None:
@@ -1059,6 +1082,7 @@ class ChatScreen(Screen):
             folded = len([m for m in all_msgs[:skip_up_to] if m.get("role") in ("user", "assistant")])
             t.mount(Static(f"⋯ 省略前 {len(user_indices) - n} 轮（{folded} 条消息）", classes="meta"))
 
+        last_shown_user_stamp = ""
         for i, m in enumerate(all_msgs):
             if i < skip_up_to:
                 continue
@@ -1068,7 +1092,9 @@ class ChatScreen(Screen):
                 text = _strip_user_wrappers(content)
                 if text:
                     stamp = time.strftime("%H:%M")
-                    t.mount(Label(f"━ 你  ·  {stamp}", classes="msg-header user"))
+                    time_part = f"  ·  {stamp}" if stamp != last_shown_user_stamp else ""
+                    last_shown_user_stamp = stamp if time_part else last_shown_user_stamp
+                    t.mount(Label(f"━ 你{time_part}", classes="msg-header user"))
                     t.mount(Markdown(text, classes="msg-body user-body"))
                     t.scroll_end(animate=False)
             elif role == "assistant":
