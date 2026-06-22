@@ -451,6 +451,45 @@ def _spike_verdict(e: dict, prev: dict | None, p: int, h: int, pct: float) -> st
     return ""
 
 @builtin("/compact", description="手动压缩上下文：驱逐旧对话换摘要（不必等 65% 自动触发）")
+
+# ═══════════════════════════════════════════════════════════════
+# Psyche 指令
+# ═══════════════════════════════════════════════════════════════
+
+@builtin("/psyche", description="加载/卸载/列出 Psyche 认知框架",
+         usage="/psyche load <name>  — 读取核心并注入上下文，位置固定，不影响缓存\n"
+               "/psyche unload <name> — 从上下文移除\n"
+               "/psyche list          — 查看当前已加载的 psyche")
+def _cmd_psyche(r: CmdResult, ctx, _args, _sid) -> None:
+    if not _args:
+        r.message = "用法: /psyche load|unload|list [name]"
+        return
+    sub = _args[0].lower()
+
+    from .psyche_bridge import inject_psyche, remove_psyche, status_text
+
+    if sub == "list":
+        r.message = status_text(ctx)
+    elif sub == "load":
+        if len(_args) < 2:
+            r.message = "用法: /psyche load <name>"
+            return
+        name = _args[1].lower().replace(" ", "-")
+        r.message = inject_psyche(ctx, name)
+        if r.message.startswith("✅"):
+            r.save = True
+    elif sub == "unload":
+        if len(_args) < 2:
+            r.message = "用法: /psyche unload <name>"
+            return
+        name = _args[1].lower().replace(" ", "-")
+        r.message = remove_psyche(ctx, name)
+        if r.message.startswith("✅"):
+            r.save = True
+    else:
+        r.message = f"未知子指令 '{sub}'。可用: load, unload, list"
+
+
 def _cmd_compact(r: CmdResult, ctx, _args, _sid) -> None:
     from .llm import MAX_CONTEXT_TOKENS, _compact_context
     from .tools.tokens import count_messages_tokens

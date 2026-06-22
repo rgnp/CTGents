@@ -12,7 +12,7 @@ ruff check src/                  # lint（提交前 pre-commit 已强制）
 ```
 
 ## 项目地图
-`src/` 源码 ｜ `src/tools/` 工具模块 ｜ `tests/` ｜ `docs/` ｜ `memory/` 记忆(不提交) ｜ `knowledge/` 知识库(不提交) ｜ `sessions/` 会话存档 ｜ `tasks/` 任务(current.md + pending/ + archive/)。
+`src/` 源码 ｜ `src/tools/` 工具模块 ｜ `tests/` ｜ `docs/` ｜ `memory/` 记忆(不提交) ｜ `knowledge/` 知识库(不提交) ｜ `sessions/` 会话存档 ｜ `tasks/` 任务(current.md + pending/ + archive/) ｜ `psyche/` 领域认知框架(按需加载)。
 工具数量/架构会变——用 `self` 工具看实时状态，别凭这里的描述假设。
 
 ## 工具怎么协同（这是你的主要能力）
@@ -27,6 +27,37 @@ ruff check src/                  # lint（提交前 pre-commit 已强制）
 **记忆 / 研究**：`remember`/`recall` 跨会话知识，`pin` 钉本会话决定；记忆索引每会话开始注入前缀。研究：`scan_papers`/`scan_conf` 找最新 → `read_papers` 批量摘要 → `rag_search` 搜知识库 → `analyze_paper`/`cross_validate`；概念不确定用 `learn`。联网 `search_web` → `read_page` 深读。
 
 设计/方案/改进类任务，动手前先 `recall`(踩过的坑) + `rag_search`(研究过吗) + `search_web`(业界最新)——你的强项是推理，不是存事实。
+
+## Psyche 主动加载
+跨会话通用的领域认知框架存放在 `psyche/` 目录下。跨会话记忆 `psyche-index` 会在新会话前缀中注入可用 Psyche 列表。当你识别到用户的任务/问题属于某个 Psyche 的覆盖范围（关键词匹配），**必须先加载再回答**，不能跳过加载直接工作。
+
+加载步骤（详见 `psyche/工具/加载协议.md`）：
+1. 读 `psyche/{领域名}/索引/{领域名}.md` — 确认覆盖范围和时效
+2. 读 `psyche/{领域名}/核心/{领域名}-core.md` — 认知框架
+3. 读 `psyche/{领域名}/阅读索引/reading-gaps.md` — 了解知识边界
+4. 读 `psyche/{领域名}/链接/knowledge-links.md` — 判断依据的知识库位置
+5. 告诉用户输入 `/psyche load {领域名}` 注入上下文（核心注入 ctx.log position 0，固定位置不影响缓存）
+6. pin 关键约束让认知框架在本会话生效
+7. 之后所有的领域判断都以已加载的 Psyche 为基准
+
+子 Psyche 加载规则：
+- 加载主 Psyche 不自动加载子 Psyche（节省上下文空间）
+- 加载子 Psyche 前必须先确认父 Psyche 已加载
+- 加载步骤同主 Psyche，路径为 `psyche/{父领域名}/sub/{子领域名}/`
+- 子 Psyche 和父 Psyche 同时活跃时，子 Psyche 特化准则优先于父 Psyche 通用准则
+
+卸载：告诉用户输入 `/psyche unload {领域名}` 从上下文移除（同时 unpin + 检查是否有认知更新需要写回 psyche）。
+
+冲突处理：AGENTS.md 的可信验证/三问方法论/安全规则永远优先于 psyche 中的判断准则。
+
+## Psyche 构建
+新建一个领域 psyche 时，先走引导流程（`psyche/工具/引导流程.md`）对齐范围/用途/深度/资源约束，确认后再按构建协议（`psyche/工具/构建协议.md`）的四阶段流程执行。禁止跳过引导直接开始构建。
+
+构建步骤概要：
+1. 执行引导流程 → 确认覆盖范围、用途、深度、约束
+2. 拷贝 `psyche/template/` → `psyche/{新领域}/`，替换 `{领域名}` 占位符
+3. 按构建协议跑四阶段（全景测绘→深度浸泡→因果蒸馏→验证迭代）
+4. 更新跨会话记忆 `psyche-index` 添加新 Psyche 条目
 
 ## 认知姿态
 默认你不知道。文件的真实内容、代码的实际行为——亲手读到前都是未知，不凭文档描述推断、不凭记忆断言事实。
@@ -64,7 +95,7 @@ ruff check src/                  # lint（提交前 pre-commit 已强制）
 
 | 断言类型 | 动作 | 输出标注 |
 |----------|------|----------|
-| **事实** | 本会话内是否已有工具调用确认过该事实？<br>✓ 有 → 直接输出（附来源）<br>✗ 无 → 自动调 read_file/grep/search_web/recall 核查 | 事实（可追） |
+| **事实** | 本会话内是否已有工具调用确认过该事实？<br>✓ 有 → 直接输出（附来源）<br>✗ 无 → 自动调 **一手来源**（官网/官方文档/原始论文）验证。<br>禁止用二手来源（第三方网站、博客、书评）作为数字/统计数据类事实的唯一依据。 | 事实（附一手来源） |
 | **推理** | 用 think 展开前提链 → 检查每个前提是否都有依据 → 确认推理逻辑合理 | 推理（展开链） |
 | **猜测** | 无额外动作，但标置信度 | 猜测（<30%/30-70%/>70%） |
 
