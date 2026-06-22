@@ -378,32 +378,59 @@ def _status_line(ctx, session_id: str) -> str:
 # ═══════════════════════════════════════════════════════
 
 
-_WAVE_CHARS = ["▁", "▂", "▃", "▄", "▅", "▆", "▇", "█", "▇", "▆", "▅", "▄", "▃", "▂"]
-_WAVE_CENTER = len(_WAVE_CHARS) // 2
+def _make_wave_pixel(phase: float, amplitude: int, width: int) -> tuple[str, str]:
+    """返回 (顶行, 底行) — 2 行像素海浪，多频率叠加产生多方向流动感。
 
-
-def _make_wave(phase: float, amplitude: int, width: int) -> str:
-    """生成一行海浪波型。amplitude=波高(1-7)，phase=动画相位。"""
-    chars = []
+    三个不同速度的正弦波互相干涉，产生看似从不同方向涌来的复杂波浪。
+    """
+    top = []
+    bot = []
     for x in range(width):
-        angle = (x / max(width, 1)) * 4 * math.pi + phase
-        raw = math.sin(angle)
-        idx = int(_WAVE_CENTER + raw * amplitude)
-        idx = max(0, min(len(_WAVE_CHARS) - 1, idx))
-        chars.append(_WAVE_CHARS[idx])
-    return "".join(chars)
+        # 三波叠加：主波 + 次级反向波 + 微扰波
+        a1 = (x / max(width, 1)) * 4 * math.pi + phase * 1.0
+        a2 = (x / max(width, 1)) * 7 * math.pi + phase * 0.6
+        a3 = (x / max(width, 1)) * 2 * math.pi + phase * 1.5
+        raw = math.sin(a1) * 0.55 + math.sin(a2) * 0.30 + math.sin(a3) * 0.15
+        h = (raw + 1) * 0.5  # normalize 0→1
+        # 像素化：每列 2 像素高
+        if h > 0.72:
+            top.append("█")
+            bot.append("█")
+        elif h > 0.38:
+            top.append(" ")
+            bot.append("▄")
+        else:
+            top.append(" ")
+            bot.append(" ")
+    return "".join(top), "".join(bot)
 
 
 def _mount_moonlight(screen: Screen) -> None:
-    """在屏幕顶部叠 4 层蓝白辉光（陡峭衰减），模拟月光从海面洒落。"""
+    """在屏幕顶部渲染月牙 + 辐射辉光。"""
     with contextlib.suppress(Exception):
-        moonlight = screen.query_one("#moonlight", Vertical)
-        # 陡峭衰减：亮→暗，形成海面月光焦点
-        layers = ["#232d3c", "#171f2d", "#111825", "#0d1420"]
-        for color in layers:
-            bar = Static("")
-            bar.styles.background = color
-            moonlight.mount(bar)
+        ml = screen.query_one("#moonlight", Vertical)
+        # 清除旧内容（重入时）
+        ml.remove_children()
+        _mount_moon_glow(ml)
+
+
+def _mount_moon_glow(container: Vertical) -> None:
+    """挂载月牙 + 多层同心辉光，从亮到暗向外辐射。"""
+    # 月牙：像素圆 + 辉光圈
+    # 从内到外：█ 月牙本体 → ▓ 内辉 → ▒ 中辉 → ░ 外辉
+    rings = [
+        "                ░░▓██▓░░                ",
+        "              ░▓██████▓░                ",
+        "            ░░▓████████▓░░              ",
+        "           ░▓████████████▓░             ",
+        "         ░░▓██████████████▓░░           ",
+        "        ░▓██████████████████▓░          ",
+        "       ░░▓████████████████████▓░░       ",
+    ]
+    for line in rings:
+        label = Label(line)
+        label.styles.text_align = "center"
+        container.mount(label)
 
 
 class SplashScreen(Screen):
@@ -421,9 +448,9 @@ class SplashScreen(Screen):
     CSS = """
     SplashScreen { align: center middle; background: $background; }
     #moonlight {
-        dock: top; width: 100%; height: 4;
+        dock: top; width: 100%; height: auto;
     }
-    #moonlight > Static { width: 100%; height: 1; }
+    #moonlight > Label { width: 100%; height: 1; }
     #logo_area { width: auto; height: auto; }
     #logo_area > Static { width: auto; height: 1; }
     #buttons { width: auto; height: auto; margin-top: 4; }
@@ -650,14 +677,12 @@ class ChatScreen(Screen):
     .thinking { }  /* 折叠态标题由 Textual Collapsible 内置样式处理；展开后内容继承 $foreground */
     .brk  { color: $warning; text-style: bold; content-align: center middle; margin: 1 0; }
     /* ── 顶部月光光晕 ── */
-    #moonlight { dock: top; width: 100%; height: 4; }
-    #moonlight > Static { width: 100%; height: 1; }
+    #moonlight { dock: top; width: 100%; height: auto; }
+    #moonlight > Label { width: 100%; height: 1; }
     /* ── 底部栏 ── */
     #bottombar { dock: bottom; height: auto; }
-    #wavebar {
-        height: 1; color: $primary-darken-2; background: transparent;
-        text-style: dim; padding: 0 1; margin: 0;
-    }
+    #wavebar { height: 2; color: $primary; background: transparent; text-style: dim; }
+    #wavebar > Static { height: 1; padding: 0 1; margin: 0; }
     #prompt {
         border: none; border-top: solid $primary-darken-1;
         border-bottom: solid $panel;
@@ -726,7 +751,9 @@ class ChatScreen(Screen):
         yield Vertical(id="moonlight")
         yield VerticalScroll(id="transcript")
         with Vertical(id="bottombar"):
-            yield Static("", id="wavebar")
+            with Vertical(id="wavebar"):
+                yield Static("", id="wavetop")
+                yield Static("", id="wavebot")
             yield TextArea(
                 "",
                 placeholder="> 输入消息（/help 查看指令）",
@@ -766,10 +793,14 @@ class ChatScreen(Screen):
             self._wave_amplitude = self._wave_target
         # 相位步进（波浪流动感）
         self._wave_phase += 0.15 * (1.0 + self._wave_amplitude * 0.1)
-        # 渲染
+        # 渲染 2 行像素海浪
         try:
-            w = self.query_one("#wavebar", Static)
-            w.update(_make_wave(self._wave_phase, round(self._wave_amplitude), w.region.width))
+            amp = round(self._wave_amplitude)
+            w = self.query_one("#wavebar", Vertical)
+            width = w.region.width
+            top_s, bot_s = _make_wave_pixel(self._wave_phase, amp, width)
+            self.query_one("#wavetop", Static).update(top_s)
+            self.query_one("#wavebot", Static).update(bot_s)
         except Exception:
             pass
 
