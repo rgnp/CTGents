@@ -1636,6 +1636,34 @@ def _handle_tool_results(
     return storm_sig, storm_count
 
 
+
+def _inject_psyche_self_check(ctx: CacheContext) -> None:
+    """如有已加载 psyche，在 ctx.log 注入一条自律检查消息（仅首次）。
+
+    消息标记 _psyche_self_check=True 做防重——重复调用不再重复注入。
+    作为普通 system 消息进 ctx.log → 发 API → 永久留存（不 volatile）。
+    后续每轮 LLM 调用都能看到它，让自律约束不随对话增长而注意力稀释。
+    """
+    for msg in ctx.log:
+        if msg.get("_psyche_self_check"):
+            return
+    names: list[str] = []
+    for msg in ctx.log:
+        meta = msg.get("_psyche_meta")
+        if isinstance(meta, dict) and meta.get("name"):
+            names.append(meta["name"])
+    if not names:
+        return
+    ctx.log.append({
+        "role": "system",
+        "content": (
+            f"【自律检查】已加载psyche: {', '.join(names)}。\n"
+            "在写最终回复前，自检你的判断是否遵循了这些psych的准则。\n"
+            "每发现一条违反，在回复末尾追加: ⚠️ 违反psyche {name}: {说明}"
+        ),
+        "_psyche_self_check": True,
+    })
+
 def run_conversation(
     ctx: CacheContext,
     user_input: str,
@@ -1697,6 +1725,11 @@ def run_conversation(
         _reasoning_accum.append(chunk)
         if on_reasoning is not None:
             on_reasoning(chunk)
+
+
+    # ── psyche 自律检查注入（仅首次，后续轮自带） ──
+    _inject_psyche_self_check(ctx)
+
 
     while True:
         if requests_made >= _MAX_REQUESTS_PER_TURN:

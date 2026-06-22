@@ -586,7 +586,7 @@ class SaveSelectScreen(Screen):
 # ═══════════════════════════════════════════════════════
 class ChatScreen(Screen):
     CSS = """
-    ChatScreen { background: $background; }
+    ChatScreen { background: $background; border: heavy #1a202c; }
     #transcript { padding: 0 2; }
     #transcript > * { width: 100%; }
     /* ── 消息左粗条 ── */
@@ -597,7 +597,7 @@ class ChatScreen(Screen):
     .msg-header.user { color: $accent; border-left: heavy $accent; }
     .msg-header.agent { color: $primary; border-left: heavy $primary; }
     .msg-header .time { color: $secondary; text-style: dim; }
-    .msg-body { margin: 0 0 2 0; padding: 0 0 0 2; }
+    .msg-body { margin: 0 0 1 0; padding: 0 0 0 2; }
     .msg-body.user-body { margin: 0 0 0 0; }  /* 用户消息底边归零，与 agent 回复贴紧 */
     /* ── 轮次分隔 ── */
     .turn-sep { color: $primary-darken-3; height: 1; margin: 1 0; }
