@@ -227,10 +227,10 @@ class TestChatScreen:
                 app.screen.query_one("#transcript").remove_children()
                 app.screen._echo_conversation()
                 await pilot.pause()
-                # 用户消息现按 markdown 渲染(classes=user)，agent 回复 classes=agent；
+                # 用户消息现按 markdown 渲染(classes=msg-header user)，agent 回复 classes=msg-header agent；
                 # 工具结果/system 注入仍被跳过(不渲染)。
-                assert len(list(app.screen.query(".msg-role.user"))) == 1
-                assert len(list(app.screen.query(".msg-role.agent"))) == 1
+                assert len(list(app.screen.query(".msg-header.user"))) == 1
+                assert len(list(app.screen.query(".msg-header.agent"))) == 1
 
         asyncio.run(go())
 
@@ -336,7 +336,7 @@ class TestChatScreen:
                 assert s._interrupted is False
                 assert seen and "改用中文" in seen[0], seen
                 # 用户那条按 markdown 回显(classes=user)，source 即原文
-                assert any(getattr(u, "source", "") == "改用中文" for u in s.query(".user"))
+                assert any(getattr(u, "source", "") == "改用中文" for u in s.query(".msg-body"))
 
         asyncio.run(go())
 

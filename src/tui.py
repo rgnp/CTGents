@@ -1,4 +1,4 @@
-"""像素游戏风全屏 TUI（Textual）：开屏 → 存档选择 → 聊天，三屏 + NES 配色主题。
+"""文字终端全屏 TUI（Textual）：开屏 → 存档选择 → 聊天，三屏 + GitHub Dark 深色主题。
 
 流程：
 - 开屏 SplashScreen：像素大字 CTGENTS + loading 动画；后台线程做 ctx 初始化
@@ -44,19 +44,19 @@ if TYPE_CHECKING:
     from .cache_context import CacheContext
 
 
-# ── 红白机 8-bit 配色主题 ──
-NES_THEME = Theme(
-    name="nes",
-    primary="#3cbcfc",      # 亮青（FC 招牌蓝）
-    secondary="#f878f8",    # 品红
-    accent="#fc9838",       # 橙
-    foreground="#fcfcfc",
-    background="#0d0d20",
-    surface="#1a1a3a",
-    panel="#202050",
-    success="#58d854",
-    warning="#f8d800",
-    error="#f83800",
+# ── 深色专业配色主题（GitHub Dark 衍生）──
+DARK_THEME = Theme(
+    name="dark-pro",
+    primary="#58a6ff",      # 对话蓝（agent 角色色，高对比）
+    secondary="#8b949e",    # 灰（辅助文字/次要信息）
+    accent="#d29922",       # 暖橙（用户角色色，高对比）
+    foreground="#e6edf3",   # 正文白（高对比）
+    background="#0d1117",   # 暖黑（GitHub 深色）
+    surface="#161b22",      # 表面（输入框/面板，略高一层）
+    panel="#21262d",        # 面板（微亮层）
+    success="#3fb950",      # 绿
+    warning="#e3b341",      # 琥珀黄（与 accent #d29922 解耦，语义不同）
+    error="#f85149",        # 红
     dark=True,
 )
 
@@ -316,7 +316,7 @@ def _strip_user_wrappers(content: str) -> str:
 
 
 def _status_line(ctx, session_id: str) -> str:
-    """底部状态条文本（纯文本版，与 status_bar._build 同源）。"""
+    """底部状态条文本：模型·会话·上下文·状态，一眼看清当前情况。"""
     segs: list[str] = []
     try:
         from .llm import get_current_model_name
@@ -332,9 +332,14 @@ def _status_line(ctx, session_id: str) -> str:
     try:
         from .config import MAX_CONTEXT_TOKENS
         from .tools.tokens import count_context_tokens
-        used = count_context_tokens(ctx.all)  # 含工具 schema，与真实 prompt 一致
+        used = count_context_tokens(ctx.all)
         pct = used / MAX_CONTEXT_TOKENS * 100 if MAX_CONTEXT_TOKENS else 0
-        segs.append(f"ctx {pct:.0f}%")
+        # 显示近似 token 数 + 进度条
+        readable = f"{used/1000:.1f}k" if used >= 1000 else str(used)
+        bars = min(5, max(1, round(pct / 20)))
+        bar = "▓" * bars + "░" * (5 - bars)
+        color = "green" if pct < 50 else "yellow" if pct < 75 else "red"
+        segs.append(f"🧠 {readable} [{color}]{bar}[/] {pct:.0f}%")
     except Exception:
         pass
     try:
@@ -342,7 +347,23 @@ def _status_line(ctx, session_id: str) -> str:
         t = (get_cache_stats(session_id) or {}).get("total", {})
         pt = t.get("prompt_tokens", 0)
         if pt > 0:
-            segs.append(f"cache {t.get('cache_hit_tokens', 0) / pt * 100:.0f}%")
+            hit = t.get("cache_hit_tokens", 0) / pt * 100
+            bars = min(5, max(1, round(hit / 20)))
+            bar = "▓" * bars + "░" * (5 - bars)
+            color = "green" if hit > 70 else "yellow"
+            segs.append(f"⚡[{color}]{bar}[/] {hit:.0f}%")
+    except Exception:
+        pass
+    try:
+        from .session_pins import list_pins
+        psyches = [p["text"] for p in list_pins() if "Psyche已加载" in p["text"]]
+        if psyches:
+            # 只取名字部分，如 "psyche-building v0.5"、"aesthetic-design v0.2"
+            tags = []
+            for pin in psyches:
+                name = pin.split("Psyche已加载: ", 1)[-1].split(" (")[0].strip()
+                tags.append(name)
+            segs.append(f"🧬 {' '.join(tags)}")
     except Exception:
         pass
     try:
@@ -376,7 +397,7 @@ class SplashScreen(Screen):
     """
 
     MIN_SECONDS = 0.0       # 测试可调，默认 0（动画本身已有节奏）
-    ROW_INTERVAL = 0.02     # 每行间隔（秒）—— 加快，按钮早点出来
+    ROW_INTERVAL = 0.08     # 每行间隔（秒）—— 0.08s×8行≈0.64s，足够感知逐行浮现
 
     CSS = """
     SplashScreen { align: center middle; background: $background; }
@@ -454,9 +475,10 @@ class SaveSelectScreen(Screen):
     #selectwrap { width: auto; height: auto; align: center top; }
     #savetitle {
         color: $accent; text-style: bold; content-align: center middle;
+        margin-bottom: 1; border-top: solid $primary-darken-3; padding-top: 1;
     }
     #savebox {
-        border: round $primary; padding: 0 1; width: 38; height: auto;
+        border: solid $primary; padding: 0 1; width: 38; height: auto;
         background: $surface;
     }
     #saves { height: auto; max-height: 16; background: $surface; }
@@ -557,47 +579,44 @@ class SaveSelectScreen(Screen):
 class ChatScreen(Screen):
     CSS = """
     ChatScreen { background: $background; }
-    #transcript { padding: 0 1; }
+    #transcript { padding: 0 2; }
     #transcript > * { width: 100%; }
-    /* 消息容器：左粗条 + 底部间距 + 0 背景色 */
-    .user-bubble, .agent-bubble {
-        margin: 0 1 1 0; padding: 1 1 0 1;
-        height: auto;
-    }
-    .user-bubble { border-left: heavy $accent; }
-    .agent-bubble { border-left: heavy $primary; }
-    .msg-role {
+    /* ── 消息左粗条 ── */
+    .msg-header {
+        border-left: heavy transparent; padding: 0 0 0 1;
         text-style: bold; margin-bottom: 1;
     }
-    .msg-role.user { color: $accent; }
-    .msg-role.agent { color: $primary; }
-    .bubble-time {
-        color: $primary-darken-3; margin-top: 1;
-        text-style: dim;
-    }
-    .tool { color: $secondary-darken-2; margin: 0 0 1 2; text-style: dim; }
-    .meta { color: $primary-darken-1; margin: 0 0 0 2; }
-    .err  { color: $error; margin: 0 0 0 1; padding: 0 0 0 1; border-left: vkey $error; }
-    .brk  { color: $warning; text-style: bold; content-align: center middle; margin: 1 0; }
-    .thinking { color: $text-disabled; }
-    Collapsible { margin: 0 0 0 2; border: none; }
+    .msg-header.user { color: $accent; border-left: heavy $accent; }
+    .msg-header.agent { color: $primary; border-left: heavy $primary; }
+    .msg-header .time { color: $secondary; text-style: dim; }
+    .msg-body { margin: 0 0 1 0; padding: 0 0 0 2; }
+    /* ── 轮次分隔 ── */
+    .turn-sep { color: $primary-darken-3; height: 1; margin: 1 0; }
+    /* ── 折叠区（思考/工具）─ */
+    Collapsible { margin: 0 0 0 2; border: none; background: transparent; }
     .collapsible-chat {
-        margin: 0 0 0 2; border-left: vkey $primary-darken-3;
-        padding: 0 0 0 1; color: $primary-darken-2;
+        margin: 0 0 1 2; border-left: vkey $primary-darken-3;
+        padding: 0 0 0 1; background: transparent;
     }
+    /* ── 元消息 ── */
+    .meta { color: $secondary; margin: 0; }
+    .tool-meta { color: $primary-darken-2; margin: 0; text-style: dim; }
+    .sys-meta { color: $secondary; margin: 0; text-style: dim; }
+    .err  { color: $error; margin: 0; }
+    .thinking { color: $secondary; }
+    .brk  { color: $warning; text-style: bold; content-align: center middle; margin: 1 0; }
+    /* ── 底部栏 ── */
     #bottombar { dock: bottom; height: auto; }
     #prompt {
-        border: none;
-        border-top: solid $primary-darken-1;
-        border-bottom: solid $primary-darken-1;
-        background: $surface;
-        height: auto;
-        min-height: 1;
-        max-height: 30vh;
-        padding: 0 1;
+        border: none; border-top: solid $primary-darken-1;
+        border-bottom: solid $panel;
+        background: $surface; height: auto;
+        min-height: 1; max-height: 30vh; padding: 0 1;
     }
     #prompt:focus { border-top: solid $primary; border-bottom: solid $primary; }
-    #status { height: 1; color: $primary; background: $panel; padding: 0 1; }
+    #status {
+        height: 1; color: $primary; background: $panel; padding: 0 1;
+    }
     #status.interrupted { color: $warning; text-style: bold; background: $surface; }
     """
 
@@ -623,6 +642,13 @@ class ChatScreen(Screen):
         self._cur_reasoning = ""
         self._reasoning_box: Static | None = None
         self._reasoning_dirty = False
+        # 工具调用实时显示：Collapsible 中逐条罗列，默认为折叠状态
+        self._cur_tool_calls: list[str] = []
+        self._tool_box_outer: Collapsible | None = None
+        self._tool_box_inner: Static | None = None
+        self._tool_dirty = False
+        self._current_tool = ""           # 状态栏实时显示当前工具名
+        self._agent_header_mounted = False  # 一轮内只挂一次 CTGents 头部
         self._active_collapsible: Collapsible | None = None
         self._busy = False
         # 中断态：用户 Esc 截停本轮后进入。_interrupt_pending=已请求、等本轮真正收尾(done)；
@@ -637,7 +663,6 @@ class ChatScreen(Screen):
         self._turn_started: float = 0.0
         self._turn_count: int = 0
         self._echo_max_turns: int = 3  # 回放最多渲染的轮数
-        self._tool_names: list[str] = []  # 本轮聚合的工具名
     # ── 布局 ──
     def compose(self) -> ComposeResult:
         yield VerticalScroll(id="transcript")
@@ -663,6 +688,11 @@ class ChatScreen(Screen):
         """进聊天屏时按存档选择结果加载会话（NEW=不加载，沿用 splash 初始化的空会话）。"""
         sid = self.app.pending_load
         if not sid:
+            # 新游戏：显示欢迎消息（空状态设计）
+            t = self.query_one("#transcript", VerticalScroll)
+            t.mount(Static("你好，我是 CTGents。你可以输入消息开始对话，或输入 /help 查看可用指令。",
+                           classes="sys-meta"))
+            t.scroll_end(animate=False)
             return
         from .main import _apply_prefix
         from .session import load_session
@@ -698,13 +728,8 @@ class ChatScreen(Screen):
         self._history_draft = ""
         stamp = time.strftime("%H:%M")
         t = self.query_one("#transcript", VerticalScroll)
-        from textual.containers import Vertical
-        t.mount(Vertical(
-            Label("─ 你", classes="msg-role user"),
-            Markdown(text),
-            Label(stamp, classes="bubble-time"),
-            classes="user-bubble",
-        ))
+        t.mount(Label(f"━ 你  ·  {stamp}", classes="msg-header user"))
+        t.mount(Markdown(text, classes="msg-body"))
         t.scroll_end(animate=False)
         if text.startswith("/"):
             self._handle_command(text)
@@ -757,6 +782,7 @@ class ChatScreen(Screen):
         _session_state["task_reminded"] = False  # 切会话→新会话首轮重提醒未完成任务
         self.query_one("#transcript").remove_children()
         self._turn_count = 0
+        self._agent_header_mounted = False
         self._reset_reasoning()
         self._active_collapsible = None
         self._interrupted = self._interrupt_pending = False
@@ -777,21 +803,10 @@ class ChatScreen(Screen):
             reset_gaps_cache()
             status_bar.reset()
         self._status_cache = (-1, -1, "")
-        from .main import _make_prefix_msgs, _session_state
-        self.app.ctx.clear_log()
-        self.app.ctx.rebuild_prefix(_make_prefix_msgs())
-        _session_state["task_reminded"] = False  # 清空后允许再次提醒
-        if r.save:
-            self.app.session_id = None
-            from . import status_bar
-            from .session_pins import clear_pins
-            from .tasks import reset_gaps_cache
-            clear_pins()
-            reset_gaps_cache()
-            status_bar.reset()
-        self._status_cache = (-1, -1, "")
         self.query_one("#transcript").remove_children()
+        self._agent_header_mounted = False
         self._reset_reasoning()
+        self._reset_tool_calls()
         self._active_collapsible = None
         self._interrupted = self._interrupt_pending = False
         self._mount("上下文已清除", "meta")
@@ -865,10 +880,17 @@ class ChatScreen(Screen):
                 await self._flush_reasoning(transcript)
                 await self._flush_md(transcript)
                 if kind == "tool":
-                    # 工具调用：只收集名，不渲染 UI
-                    label = rest[0]
-                    if label not in self._tool_names:
-                        self._tool_names.append(label)
+                    label, detail = rest
+                    # 追加一条工具调用，更新状态栏
+                    self._current_tool = label
+                    self._cur_tool_calls.append(f"{label}  {detail}")
+                    self._tool_dirty = True
+                elif kind == "tool_result":
+                    # 工具完成：把上一行标记为已完成（不展示完整结果以免刷屏）
+                    if self._cur_tool_calls:
+                        self._cur_tool_calls[-1] = f"✅ {self._cur_tool_calls[-1]}"
+                        self._tool_dirty = True
+                        self._current_tool = ""
                 elif kind == "footer":
                     self._mount_footer(rest[0])
                 elif kind == "status":
@@ -878,20 +900,29 @@ class ChatScreen(Screen):
                 elif kind == "end":
                     self._collapse_active()
                     self._reset_reasoning()
+                    self._reset_tool_calls()
                     self._turn_count += 1
-                    if self._tool_names:
-                        line = "⚙ " + " · ".join(self._tool_names)
-                        self._tool_names.clear()
-                        await transcript.mount(Static(line, classes="tool"))
                 elif kind == "done":
                     self._collapse_active()  # 整轮结束：确保无残留展开块
+                    self._reset_tool_calls()
+                    self._agent_header_mounted = False
                     self._busy = False
-                    self.query_one("#prompt", TextArea).focus()  # 焦点回输入框（输入框全程未禁用）
+                    # 轮次分隔
+                    if self._turn_count > 0:
+                        try:
+                            transcript.mount(Static("╌╌╌", classes="turn-sep"))
+                            transcript.scroll_end(animate=False)
+                        except Exception:
+                            pass
+                    self.query_one("#prompt", TextArea).focus()
                     if self._interrupt_pending:
-                        self._enter_interrupted()  # 本轮收尾 → 进中断态(断点线+状态栏)
+                        self._enter_interrupted()
                 changed = True
         if self._reasoning_dirty:
             await self._flush_reasoning(transcript)
+            changed = True
+        if self._tool_dirty:
+            await self._flush_tool_calls(transcript)
             changed = True
         if self._dirty:
             await self._flush_md(transcript, finalize=False)
@@ -907,15 +938,13 @@ class ChatScreen(Screen):
     async def _flush_md(self, transcript, finalize: bool = True) -> None:
         if self._cur_text:
             if self._cur_md is None:
-                self._collapse_active()
-                stamp = time.strftime("%H:%M")
-                from textual.containers import Vertical
-                bubble = Vertical(classes="agent-bubble")
-                await transcript.mount(bubble)
-                await bubble.mount(Label("─ CTGents", classes="msg-role agent"))
-                self._cur_md = Markdown(self._cur_text)
-                await bubble.mount(self._cur_md)
-                await bubble.mount(Label(stamp, classes="bubble-time"))
+                if not self._agent_header_mounted:
+                    self._collapse_active()
+                    stamp = time.strftime("%H:%M")
+                    await transcript.mount(Label(f"━ CTGents  ·  {stamp}", classes="msg-header agent"))
+                    self._agent_header_mounted = True
+                self._cur_md = Markdown(self._cur_text, classes="msg-body")
+                await transcript.mount(self._cur_md)
             else:
                 await self._cur_md.update(self._cur_text)
             self._dirty = False
@@ -958,6 +987,34 @@ class ChatScreen(Screen):
         self._reasoning_box = None
         self._reasoning_dirty = False
 
+
+    def _reset_tool_calls(self) -> None:
+        """一条消息收尾：复位工具调用累进，下条消息另起一个折叠区。"""
+        self._cur_tool_calls.clear()
+        self._tool_box_outer = None
+        self._tool_box_inner = None
+        self._tool_dirty = False
+        self._current_tool = ""
+
+    async def _flush_tool_calls(self, transcript) -> None:
+        """把累进的工具调用挂进 Collapsible（折叠），实时追加新行。
+
+        首次 mount Collapsible，之后只更新内部 Static 的内容。
+        始终折叠（与思考不同——工具调用不是用户必需看的），用户可手动展开查看。
+        """
+        if not self._tool_dirty:
+            return
+        lines = "\n".join(f"  {line}" for line in self._cur_tool_calls)
+        if self._tool_box_inner is None:
+            self._tool_box_inner = Static(lines, classes="thinking", markup=True)
+            box = Collapsible(self._tool_box_inner, title="🛠 工具调用", collapsed=True,
+                                collapsed_symbol="▸ ", expanded_symbol="▾ ", classes="collapsible-chat")
+            await transcript.mount(box)
+            self._tool_box_outer = box
+        else:
+            self._tool_box_inner.update(lines)
+        self._tool_dirty = False
+
     # ── 辅助 ──
     def _mount(self, text: str, cls: str) -> None:
         t = self.query_one("#transcript", VerticalScroll)
@@ -965,25 +1022,17 @@ class ChatScreen(Screen):
         t.scroll_end(animate=False)
 
     def _mount_footer(self, text: str) -> None:
-        """每轮收尾小结：整体弱色，miss 段再弱一档（不和耗时/输出同亮度）。"""
-        import re
-        # 文本受控（数字+固定词），直接包 markup：把 "miss …" 尾段降一档亮度。
-        markup = re.sub(r"(miss\s*\S+(?:\s*突刺)?)", r"[dim]\1[/dim]", text)
+        """每轮收尾小结：弱色一行，直接用 status_bar 的文本。"""
         t = self.query_one("#transcript", VerticalScroll)
-        t.mount(Label(markup, classes="meta", markup=True))
+        t.mount(Label(text, classes="meta"))
         t.scroll_end(animate=False)
 
     def _mount_md(self, text: str) -> None:
-        """回放：挂 agent 气泡（Markdown + 时间戳 + 角色头）。"""
+        """回放：挂 agent 消息（角色头 + Markdown + 时间戳）。"""
         t = self.query_one("#transcript", VerticalScroll)
         stamp = time.strftime("%H:%M")
-        from textual.containers import Vertical
-        t.mount(Vertical(
-            Label("─ CTGents", classes="msg-role agent"),
-            Markdown(text),
-            Label(stamp, classes="bubble-time"),
-            classes="agent-bubble",
-        ))
+        t.mount(Label(f"━ CTGents  ·  {stamp}", classes="msg-header agent"))
+        t.mount(Markdown(text, classes="msg-body"))
         t.scroll_end(animate=False)
 
     def _echo_conversation(self) -> None:
@@ -1003,46 +1052,26 @@ class ChatScreen(Screen):
             folded = len([m for m in all_msgs[:skip_up_to] if m.get("role") in ("user", "assistant")])
             t.mount(Static(f"⋯ 省略前 {len(user_indices) - n} 轮（{folded} 条消息）", classes="meta"))
 
-        pending_tools: list[str] = []
         for i, m in enumerate(all_msgs):
             if i < skip_up_to:
                 continue
             role = m.get("role")
             content = (m.get("content") or "").strip()
             if role == "user":
-                # 新用户消息前 flush 上一轮的工具行
-                if pending_tools:
-                    t.mount(Static("⚙ " + " · ".join(pending_tools), classes="tool"))
-                    pending_tools.clear()
                 text = _strip_user_wrappers(content)
                 if text:
                     stamp = time.strftime("%H:%M")
-                    from textual.containers import Vertical
-                    t.mount(Vertical(
-                        Label("─ 你", classes="msg-role user"),
-                        Markdown(text),
-                        Label(stamp, classes="bubble-time"),
-                        classes="user-bubble",
-                    ))
+                    t.mount(Label(f"━ 你  ·  {stamp}", classes="msg-header user"))
+                    t.mount(Markdown(text, classes="msg-body"))
                     t.scroll_end(animate=False)
             elif role == "assistant":
                 # 思考折叠
                 reasoning = (m.get("_reasoning") or "").strip()
                 if reasoning:
                     self._mount_collapsed("💭 思考", reasoning)
-                # 收集工具名（暂不渲染）
-                for tc in m.get("tool_calls") or []:
-                    fn = tc.get("function", {})
-                    name = fn.get("name", "")
-                    if name:
-                        from .tools._tool_meta import TOOL_LABELS
-                        pending_tools.append(TOOL_LABELS.get(name, name))
                 # 答案文字
                 if content:
                     self._mount_md(content)
-        # 最后一条消息之后 flush
-        if pending_tools:
-            t.mount(Static("⚙ " + " · ".join(pending_tools), classes="tool"))
         t.scroll_end(animate=False)
 
     def _mount_collapsed(self, title: str, body: str) -> None:
@@ -1076,7 +1105,9 @@ class ChatScreen(Screen):
                 else:
                     dot = "●" if int(time.monotonic() * 2) % 2 == 0 else "○"
                     elapsed = time.monotonic() - self._turn_started
-                    line = f"[yellow]{dot}[/]  思考中 {elapsed:.0f}s  │  {line}"
+                    tool_info = f"  │  {self._current_tool}" if self._current_tool else ""
+                    tool_count = f"  🛠×{len(self._cur_tool_calls)}" if self._cur_tool_calls else ""
+                    line = f"[yellow]{dot}[/]  思考中 {elapsed:.0f}s{tool_count}{tool_info}  │  {line}"
                 status.remove_class("interrupted")
             elif self._interrupted:
                 line = f"[red]●[/]  ⏸ 已中断  │  Enter 继续 · Esc 终止  │  {line}"
@@ -1138,8 +1169,8 @@ class ChatScreen(Screen):
         if instruction:
             stamp = time.strftime("%H:%M")
             t = self.query_one("#transcript", VerticalScroll)
-            t.mount(Label("你  " + stamp, classes="role-header role-user"))
-            user_md = Markdown(instruction, classes="user")
+            t.mount(Label(f"━ 你  ·  {stamp}", classes="msg-header user"))
+            user_md = Markdown(instruction, classes="msg-body")
             t.mount(user_md)
             t.scroll_end(animate=False)
             self._mount("──────── ▶ 按指示继续 ────────", "brk")
@@ -1200,7 +1231,7 @@ class ChatScreen(Screen):
 # App
 # ═══════════════════════════════════════════════════════
 class CTGentsApp(App):
-    """多屏协调 + NES 主题。共享状态（ctx/session_id/sessions）挂在 App 上，各屏经 self.app 取。"""
+    """多屏协调 + Dark Pro 主题。共享状态（ctx/session_id/sessions）挂在 App 上，各屏经 self.app 取。"""
 
     # 退出用 ctrl+q（priority，输入框聚焦时也生效）；ctrl+c 留给 Textual 内置复制选中文本。
     BINDINGS = [Binding("ctrl+q", "quit", "退出", priority=True)]
@@ -1215,8 +1246,8 @@ class CTGentsApp(App):
         self.pending_load: str | None = None
 
     def on_mount(self) -> None:
-        self.register_theme(NES_THEME)
-        self.theme = "nes"
+        self.register_theme(DARK_THEME)
+        self.theme = "dark-pro"
         self.push_screen(SplashScreen())
 
     def goto_select(self) -> None:
