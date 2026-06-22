@@ -23,6 +23,28 @@ def _extract_job_id(text: str) -> str:
     return m.group(1)
 
 
+def _poll_until_done(job_id: str, timeout: float = 5.0, interval: float = 0.05) -> str:
+    """轮询直到 job 完成，替代 time.sleep 盲等。"""
+    t0 = time.monotonic()
+    while time.monotonic() - t0 < timeout:
+        out = exec_mod.poll_job(job_id)
+        if "仍在运行" not in out:
+            return out
+        time.sleep(interval)
+    return exec_mod.poll_job(job_id)
+
+
+def _drain_until(timeout: float = 5.0, interval: float = 0.05) -> list[str]:
+    """轮询直到 drain_finished_jobs 有结果，替代 time.sleep 盲等。"""
+    t0 = time.monotonic()
+    while time.monotonic() - t0 < timeout:
+        notices = exec_mod.drain_finished_jobs()
+        if notices:
+            return notices
+        time.sleep(interval)
+    return exec_mod.drain_finished_jobs()
+
+
 class TestIsBlocked:
     def test_blocked_rm_rf(self):
         assert _is_blocked("rm -rf /")[0]
@@ -187,8 +209,7 @@ class TestRunAsync:
         exec_mod._jobs.clear()
         result = run_async("python -c \"print('helloworld')\"", timeout=10)
         job_id = _extract_job_id(result)
-        time.sleep(1.0)
-        out = poll_job(job_id)
+        out = _poll_until_done(job_id)
         assert "helloworld" in out, f"job_id={job_id!r}, got: {out!r}"
 
     def test_poll_nonexistent_job(self):
@@ -203,15 +224,14 @@ class TestRunAsync:
         exec_mod._jobs.clear()
         result = run_async("python -c \"raise SystemExit(2)\"", timeout=10)
         job_id = _extract_job_id(result)
-        time.sleep(1.0)
-        out = poll_job(job_id)
+        out = _poll_until_done(job_id)
         assert "exit=2" in out, f"job_id={job_id!r}, got: {out!r}"
 
     def test_job_cleanup_after_done(self):
         exec_mod._jobs.clear()
         result = run_async("python -c \"print('done')\"", timeout=10)
         job_id = _extract_job_id(result)
-        time.sleep(0.5)
+        _poll_until_done(job_id)
         poll_job(job_id)
         result2 = poll_job(job_id)
         assert "不存在" in result2 or "过期" in result2
@@ -242,8 +262,7 @@ class TestDrainFinishedJobs:
         exec_mod._jobs.clear()
         result = run_async("python -c \"print('drained-ok')\"", timeout=10)
         job_id = _extract_job_id(result)
-        time.sleep(1.0)
-        notices = exec_mod.drain_finished_jobs()
+        notices = _drain_until()
         assert any("drained-ok" in n and job_id in n for n in notices), notices
         assert job_id not in exec_mod._jobs, "收割后必须从 _jobs 移除"
 
@@ -263,8 +282,7 @@ class TestDrainFinishedJobs:
     def test_drain_marks_failed(self):
         exec_mod._jobs.clear()
         run_async("python -c \"raise SystemExit(3)\"", timeout=10)
-        time.sleep(1.0)
-        notices = exec_mod.drain_finished_jobs()
+        notices = _drain_until()
         assert any("exit=3" in n and "❌" in n for n in notices), notices
 
 
@@ -277,8 +295,7 @@ class TestJobExecute:
         exec_mod._jobs.clear()
         exec_mod.execute("run_async", {"command": "python -c \"print('y')\"", "timeout": 10})
         job_id = list(exec_mod._jobs.keys())[0]
-        time.sleep(0.5)
-        out = exec_mod.execute("poll", {"job_id": job_id})
+        out = _poll_until_done(job_id)
         assert "y" in out, f"got: {out!r}"
 
 
@@ -306,16 +323,15 @@ class TestPollLongPoll:
             exec_mod._kill_all_jobs()
 
     def test_finished_job_returns_immediately(self, monkeypatch):
-        """已完成的作业：立即返回结果，不傻等满预算。"""
+        """已完成的作业：poll 立即返回结果，不傻等满预算。"""
         from types import SimpleNamespace
         exec_mod._jobs.clear()
         monkeypatch.setattr(exec_mod, "RUNTIME", SimpleNamespace(poll_wait_seconds=30))
         job_id = exec_mod._start_job(
             "python -c \"print('fin')\"", timeout=60, workdir=None)
-        time.sleep(0.8)  # 让它先跑完
-        t0 = time.time()
-        out = exec_mod.poll_job(job_id)
-        dur = time.time() - t0
+        t0 = time.monotonic()
+        out = _poll_until_done(job_id)
+        dur = time.monotonic() - t0
         assert "fin" in out, f"got: {out!r}"
         assert dur < 5.0, f"作业已完成应立即返回，不应傻等满 30s 预算，实际 {dur:.2f}s"
 

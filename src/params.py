@@ -90,7 +90,7 @@ class RuntimeParams:
     # run_python 代码执行超时（秒）
     max_exec_timeout: int = _env_int("CTG_MAX_EXEC_TIMEOUT", 5)
     # 单轮工具循环最大 API 请求数（成本熔断：失控循环唯一的钱闸）
-    max_requests_per_turn: int = _env_int("CTG_MAX_REQUESTS_PER_TURN", 60)
+    max_requests_per_turn: int = _env_int("CTG_MAX_REQUESTS_PER_TURN", 180)
     # 一轮请求数达此值却没有 current.md 任务 → 提示 agent 建任务（事实触发，判断留 agent）。
     task_suggest_min_requests: int = _env_int("CTG_TASK_SUGGEST_MIN_REQUESTS", 6)
     # 长任务自主续跑：一次用户回合内最多自主驱动多少步（不用反复手动"继续"）。真正的
