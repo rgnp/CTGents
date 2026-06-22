@@ -44,20 +44,20 @@ if TYPE_CHECKING:
     from .cache_context import CacheContext
 
 
-# ── Catppuccin Latte 暖白主题 ──
+# ── 深海月光 专属配色 ──
 DARK_THEME = Theme(
     name="dark-pro",
-    primary="#1450c4",      # 对话蓝（agent 角色色，深蓝沉稳）
-    secondary="#555869",    # 灰（辅助文字）
-    accent="#b84800",       # 暖橙（用户角色色）
-    foreground="#3a3d4e",   # 正文（深灰，不刺眼）
-    background="#eff1f5",   # 暖白基底
-    surface="#e6e9ef",      # 表面（输入框/面板，略深一层）
-    panel="#dce0e8",        # 面板（状态栏/代码块）
-    success="#237312",      # 绿
-    warning="#735a08",      # 棕黄
-    error="#b80c28",        # 红
-    dark=False,
+    primary="#5b8af0",      # 钢蓝（agent，月光照在深海上）
+    secondary="#7a88a6",    # 海雾灰（辅助文字）
+    accent="#d4875e",       # 赤陶（用户，暖色对比像远处灯火）
+    foreground="#dee4ed",   # 月光白（正文，带一丁点蓝）
+    background="#0a101c",   # 深海蓝黑
+    surface="#111827",      # 表面（输入框）
+    panel="#182233",        # 面板（状态栏/代码块）
+    success="#4caf7a",      # 海藻绿
+    warning="#d4a843",      # 金盏黄
+    error="#e06c6c",        # 珊瑚红
+    dark=True,
 )
 
 # ── 像素大字 banner：10×8 宽体，密度抗锯齿 + 行渐变着色 ──
@@ -126,10 +126,10 @@ _GLYPH_GAP = 3         # 字母间距
 _BANNER_LEAD = [3, 3, 2, 2, 1, 1, 0, 0]  # 斜体右倾（每 2 行均匀右移 1px）
 _DENSITY_CHAR = {0: " ", 1: "░", 2: "▓", 3: "█"}
 _BANNER_LEAD = [2, 1, 1, 1, 0, 0, 0, 0]  # 微斜右倾（每行递增约 1px）
-# 行渐变：从上到下 8 行，暖橙 → 深赭石
+# 行渐变：从上到下 8 行，月光银 → 深海蓝
 _GRADIENT = [
-    "#ff8a5c", "#f07a3e", "#d96824", "#c05513",
-    "#a84408", "#8f3502", "#752a00", "#5c2100",
+    "#c8ddf0", "#a8c8e8", "#88b3e0", "#689ed8",
+    "#5088c8", "#4072b0", "#305c98", "#204678",
 ]
 
 
@@ -375,6 +375,18 @@ def _status_line(ctx, session_id: str) -> str:
 # ═══════════════════════════════════════════════════════
 # 开屏
 # ═══════════════════════════════════════════════════════
+
+def _mount_moonlight(screen: Screen) -> None:
+    """在屏幕顶部叠 4 层极淡的蓝白辉光，模拟月光洒落。"""
+    with contextlib.suppress(Exception):
+        moonlight = screen.query_one("#moonlight", Vertical)
+        layers = ["#151d2a", "#101724", "#0d1320", "#0b111e"]
+        for color in layers:
+            bar = Static("")
+            bar.styles.background = color
+            moonlight.mount(bar)
+
+
 class SplashScreen(Screen):
     """逐行动画展示 CTGENT Logo → 双选项按钮（新存档 / 继续游玩）。
 
@@ -389,6 +401,10 @@ class SplashScreen(Screen):
 
     CSS = """
     SplashScreen { align: center middle; background: $background; }
+    #moonlight {
+        dock: top; width: 100%; height: 4;
+    }
+    #moonlight > Static { width: 100%; height: 1; }
     #logo_area { width: auto; height: auto; }
     #logo_area > Static { width: auto; height: 1; }
     #buttons { width: auto; height: auto; margin-top: 4; }
@@ -400,12 +416,12 @@ class SplashScreen(Screen):
     """
 
     def compose(self) -> ComposeResult:
-        # Logo 与按钮行各自被屏幕 align 居中；按钮行 auto 宽（含间距）→ 整体居中、两边拉开
+        yield Vertical(id="moonlight")
         yield Vertical(id="logo_area")
         yield Horizontal(id="buttons")
 
-
     def on_mount(self) -> None:
+        _mount_moonlight(self)
         self._rows = _banner_rows("CTGENT")
         self._revealed = 0
         self._ctx_ready = False
@@ -613,9 +629,10 @@ class ChatScreen(Screen):
     .sys-meta { color: $secondary; margin: 0; text-style: dim; }
     .err  { color: $error; margin: 0; }
     .thinking { }  /* 折叠态标题由 Textual Collapsible 内置样式处理；展开后内容继承 $foreground */
-    /* ── Markdown 代码块 ── */
-    .msg-body MarkdownBlock { background: $panel; margin: 1 0; }
     .brk  { color: $warning; text-style: bold; content-align: center middle; margin: 1 0; }
+    /* ── 顶部月光光晕 ── */
+    #moonlight { dock: top; width: 100%; height: 4; }
+    #moonlight > Static { width: 100%; height: 1; }
     /* ── 底部栏 ── */
     #bottombar { dock: bottom; height: auto; }
     #prompt {
@@ -678,6 +695,7 @@ class ChatScreen(Screen):
         self._echo_max_turns: int = 3  # 回放最多渲染的轮数
     # ── 布局 ──
     def compose(self) -> ComposeResult:
+        yield Vertical(id="moonlight")
         yield VerticalScroll(id="transcript")
         with Vertical(id="bottombar"):
             yield TextArea(
@@ -690,6 +708,7 @@ class ChatScreen(Screen):
             yield Static("", id="status")
 
     def on_mount(self) -> None:
+        _mount_moonlight(self)
         self._load_pending()
         self._refresh_status()
         self.query_one("#prompt", TextArea).focus()
