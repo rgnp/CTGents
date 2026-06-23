@@ -614,6 +614,8 @@ class ChatScreen(Screen):
     .err  { color: $error; margin: 0; }
     .thinking { }  /* 折叠态标题由 Textual Collapsible 内置样式处理；展开后内容继承 $foreground */
     .brk  { color: $warning; text-style: bold; content-align: center middle; margin: 1 0; }
+    /* ── 顶部氛围光 ── */
+    #topglow { dock: top; width: 100%; height: 1; background: #1a202c; }
     /* ── 底部栏 ── */
     #bottombar { dock: bottom; height: auto; }
     #prompt {
@@ -676,6 +678,7 @@ class ChatScreen(Screen):
         self._echo_max_turns: int = 3  # 回放最多渲染的轮数
     # ── 布局 ──
     def compose(self) -> ComposeResult:
+        yield Static(id="topglow")
         yield VerticalScroll(id="transcript")
         with Vertical(id="bottombar"):
             yield TextArea(
@@ -1041,7 +1044,7 @@ class ChatScreen(Screen):
             return
         lines = "\n".join(f"  {line}" for line in self._cur_tool_calls)
         if self._tool_box_inner is None:
-            self._tool_box_inner = Static(lines, classes="thinking", markup=True)
+            self._tool_box_inner = Static(lines, classes="thinking", markup=False)
             box = Collapsible(self._tool_box_inner, title="🛠 工具调用", collapsed=True,
                                 collapsed_symbol="▸ ", expanded_symbol="▾ ", classes="collapsible-chat")
             await transcript.mount(box)
