@@ -151,6 +151,16 @@ def test_should_ignore_dir():
     assert rag._should_ignore_dir(".hidden")
     assert not rag._should_ignore_dir("src")
 
+
+def test_runtime_dirs_ignored():
+    """运行时/生成目录绝不能被当源码索引——sessions/stats 里全是 MB 级会话日志与
+    payload 转储（.json 又在 SOURCE_EXTENSIONS），索引它们曾致 rag_index 19 分钟 + OOM。
+    """
+    for d in ("sessions", "stats", "temp"):
+        assert rag._should_ignore_dir(d), f"{d} 必须被忽略"
+    # 策展内容目录仍可索引（小、有价值）
+    assert not rag._should_ignore_dir("docs")
+
 def test_should_ignore_file_exact():
     assert rag._should_ignore_file("package-lock.json", ".json")
     assert not rag._should_ignore_file("app.py", ".py")

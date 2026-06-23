@@ -265,6 +265,10 @@ _IGNORE_DIRS = {
     ".ruff_cache", "coverage", ".tox", ".eggs", "eggs",
     "site-packages", ".yarn", ".npm", "bower_components",
     "vendor", "third_party", "third-party",
+    # CTGents 运行时/生成目录（见 .gitignore）：sessions/stats 里全是 1~2MB 的会话日志
+    # 与 per-request payload 转储（数百个 .json），.json 又在 SOURCE_EXTENSIONS 里——
+    # 不排除会把它们全当源码索引，是 rag_index 慢到 19 分钟 + 索引爆内存的真病根。
+    "sessions", "stats", "temp", "agent", "plugins",
 }
 
 # 默认忽略的文件
@@ -847,9 +851,14 @@ def _load_index(project_root: Path) -> TfIdfIndex | None:
 
 
 def _save_index(project_root: Path, index: TfIdfIndex) -> None:
-    """保存索引到磁盘。"""
+    """保存索引到磁盘。
+
+    纯机器读文件（只被 _load_index 的 json.loads 吃），故不 indent：带 indent 会让
+    json 编码器退回纯 Python 路径（''.join(chunks) 把整个结构物化两份），全项目索引
+    够大时直接 MemoryError；indent=None 走 C 加速器单次写缓冲，内存/体积/耗时全降。
+    """
     _index_path(project_root).write_text(
-        json.dumps(index.to_dict(), ensure_ascii=False, indent=2),
+        json.dumps(index.to_dict(), ensure_ascii=False),
         encoding="utf-8",
     )
 
