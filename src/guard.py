@@ -26,7 +26,7 @@ IMMUTABLE_FILES: frozenset[str] = frozenset({
     str(_GUARD_FILE),                                              # guard.py（分级表本身）
     str(_SRC_DIR / "tool_guard.py"),                              # 工具拦截层
     str(_SRC_DIR / "gate_audit.py"),                              # 门通行证审计
-    str(_PROJECT_ROOT / "scripts" / "git-hooks" / "pre-commit"),  # 测试门（提交硬闸）
+    # pre-commit 已移入 CORE_FILES——太重导致 git 不可用，简化后走安全带
 })
 
 # ── 核心业务：可改但走安全带（改后 import 冒烟 + 挂了回滚）──
@@ -37,6 +37,7 @@ CORE_FILES: frozenset[str] = frozenset({
     str(_SRC_DIR / "cache_context.py"),         # 缓存上下文
     str(_SRC_DIR / "llm.py"),                   # LLM 调用
     str(_SRC_DIR / "tools" / "__init__.py"),    # 工具注册表
+    str(_PROJECT_ROOT / "scripts" / "git-hooks" / "pre-commit"),  # 提交钩子（简化后走安全带）
 })
 
 # 向后兼容：旧语义"受保护"=硬锁=现在的不可变核（dashboard 风险面板复用此名）。

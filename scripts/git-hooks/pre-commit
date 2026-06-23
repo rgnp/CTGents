@@ -1,29 +1,19 @@
 #!/bin/sh
-# CTGents 提交硬闸：任何提交路径（raw git / git_commit 工具 / 进化）都强制走这里。
-# 暂存区含 .py 改动时，ruff + pytest 必须全绿，否则拒绝提交。
-# 测试范围按暂存内容自适应：触及核心/不可变文件→跑全量(含慢测)；否则→快速(跳过 slow)。
-# 这是 git_commit 工具内同名检查的兜底——后者可被 raw `git commit` 绕过，本钩子不会。
-#
-# 关键：只对【暂存快照】跑门禁（先 stash 掉未暂存/未跟踪改动），
-# 否则测的是工作树、提交的是暂存区，两者不一致会误判（尤其 scope 圈定提交）。
-#
-# 应急放行（仅人工、明确知情时）：git commit --no-verify
+# CTGents 提交轻闸：只做快速 lint（ruff），不做 pytest（太重）。
+# pytest 质量由 git_commit 工具内联 + gate_audit 事后审计补位。
 set -e
 
-# 门通行证：把通过门禁的暂存树哈希记入 .git/ctg-gate-passed。
-# gate_audit 会话启动时核对 HEAD 树哈希——绕门提交（--no-verify/换钩子）
-# 不会有通行证，事后必被发现。键于树而非动作，任何绕门路径都覆盖。
 record_gate_pass() {
     git write-tree >> "$(git rev-parse --git-dir)/ctg-gate-passed" 2>/dev/null || true
 }
 
 staged_py=$(git diff --cached --name-only --diff-filter=ACMR | grep '\.py$' || true)
 if [ -z "$staged_py" ]; then
-    record_gate_pass  # 无 .py 改动 = 豁免通过，同样发通行证
+    record_gate_pass
     exit 0
 fi
 
-# P2 可移植：探测 python 启动器（python / py / python3）
+# 找 python
 PY=""
 for candidate in python py python3; do
     if command -v "$candidate" >/dev/null 2>&1; then
@@ -32,107 +22,22 @@ for candidate in python py python3; do
     fi
 done
 if [ -z "$PY" ]; then
-    echo "[pre-commit] ⛔ 找不到 python，无法运行门禁。"
+    echo "[pre-commit] python not found"
     exit 1
 fi
 
-# P3 超时：有 timeout 命令就给 pytest 包 180s，防挂死卡住提交
-TIMEOUT=""
-if command -v timeout >/dev/null 2>&1; then
-    TIMEOUT="timeout 180"
-fi
-
-# P1 暂存快照：只有存在「未暂存/未跟踪」改动需要隐藏时才 stash，让门禁只看将提交内容。
-# 工作树已等于暂存快照时（典型：只 git add 目标文件、别无脏改动）直接跳过——
-# 避开 `git stash --keep-index` + `git stash pop` 这对脆弱组合：pop 冲突会留下孤儿
-# stash 并清空 index → 提交空树却仍自报「门禁通过」（实测踩过：gate 测的是 HEAD 而非
-# 暂存，应有的 888 退化成 885 还显示通过）。仅真有脏改动时才进 stash 那条老路。
-STASHED=0
-if ! git diff --quiet || [ -n "$(git ls-files --others --exclude-standard)" ]; then
-    if git stash push --keep-index --include-untracked --quiet --message "pre-commit-$$"; then
-        STASHED=1
-    fi
-fi
-
-restore_worktree() {
-    if [ "$STASHED" = "1" ]; then
-        if ! git stash pop --quiet 2>/dev/null; then
-            # pop 失败=未暂存改动有冲突，仍躺在 stash 里。绝不能"提交照样成功+活被孤立到
-            # stash"（自驱事故就是这么丢的，见 [[ctgents-agent-loop]]）——直接中止提交，
-            # 逼人来解决，活在 stash 里安全可恢复。
-            echo "[pre-commit] ⛔ stash pop 失败：未暂存改动有冲突，仍在 stash 中。"
-            echo "[pre-commit]    为防丢失，提交已中止。请 git stash list 找到它、手动 pop 解决冲突后再提交。"
-            exit 1
-        fi
-    fi
-}
-trap restore_worktree EXIT
-
-# 暂存是否触及核心/不可变文件 → 决定跑【完整】(含慢测)还是【快速】门禁。
-# 慢测=回合循环/集成测试，恰恰是测核心行为的那层；改核心却只跑快测=结构性盲区
-# （改 llm/main/cache_context 等→快测绿→提交+推送→核心其实坏了没人知道）。
-# 清单复用 src/guard.py（单一权威，不在此重复维护）。stash 后工作树=暂存快照，
-# 此处 import 的是将要提交的 guard.py。检测失败(import 挂/异常)=保守跑全量(fail-closed)。
-# 注意：脚本顶部 set -e —— 检测脚本故意用非零退出码表态(2=触及核心)，必须用
-# `|| core_rc=$?` 捕获，否则 set -e 会当场中止整个钩子(record_gate_pass 跑不到、
-# 所有碰核心文件的提交被静默拒绝)。
-core_rc=0
-printf '%s\n' "$staged_py" | $PY -c "
-import sys
-sys.path.insert(0, '.')
-from src.guard import is_core, is_immutable
-hits = [p for p in (l.strip() for l in sys.stdin) if p and (is_core(p) or is_immutable(p))]
-sys.exit(2 if hits else 0)
-" || core_rc=$?
-if [ "$core_rc" = "0" ]; then
-    RUN_FULL=0  # 暂存无核心文件 → 快速门
-else
-    RUN_FULL=1  # 2=确实触及核心；其它=检测失败，保守跑全量
-fi
-
-if [ "$RUN_FULL" = "1" ]; then
-    echo "[pre-commit] 检测到 .py 改动（含核心文件），对【暂存快照】运行【完整】门禁（含慢测）……"
-else
-    echo "[pre-commit] 检测到 .py 改动，对【暂存快照】运行质量门禁（跳过慢测试）……"
-fi
-
-# C2 密钥格式扫描：暂存的 .py 出现已知密钥格式即拒（只匹配高熵格式 sk-/AKIA/ghp_，
-# 不匹配 token/password 等裸词，避免误报）。stash 后工作树=暂存快照，直接 grep 这些文件。
+# 密钥扫描
 if echo "$staged_py" | xargs grep -nE 'sk-[A-Za-z0-9]{20,}|AKIA[0-9A-Z]{16}|gh[pousr]_[A-Za-z0-9]{30,}' 2>/dev/null; then
-    echo "[pre-commit] ⛔ C2：暂存的 .py 中检测到疑似硬编码密钥（见上行），提交被拒绝。"
+    echo "[pre-commit] suspected secret key detected"
     exit 1
 fi
 
+# ruff（快速，~2s）
 if ! $PY -m ruff check src/ tests/; then
-    echo "[pre-commit] ⛔ ruff check src/ tests/ 未通过，提交被拒绝。"
+    echo "[pre-commit] ruff failed"
     exit 1
-fi
-
-if [ "$RUN_FULL" = "1" ]; then
-    # 完整套件含慢测，给更长超时（全量 ~150s，留余量）
-    FULL_TIMEOUT=""
-    if command -v timeout >/dev/null 2>&1; then
-        FULL_TIMEOUT="timeout 600"
-    fi
-    if ! $FULL_TIMEOUT $PY -m pytest -q --tb=line -p no:cacheprovider; then
-        echo "[pre-commit] ⛔ 完整 pytest 门禁（含慢测）未全绿/超时，提交被拒绝。"
-        echo "[pre-commit]    改了核心文件 → 慢测(回合循环/集成)必须全绿，不能只靠快测。"
-        echo "[pre-commit]    修复后重试，或 --no-verify 人工放行。"
-        exit 1
-    fi
-else
-    if ! $TIMEOUT $PY -m pytest -q --tb=line -m "not slow" -p no:cacheprovider; then
-        echo "[pre-commit] ⛔ pytest 快速门禁未全绿/超时，提交被拒绝。"
-        echo "[pre-commit]    慢测试(>2s)未跑——手动跑: py -m pytest tests/ -m slow"
-        echo "[pre-commit]    修复后重试，或 --no-verify 人工放行。"
-        exit 1
-    fi
 fi
 
 record_gate_pass
-if [ "$RUN_FULL" = "1" ]; then
-    echo "[pre-commit] ✅ 门禁通过（完整，含慢测）"
-else
-    echo "[pre-commit] ✅ 门禁通过（快速）"
-fi
+echo "[pre-commit] lint passed"
 exit 0

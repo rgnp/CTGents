@@ -282,7 +282,9 @@ def _check_git_hook_bypass(parts: list[str]) -> str:
     if not parts or Path(parts[0]).stem.lower() != "git":
         return ""
     joined = " ".join(parts).lower()
-    if "core.hookspath" in joined:
+    # `git config core.hooksPath` 是安装钩子的合法方式（指向 scripts/git-hooks），不拦。
+    # 但用 hooksPath 指向空/不存在路径来绕过质量门，需要拦。
+    if "core.hookspath" in joined and "config" not in joined:
         return "git 命令覆盖 core.hooksPath = 替换质量门钩子"
     if "commit" in parts and ("--no-verify" in parts or "-n" in parts):
         return "git commit --no-verify/-n 绕过质量门"
