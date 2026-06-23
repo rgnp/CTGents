@@ -17,7 +17,6 @@ import pytest
 
 import src.llm as llm
 import src.main as main
-import src.session_pins as sp
 from src.cache_context import CacheContext
 
 pytestmark = pytest.mark.slow
@@ -61,16 +60,12 @@ def test_prefix_survives_multifeature_turn(monkeypatch):
 
     任何 feature 顺手往 prefix 写、或重排 prefix，send() 的哈希校验当场抛。
     """
-    sp.clear_pins()
     ctx = _prefix_ctx()
     before_hash, before_len = ctx.prefix_hash, len(ctx.prefix)
     _mock_llm(monkeypatch,
               ("", [_tool_call("think", {"thought": "看一下"})]),
               ("看完了，参数在 src/params.py:1。", []))
-    try:
-        _drive_turn(ctx, "重点看 src/params.py")
-    finally:
-        sp.clear_pins()
+    _drive_turn(ctx, "重点看 src/params.py")
     ctx.send()  # 不抛 PrefixIntegrityError = 前缀完整
     assert ctx.prefix_hash == before_hash
     assert len(ctx.prefix) == before_len
@@ -92,27 +87,23 @@ def test_preread_citation_not_false_flagged(monkeypatch):
 # ── 纯追加默认:prefix 之后无 volatile system 尾(Reasonix 对齐) ──
 
 def test_pure_append_no_system_tail_by_default(monkeypatch):
-    """默认(纯追加):跑完带 pin 的一轮,send() 里 prefix 之后再无 system 消息。
+    """默认(纯追加):跑完带工具调用的一轮,send() 里 prefix 之后再无 system 消息。
 
     对话末尾即"输入结束位置",下轮首请求可靠命中缓存单元(见 [[ctgents-context-cache]])。
     """
-    sp.clear_pins()
     ctx = _prefix_ctx()
     n_prefix = len(ctx.prefix)
     _mock_llm(monkeypatch,
-              ("", [_tool_call("pin", {"content": "决定:走方案A"})]),
+              ("", [_tool_call("think", {"thought": "决定:走方案A"})]),
               ("钉好了", []))
-    try:
-        _drive_turn(ctx, "做个决定")
-        api = ctx.send()
-        # prefix 之后没有任何 system 消息(钉板/审计/任务都不挂尾)
-        after_prefix = api[n_prefix:]
-        assert all(m["role"] != "system" for m in after_prefix), \
-            f"prefix 之后混入了 system 消息: {[m['content'][:30] for m in after_prefix if m['role']=='system']}"
-        # 最后一条是对话(非 system) → 它就是缓存的输入结束单元
-        assert api[-1]["role"] != "system"
-    finally:
-        sp.clear_pins()
+    _drive_turn(ctx, "做个决定")
+    api = ctx.send()
+    # prefix 之后没有任何 system 消息(审计/任务都不挂尾)
+    after_prefix = api[n_prefix:]
+    assert all(m["role"] != "system" for m in after_prefix), \
+        f"prefix 之后混入了 system 消息: {[m['content'][:30] for m in after_prefix if m['role']=='system']}"
+    # 最后一条是对话(非 system) → 它就是缓存的输入结束单元
+    assert api[-1]["role"] != "system"
 
 
 # ── send() 结构良构：tool 消息必有前序 assistant tool_call ────

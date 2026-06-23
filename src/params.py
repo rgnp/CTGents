@@ -142,19 +142,6 @@ RUNTIME = RuntimeParams()
 
 
 @dataclass(frozen=True)
-class PinboardParams:
-    """会话钉板旋钮(structural 的标记串/渲染格式留在 session_pins.py)。"""
-
-    # 钉板最多容纳几条(超出踢最旧整条;小到能"一眼扫完",不复制中段衰减)
-    max_items: int = _env_int("CTG_PINBOARD_MAX_ITEMS", 8)
-    # 每条 pin 最多几字(逼原子化;超出写入侧截断,绝不切某条中间)
-    max_chars: int = _env_int("CTG_PINBOARD_MAX_CHARS", 80)
-
-
-PINBOARD = PinboardParams()
-
-
-@dataclass(frozen=True)
 class MemoryParams:
     """记忆 recall 排序检索旋钮(结构性的正则/片段长度留在 memory.py)。"""
 
@@ -175,42 +162,9 @@ class MemoryParams:
 
 MEMORY = MemoryParams()
 
-@dataclass(frozen=True)
-class UserModelParams:
-    """用户理解档案收割旋钮（收割 prompt 等结构性细节留 user_model.py）。"""
 
-    # 总开关：会话结束是否做"懂你"收割（关掉则零额外 LLM 调用）
-    enabled: bool = _env_bool("CTG_USER_MODEL_ENABLED", True)
-    # 少于这么多条用户消息的会话不收割（避免给琐碎会话花一次调用）
-    min_user_messages: int = _env_int("CTG_USER_MODEL_MIN_USER_MSGS", 3)
-    # 档案正文目标长度（字）——prompt 软约束，超出由清洗硬截
-    max_profile_chars: int = _env_int("CTG_USER_MODEL_MAX_PROFILE_CHARS", 1500)
-    # 喂给收割调用的对话精华预算（字符，取尾部近因）
-    digest_char_budget: int = _env_int("CTG_USER_MODEL_DIGEST_BUDGET", 6000)
-    # 收割调用网络失败重试次数
-    harvest_retries: int = _env_int("CTG_USER_MODEL_HARVEST_RETRIES", 2)
-
-
-USER_MODEL = UserModelParams()
-
-
-@dataclass(frozen=True)
-class ProjectKnowledgeParams:
-    """项目/领域知识收割旋钮（收割 prompt 等结构性细节留 project_model.py）。
-
-    与 UserModelParams 对称：user_model 收"懂你这个人"，本组收"懂你这摊活"——
-    durable 的项目/领域事实（数据集/约定/造过的工具/领域门道/项目约束）。
-    type=knowledge → 摘要注入 + recall 取详情（不全文注入，防长知识烧前缀缓存）。
-    """
-
-    enabled: bool = _env_bool("CTG_PROJECT_KNOWLEDGE_ENABLED", True)
-    min_user_messages: int = _env_int("CTG_PROJECT_KNOWLEDGE_MIN_USER_MSGS", 3)
-    max_body_chars: int = _env_int("CTG_PROJECT_KNOWLEDGE_MAX_BODY_CHARS", 1800)
-    digest_char_budget: int = _env_int("CTG_PROJECT_KNOWLEDGE_DIGEST_BUDGET", 7000)
-    harvest_retries: int = _env_int("CTG_PROJECT_KNOWLEDGE_HARVEST_RETRIES", 2)
-
-
-PROJECT_KNOWLEDGE = ProjectKnowledgeParams()
+# UserModelParams / ProjectKnowledgeParams 已随会话结束自动 harvest 整体删除
+# （2026-06-23）：记忆改为靠 agent 显式 remember 生长，不再 LLM 收割用户/项目档案。
 
 
 @dataclass(frozen=True)

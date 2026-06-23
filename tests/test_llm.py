@@ -161,9 +161,8 @@ def test_smoke_user_interrupt_returns_clean(monkeypatch):
     assert ctx.control_signal == "interrupted"
 
 
-# test_smoke_pin_rides_tail / test_smoke_unpin_removes_tail_message 随挂尾机制删除——
-# 钉板曾在 send() 末尾(及 llm.py 轮内刷新),现已不挂尾(send() 纯追加)。pin 工具仍正常
-# 存储(session_pins),只是不再注入 payload；存储接线由 test_session_pins 覆盖。
+# pin/钉板子系统已整体删除（2026-06-23）：in-session 不再显示、和 remember 冗余。
+# 曾经的挂尾 smoke 测试与 test_session_pins 一并移除。
 
 
 def test_smoke_malformed_tool_args_handled(monkeypatch):

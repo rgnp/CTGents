@@ -39,11 +39,6 @@ _TRANSLITERATE: dict[str, list[str]] = {
 _context_cache: str | None = None
 _context_dirty: bool = True
 
-# ── 指纹命名空间边界 ──
-# memory.py 和 lesson.py 各自有 fingerprint 系统，写同一目录 memory/。
-# lesson.py 文件带有 `severity` 字段（如 tool_arg_error/repeated_edit 等）——
-# _find_by_fingerprint 跳过此类文件，防止 _remember 合并覆盖 lesson.py
-# 积累的结构化教训。各自的指纹值不应交叉使用。
 
 
 def _split_frontmatter(text: str) -> tuple[dict[str, str], str]:
@@ -80,7 +75,6 @@ def _build_context() -> str | None:
     两级注入（业界共识）：
     - 策略/用户偏好 → 注入全文（首 _CONTEXT_BODY_CHARS 字），每轮都看到完整内容
     - 知识/参考 → 注入一行摘要，需要时 recall 深读
-    - lesson.py 文件（有 severity） → 不注入上下文（机械收割的操作记录，信噪比低）
     """
     mem_dir = Path(MEMORY_DIR)
     d = mem_dir
@@ -93,9 +87,6 @@ def _build_context() -> str | None:
             continue
         try:
             meta, body = _split_frontmatter(f.read_text(encoding="utf-8"))
-            # lesson.py 文件：跳过（22 条操作记录淹没 10 条策略）
-            if meta.get("severity"):
-                continue
             name = meta.get("name", f.stem)
             mem_type = meta.get("type", "")
             if mem_type in _FULLBODY_TYPES:
@@ -175,7 +166,6 @@ TOOLS_MEMORY = [
                             "同类场景指纹标识（可选）。同指纹记忆自动合并到已有文件——"
                             "更新内容、递增 times_encountered。"
                             "如 improvement_loop、memory_corruption。"
-                            "勿用 lesson.py 的指纹值（tool_arg_error 等），那是另一套系统。"
                         ),
                     },
                 },
@@ -259,22 +249,14 @@ def _rebuild_index() -> None:
 
 
 def _find_by_fingerprint(fp: str) -> Path | None:
-    """扫描 memory/ 找 metadata.fingerprint 匹配的**非 lesson.py** 文件。
-
-    仅匹配 metadata 下的 fingerprint 字段，避免 description/body 中的偶然命中。
-    跳过有 `severity` 字段的文件——那是 lesson.py 的程序化指纹系统写入的，
-    fingerprint 值共享同一命名空间（如 tool_arg_error/repeated_edit），
-    若被 `_remember` 合并覆盖，会把 19 次积累的结构化教训瞬间压成一句短内容。
-    两个系统共用文件目录、各管各的 fingerprint 命名空间——`severity` 是分界线。
+    """扫描 memory/ 找 metadata.fingerprint 匹配的文件（仅匹配 metadata 下的
+    fingerprint 字段，避免 description/body 中的偶然命中）。
     """
     for f in sorted(_dir().glob("*.md")):
         if f.name == "MEMORY.md":
             continue
         try:
             meta, _ = _split_frontmatter(f.read_text(encoding="utf-8"))
-            # lesson.py 文件：有 severity，跳过
-            if meta.get("severity"):
-                continue
             if meta.get("fingerprint") == fp:
                 return f
         except Exception:

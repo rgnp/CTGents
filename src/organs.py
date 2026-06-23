@@ -99,8 +99,7 @@ def census() -> list[OrganVital]:
 
     cache_files = [p for p in _glob(_STATS_DIR, "*.json")
                    if not p.name.endswith("_reflection.json")]
-    strat = _memory_by_type("strategy", exclude_prefix="pin-")
-    pins = _glob(_MEMORY, "pin-*.md")
+    strat = _memory_by_type("strategy")
 
     return [
         vital("工具追踪", "记录每次工具调用耗时/成败（tracker，唯一已插仪表的器官）",
@@ -110,15 +109,11 @@ def census() -> list[OrganVital]:
               note="仅检测到异常才落盘——少/无文件可能=无异常，非必然衰竭"),
         vital("缓存统计", "每会话 prompt / cache hit-miss 用量",
               cache_files),
-        vital("用户档案", "越用越懂你：LLM 收割用户理解（user_model）",
-              [_MEMORY / "user-profile.md"]),
-        vital("项目知识", "项目/领域 durable 事实（project_model）",
-              [_MEMORY / "project-knowledge.md"]),
-        vital("失败教训/策略", "机械收割失败模式（lesson，type=strategy，已排除 pin）",
+        vital("用户档案", "越用越懂你：记忆 type=user（agent 显式 remember，前缀全文注入）",
+              [_MEMORY / "user-profile.md"],
+              note="自动 harvest 已删——靠 agent 显式 remember 更新，久未跳=期间无更新非衰竭"),
+        vital("策略记忆", "agent 显式 remember 的 type=strategy 记忆（每轮注入前缀）",
               strat, count=len(strat)),
-        vital("耐久 pin 转存", "会话钉板转存为长期记忆（promote_durable，pin-*）",
-              pins, count=len(pins),
-              note="仅当会话产生耐久 pin 才转存——久未跳可能=期间无耐久 pin，非衰竭"),
         vital("会话存档", "会话落盘（save_session）",
               list(_SESSIONS.iterdir()) if _SESSIONS.is_dir() else []),
     ]

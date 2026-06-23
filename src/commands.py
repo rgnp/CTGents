@@ -659,38 +659,6 @@ def _append_cmd_list_section(parts: list[str]) -> None:
 # ═══════════════════════════════════════════════════════════════
 
 
-# ── 自进化命令 ──
-
-@builtin("/lesson", description="从当前会话提取失败模式，存入记忆（教训学习）",
-         usage="/lesson [save]")
-def _cmd_lesson(r: CmdResult, ctx, args, _sid) -> None:
-    from .lesson import extract_lessons, save_lessons
-
-    if not hasattr(ctx, 'log'):
-        r.message = "当前上下文不可用。"
-        return
-
-    lessons = extract_lessons(ctx.log)
-    if not lessons:
-        r.message = "当前会话未发现可提取的失败模式。"
-        return
-
-    lines = [f"发现 {len(lessons)} 个可学习的模式：\n"]
-    for i, le in enumerate(lessons, 1):
-        lines.append(f"  #{i} [{le.fingerprint}] {le.content.split(chr(10))[0].lstrip('#').strip()[:80]}")
-
-    do_save = "save" in args
-    if do_save:
-        n = save_lessons(lessons)
-        lines.append(f"\n已存入 {n} 条策略记忆。下次类似场景会自动提醒。")
-        r.save = True
-    else:
-        lines.append("\n说 '/lesson save' 确认存入记忆。")
-
-    r.message = "\n".join(lines)
-
-
-
 @builtin("/ambition", description="查看/管理野心清单（自己发现想做的事）",
          usage="/ambition [done <标题关键词>]")
 def _cmd_ambition(r: CmdResult, _ctx, args, _sid) -> None:

@@ -450,18 +450,15 @@ def _reload_dispatch():
 
 # ── 主入口 ──
 
-# 会话关闭时的收割（教训 / 用户理解 / 项目知识）总开关。默认关：每次关闭都全量
-# LLM 重写记忆档案，既烧 LLM 调用、又 churn 记忆索引 → 下次新建会话前缀变动。
-# 记忆改为「用出来的」——靠 agent 显式 remember，不靠每次关闭自动收割。
-# 设 CTG_HARVEST_ON_CLOSE=1 恢复关闭时收割。
-_HARVEST_ON_CLOSE = os.getenv("CTG_HARVEST_ON_CLOSE", "0").strip().lower() not in ("", "0", "false", "no")
-
-
 def _finalize_session(ctx: CacheContext, session_id: str | None) -> list[str]:
-    """会话收尾：落盘 → 反思 →（收割默认关，见 _HARVEST_ON_CLOSE）→ pin 转存。
+    """会话收尾：落盘 → 反思。
 
     本进程没真跑过一轮（空会话 / 加载后未改动就退出）则直接退出，不触发任何
-    反思/摘要/收割——那些是 LLM 调用，对没新内容的会话纯属白烧。
+    反思——那是 LLM 调用，对没新内容的会话纯属白烧。
+
+    会话关闭时的「收割」（lesson / 用户档案 / 项目知识 LLM 重写）已于 2026-06-23 整体
+    删除：记忆改为「用出来的」靠 agent 显式 remember，不靠每次关闭自动收割（曾烧 LLM +
+    churn 记忆索引）。详见 [[ctgents-context-cache]]。
     """
     lines: list[str] = []
     if not _session_state["turn_ran"]:
@@ -484,44 +481,6 @@ def _finalize_session(ctx: CacheContext, session_id: str | None) -> list[str]:
                 lines.append("已写入会话反思。")
         except Exception as e:
             logger.warning("会话反思失败: %s", e)
-    if _HARVEST_ON_CLOSE:
-        try:
-            from .lesson import extract_lessons, save_lessons
-            lessons = _timed("教训", lambda: extract_lessons(ctx.all))
-            if lessons:
-                n = save_lessons(lessons)
-                lines.append(f"已自动收割 {n} 条记忆。")
-        except Exception as e:
-            logger.warning("记忆收割失败: %s", e)
-        if any(m["role"] == "assistant" for m in ctx.all):
-            # 用户档案 + 项目知识都是阻塞 LLM 调用。两者各写不同记忆文件，但 _remember
-            # 末尾会重建共享索引 MEMORY.md（并发写同一文件会互相截断）——故 LLM 调用并发跑、
-            # 落盘串行做：把退出等待从 串行(64+44s) 砍到 并发(≈max)。
-            import concurrent.futures as _cf
-
-            from .project_model import harvest_project_knowledge, save_project_knowledge
-            from .user_model import harvest_user_profile, save_user_profile
-            log_all = ctx.all
-
-            def _harvest_both() -> tuple[str | None, str | None]:
-                with _cf.ThreadPoolExecutor(max_workers=2) as ex:
-                    fu = ex.submit(harvest_user_profile, log_all)
-                    fp = ex.submit(harvest_project_knowledge, log_all)
-                    return fu.result(), fp.result()
-
-            user_body = proj_body = None
-            try:
-                user_body, proj_body = _timed("收割(并发)", _harvest_both)
-            except Exception as e:
-                logger.warning("收割失败: %s", e)
-            if user_body and save_user_profile(user_body):
-                lines.append("已更新用户理解档案（下次会话自动注入）。")
-            if proj_body and save_project_knowledge(proj_body):
-                lines.append("已更新项目知识档案（下次会话索引可见，recall 取详情）。")
-    from .session_pins import promote_durable
-    promoted = _timed("pin转存", promote_durable)
-    if promoted:
-        lines.append(f"已把 {promoted} 条耐久 pin 转存进记忆。")
     if timings:
         slow = sorted(timings, key=lambda kv: kv[1], reverse=True)
         brief = " ".join(f"{k}{v:.1f}s" for k, v in slow if v >= 0.05)
@@ -666,8 +625,6 @@ def _run_line_repl(ctx: CacheContext, session_id: str | None) -> str | None:
                 ctx.rebuild_prefix(_make_prefix_msgs())
                 if r.save:
                     session_id = None
-                    from .session_pins import clear_pins
-                    clear_pins()
                     from .tasks import reset_gaps_cache
                     reset_gaps_cache()
                     from . import status_bar

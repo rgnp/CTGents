@@ -342,18 +342,6 @@ def _status_line(ctx, session_id: str) -> str:
     except Exception:
         pass
     try:
-        from .session_pins import list_pins
-        psyches = [p["text"] for p in list_pins() if "Psyche已加载" in p["text"]]
-        if psyches:
-            # 只取名字部分，如 "psyche-building v0.5"、"aesthetic-design v0.2"
-            tags = []
-            for pin in psyches:
-                name = pin.split("Psyche已加载: ", 1)[-1].split(" (")[0].strip()
-                tags.append(name)
-            segs.append(f"🧬 {' '.join(tags)}")
-    except Exception:
-        pass
-    try:
         from .tools.exec import running_job_count
         n = running_job_count()
         if n:
@@ -825,9 +813,7 @@ class ChatScreen(Screen):
         if r.save:
             self.app.session_id = None
             from . import status_bar
-            from .session_pins import clear_pins
             from .tasks import reset_gaps_cache
-            clear_pins()
             reset_gaps_cache()
             status_bar.reset()
         self._status_cache = (-1, -1, "")
