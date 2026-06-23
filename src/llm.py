@@ -1823,12 +1823,13 @@ def run_conversation(
             requests_made += 1
         except UserInterruptError:
             clear_interrupt()
-            # 显式停止信号：用户截停本轮。外层主干 gate（control_signal is None 才续跑）
-            # 与 run_task_continuation 据此停——否则中断后续跑会接着跑下一步、"截停"失效。
             ctx.control_signal = "interrupted"
-            # ① 中断标记落 log：下次加载能看到"这里被中断过"
+            # ① 中断标记落 log
             ctx.log.append({"role": "system", "content": "⏹️ 本轮被用户中断，以上是中断前已完成的步骤。"})
-            # ② 中断时存盘：保证中断时的上下文不丢
+            # ② 弹出最后一条 user 消息（避免重试时重复）
+            if ctx.log and ctx.log[-1].get("role") == "user":
+                ctx.log.pop()
+            # ③ 中断时存盘
             if on_progress:
                 on_progress()
             return "\n\n[⏹️ 已中断]"

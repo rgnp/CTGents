@@ -679,6 +679,14 @@ def _run_line_repl(ctx: CacheContext, session_id: str | None) -> str | None:
             _pending_job_notices.clear()
         try:
             session_id = run_agent_turn(ctx, user_input, session_id)
+            # ── 暂停菜单：中断后可选重试 ──
+            if getattr(ctx, "control_signal", None) == "interrupted":
+                print("\n⏸️ 已暂停，现场已保存。")
+                print("  回车或输入 → 开始新输入")
+                print("  r          → 重试上一条消息")
+                choice = input("选择: ").strip().lower()
+                if choice == "r":
+                    session_id = run_agent_turn(ctx, user_input, session_id)
         except BaseException as e:
             if isinstance(e, KeyboardInterrupt):
                 _stop_esc_listener()
