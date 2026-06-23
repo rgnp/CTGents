@@ -87,6 +87,28 @@ class TestCompactContext:
         assert len(result) < len(msgs), f"压缩应减少消息: {len(result)} vs {len(msgs)}"
         assert any("⏪" in m.get("content", "") for m in result if m["role"] == "system")
 
+    def test_loaded_psyche_survives_compaction(self, monkeypatch):
+        """已加载 psyche（log[0] 的 _psyche_meta）撞压缩被抢救置顶，不被摘要掉=不悄悄卸载。"""
+        monkeypatch.setattr(llm, "_make_brief_summary",
+                            lambda msgs, max_len=500, previous_summary=None: "摘要")
+        from src.cache_context import CacheContext
+        log = [{"role": "system",
+                "content": "【Psyche: software-development v0.5】\n认知框架核心内容……",
+                "_psyche_meta": {"name": "software-development", "version": "0.5"}}]
+        big = "X" * 5000
+        for i in range(6):
+            log.append({"role": "user", "content": f"问题{i} " + big})
+            log.append({"role": "assistant", "content": f"回答{i} " + big})
+        ctx = CacheContext(prefix_msgs=[{"role": "system", "content": "sys"}], log_msgs=log)
+        llm._compact_cache_context(ctx, "继续", force=True)
+        psyches = [m for m in ctx.log if m.get("_psyche_meta")]
+        assert len(psyches) == 1, "已加载 psyche 应被抢救、不被摘要吞掉"
+        assert psyches[0]["_psyche_meta"]["name"] == "software-development"
+        assert ctx.log[0].get("_psyche_meta"), "抢救的 psyche 应置顶（高注意力区）"
+        # 摘要里不该混入 psyche 正文（psyche 不进 to_summarize）
+        assert "认知框架核心内容" not in next(
+            (m["content"] for m in ctx.log if "⏪" in m.get("content", "")), "")
+
 
 class TestCompressToolResult:
     """_compress_tool_result：语义摘要（v2，对齐 Hermes 工具结果压缩）。"""

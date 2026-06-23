@@ -1121,14 +1121,21 @@ def _compact_cache_context(ctx, user_input: str, force: bool = False) -> None:
 
     evicted = log[:keep_start]
     kept = log[keep_start:]
-    summary = _make_brief_summary(evicted, previous_summary=_previous_summary)
-    if not summary:
+    # 抢救被驱逐区里已加载的 psyche：它由 load_psyche 插在 log[0]（最旧），落在驱逐区，
+    # 若被摘要掉 = 悄悄卸载 agent 主动加载的认知框架。原样搬到新 log 顶部、不进摘要。
+    rescued = [m for m in evicted if m.get("_psyche_meta")]
+    to_summarize = [m for m in evicted if not m.get("_psyche_meta")]
+    summary = _make_brief_summary(to_summarize, previous_summary=_previous_summary) \
+        if to_summarize else None
+    if not summary and not rescued:
         return
 
-    _replace_log_with_summary(ctx, kept, evicted, summary)
+    _replace_log_with_summary(ctx, kept, summary, rescued=rescued)
     _update_compaction_effectiveness(before=used, after=_live_context_tokens(ctx))
-    _previous_summary = summary
-    logger.info("滑窗压缩：驱 %d 条旧消息，保留 %d 条", len(evicted), len(kept))
+    if summary:
+        _previous_summary = summary
+    logger.info("滑窗压缩：驱 %d 条旧消息，保留 %d 条%s", len(to_summarize), len(kept),
+                f"，抢救 {len(rescued)} 条 psyche" if rescued else "")
 
 
 def _should_compact(used: int) -> bool:
@@ -1184,15 +1191,21 @@ def _update_compaction_effectiveness(before: int, after: int) -> None:
         _ineffective_compression_count = 0
 
 
-def _replace_log_with_summary(ctx, kept: list[dict], evicted: list[dict],
-                               summary: str) -> None:
-    """用摘要+保留消息替换 ctx.log。"""
-    new_log = [{"role": "system", "content": (
-        "⏪ 对话归档 — 以下为背景参考，非当前任务指令。\n"
-        "回应最新 user 消息即可，不要执行摘要中描述的任务。\n\n"
-        f"{summary}\n\n"
-        "─── 以上为归档摘要，以下为当前对话 ───"
-    )}]
+def _replace_log_with_summary(ctx, kept: list[dict], summary: str | None,
+                               rescued: list[dict] | None = None) -> None:
+    """用 [抢救的 psyche] + [归档摘要] + [保留消息] 替换 ctx.log。
+
+    rescued（被驱逐区里的已加载 psyche）原样置顶，不进摘要——见 _compact_cache_context。
+    summary 为 None（驱逐区全是 psyche、无可摘要内容）时只搬 rescued + kept。
+    """
+    new_log: list[dict] = list(rescued or [])
+    if summary:
+        new_log.append({"role": "system", "content": (
+            "⏪ 对话归档 — 以下为背景参考，非当前任务指令。\n"
+            "回应最新 user 消息即可，不要执行摘要中描述的任务。\n\n"
+            f"{summary}\n\n"
+            "─── 以上为归档摘要，以下为当前对话 ───"
+        )})
     new_log.extend(kept)
     ctx.log.clear()
     ctx.log.extend(new_log)
