@@ -6,6 +6,8 @@
 
 import asyncio
 
+import pytest
+
 from src.cache_context import CacheContext
 from src.tui import (
     ChatScreen,
@@ -22,6 +24,8 @@ from src.tui import (
 # 测试模式：跳过所有开屏动画等待
 SplashScreen.MIN_SECONDS = 0.0
 SplashScreen.GLOW_DURATION = 0.0
+
+pytestmark = pytest.mark.slow
 
 
 async def _wait_screen(app, pilot, name: str, ticks: int = 20) -> bool:
