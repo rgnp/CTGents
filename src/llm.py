@@ -1567,6 +1567,23 @@ def _detect_control_signal(tool_calls: list[dict]) -> tuple[str, str] | None:
     return None
 
 
+def _handle_psyche_tools(ctx: CacheContext, approved: list[tuple]) -> None:
+    """处理 load_psyche / unload_psyche 工具调用结果。
+
+    在工具执行后、结果写 log 前执行，实际调用 psyche_bridge 注入/移除。
+    """
+    from .psyche_bridge import inject_psyche, remove_psyche
+    for _tc_data, tool_name, args, _tc, _result in approved:
+        if tool_name == "load_psyche":
+            name = (args.get("name") or "").strip()
+            if name:
+                inject_psyche(ctx, name)
+        elif tool_name == "unload_psyche":
+            name = (args.get("name") or "").strip()
+            if name:
+                remove_psyche(ctx, name)
+
+
 def _handle_tool_results(
     ctx: CacheContext,
     tool_calls: list[dict],
@@ -1624,6 +1641,9 @@ def _handle_tool_results(
 
     # stormBreaker
     storm_sig, storm_count = _check_storm_breaker(approved, storm_sig, storm_count)
+
+    # ── 处理 psyche 加载/卸载（agent 自主调用） ──
+    _handle_psyche_tools(ctx, approved)
 
     # 写 tool 结果到 log
     for tc_data, tool_name, _args, _tc, result in approved:
