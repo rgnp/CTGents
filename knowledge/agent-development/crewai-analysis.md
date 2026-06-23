@@ -1,12 +1,92 @@
-# CrewAI 深度分析 — 架构与问题
+# CrewAI 深度分析
 
 > 分析日期: 2026-06-23
 > 项目: crewAIInc/crewAI (github.com/crewaiinc/crewai)
-> 方法: 按 learning-method 流程 — 从测试入手→入口结构→数据流→找问题→对比
+> 方法: 按 learning-method 流程
 
 ---
 
-## 一、高层架构
+## 一、它是什么（一句话）
+
+CrewAI 是一个多 AI Agent 编排框架。它的核心理念是：让多个 AI agent 像团队成员一样协作，每个 agent 有角色（role）、目标（goal）和背景故事（backstory）。
+
+---
+
+## 二、核心创新与独特功能
+
+### 1. 角色扮演 Agent 模式（核心创新）
+
+CrewAI 重新定义了 Agent 的配置方式——不是写长 prompt，而是填三个字段：
+
+```python
+Agent(
+    role="CEO",
+    goal="Produce amazing content",
+    backstory="You're an experienced CEO of a content agency..."
+)
+```
+
+这个设计让非技术用户也能定义 AI agent。它被大规模验证有效（100,000+ 认证开发者）。
+
+### 2. Flow DSL — 事件驱动的工作流引擎（最大技术亮点）
+
+Flow 是 CrewAI 最独特的技术贡献。它是一个**用装饰器定义执行 DAG** 的框架：
+
+```python
+class MyFlow(Flow):
+    @start()
+    def step_one(self):
+        return "output"
+
+    @listen(step_one)
+    def step_two(self, data):
+        # 在 step_one 完成后自动触发
+        pass
+
+    @router(step_one)
+    def route(self, data):
+        # 条件分支：根据输出决定下一步
+        if "ok" in data: return "success"
+        return "retry"
+
+    @listen("success")
+    def on_success(self, data):
+        pass
+```
+
+技术亮点：
+- **装饰器驱动** — Python 天然语法，不需要额外 DSL
+- **条件组合** — `or_()` / `and_()` 支持复杂触发条件
+- **状态管理** — Flow 自带类型安全的 state（dict 或 Pydantic BaseModel）
+- **可视化** — `visualize_flow_structure()` 自动生成 DAG 图
+- **持久化** — `@persist` 装饰器支持断点恢复
+- **Human-in-the-loop** — `@human_feedback` 支持人工介入
+
+### 3. 两种执行模式
+
+| Crews（自主协作） | Flows（精确控制） |
+|------------------|------------------|
+| 多 agent 自主决策 | 事件驱动的工作流 |
+| 动态任务委派 | 精确的执行路径控制 |
+| 角色扮演协作 | 条件分支和循环 |
+| 适合开放任务 | 适合确定性流程 |
+
+两者可以嵌套使用——Flow 里跑 Crew，Crew 里引用 Flow。
+
+### 4. 其他能力
+
+- **Memory 系统** — 短期/长期/实体记忆，跨会话持久化
+- **Knowledge 系统** — 结构化知识库（字符串/文件/目录源）
+- **Skills 系统** — SKILL.md 标准支持（与 OpenCode 一致）
+- **ConditionalTask** — 根据前序任务输出决定是否执行
+- **Checkpoint** — 任务断点续跑（长任务不丢失进度）
+- **Train/Eval 循环** — 内置训练和评估流水线
+- **事件系统** — 完整的 event bus + telemetry + tracing
+- **安全层** — Fingerprint、SecurityConfig
+
+---
+
+## 三、高层架构
 
 ```
 Agent(role, goal, backstory)  →  角色扮演的 AI 实体
