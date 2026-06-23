@@ -89,11 +89,46 @@ def inject_psyche(ctx: CacheContext, name: str) -> str:
 
     ctx.log.insert(0, system_msg)
 
+    # ── 自动加载子 Psyche（父加载时自动带上常用的子） ──
+    _auto_load_subs(ctx, name)
+
     return (
         f"✅ 已注入 psyche「{name}」v{version or '?'}"
         f"（{coverage or '覆盖精度未知'}）。"
         f"位置固定，不影响前缀缓存。"
     )
+
+
+
+# ── 自动加载映射：父 Psyche → [子 Psyche 列表]
+_AUTO_LOAD_SUBS: dict[str, list[str]] = {
+    "psyche-building": ["learning-method"],
+}
+
+
+def _auto_load_subs(ctx: CacheContext, name: str) -> None:
+    """父 Psyche 加载后自动注入其常用子 Psyche。
+
+    只在子 Psyche 尚未加载时注入，不重复加载。
+    """
+    subs = _AUTO_LOAD_SUBS.get(name)
+    if not subs:
+        return
+    for sub_name in subs:
+        existing = loaded_psyches_in_log(ctx)
+        if any(meta.get("name") == sub_name for meta in existing):
+            continue
+        inject_psyche(ctx, sub_name)
+
+
+
+def _auto_remove_subs(ctx: CacheContext, name: str) -> None:
+    """父 Psyche 卸载时自动移除其自动加载的子 Psyche。"""
+    subs = _AUTO_LOAD_SUBS.get(name)
+    if not subs:
+        return
+    for sub_name in subs:
+        remove_psyche(ctx, sub_name)
 
 
 def remove_psyche(ctx: CacheContext, name: str) -> str:
@@ -115,6 +150,8 @@ def remove_psyche(ctx: CacheContext, name: str) -> str:
                 "_system_context": f"psyche/{name}",
             },
         )
+        # ── 自动移除子 Psyche ──
+        _auto_remove_subs(ctx, name)
         return f"✅ 已卸载 psyche「{name}」（移除了 {removed} 条系统消息，自律检查已更新）。"
     return f"⚠️ 未找到已加载的 psyche「{name}」。可用 /psyche list 查看。"
 
@@ -132,15 +169,30 @@ def status_text(ctx: CacheContext) -> str:
 
 # ── 内部 ──
 
+_PSYCHE_SUB = os.path.join(_PSYCHE_ROOT, "software-development", "sub")
+
+
 def _find_core_file(name: str) -> str | None:
-    """在 psyche 目录树中查找核心文件。"""
+    """在 psyche 目录树中查找核心文件。
+
+    支持两级子 Psyche：
+    1. psyche/{name}/核心/{name}-core.md（顶层）
+    2. psyche/software-development/sub/{name}/核心/{name}-core.md（一级子）
+    3. psyche/software-development/sub/{父}/sub/{name}/核心/{name}-core.md（二级子）
+    """
     candidates = [
         os.path.join(_PSYCHE_ROOT, name, "核心", f"{name}-core.md"),
-        os.path.join(_PSYCHE_ROOT, "software-development", "sub", name, "核心", f"{name}-core.md"),
+        os.path.join(_PSYCHE_SUB, name, "核心", f"{name}-core.md"),
     ]
     for path in candidates:
         if os.path.isfile(path):
             return path
+    # 二级子 Psyche：遍历所有一级子目录下的 sub/
+    for parent_dir in os.listdir(_PSYCHE_SUB):
+        sub_dir = os.path.join(_PSYCHE_SUB, parent_dir, "sub", name)
+        core_path = os.path.join(sub_dir, "核心", f"{name}-core.md")
+        if os.path.isfile(core_path):
+            return core_path
     return None
 
 
