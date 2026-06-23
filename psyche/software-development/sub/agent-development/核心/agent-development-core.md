@@ -1,6 +1,6 @@
 # Agent 开发 Psyche 核心
 
-> 版本: 0.2 | 构建: 2026-06-21 | 更新: 2026-06-22（新增 OpenCode 架构洞察：System Context / Stale Tool / 权限 / 状态变换）
+> 版本: 0.3 | 构建: 2026-06-21 | 更新: 2026-06-22（新增 OpenCode 代码审查发现：System Context 空渲染崩溃 / 工具结果静默丢失 / Effect.die 控制流 / 权限粗糙度）
 > 依赖: 父 psyche（software-development）中的判断准则和工程原则
 > 覆盖精度: 🟢全景拓扑 🟡因果结构 🟢判断准则 🟢负面知识（新增）
 > 知识来源: Anthropic Agent 实践 + Ng 4种模式 + OpenCode (anomalyco/opencode) 完整架构分析
@@ -179,17 +179,30 @@ reload() → 从 initial 开始重放所有活跃变换
 - **静态注入 → 注意力稀释**：把所有上下文放在 context 开头，会话拉长后注意力被稀释。改为可刷新的 source + 增量更新。
 - **只注入不移除**：加载时通知 LLM，卸载时不通知。LLM 不知道上下文不再可用。
 - **没有优先级**：多条上下文冲突时，行为不可预测。
+- **空渲染直接崩溃**：source 返回空字符串时整轮对话崩溃。应该让空结果静默跳过，而不是抛异常。
+  [→ knowledge/agent-development/opencode-code-review.md 1.1]
+- **Unavailable source 静默失败**：source 加载失败时 LLM 完全不知道。应该至少通知 LLM"某上下文当前不可用"。
+  [→ knowledge/agent-development/opencode-code-review.md 1.2]
 
 ### 工具陷阱
 
 - **没有 stale 检测**：工具热替换后，LLM 可能还在调用旧版本。需要 identity token 验证。
 - **没有权限过滤**：LLM 可以调用所有工具，即使该工具在当前上下文不合理。需要 action + resource 级权限。
 - **工具名冲突**：多个模块注册同名工具导致静默覆盖。需要命名空间和注册栈。
+- **非字符串 tool 结果静默丢失**：如果 tool 返回对象且没定义 `toModelOutput`，执行结果不发给 LLM——成功但 LLM 不知道。任何工具输出必须有默认的文本渲染兜底。
+  [→ knowledge/agent-development/opencode-code-review.md 2.1]
 
 ### 状态陷阱
 
 - **状态变更不可回放**：插件/工具注册后，无法清理。需要可重放变换 + Scope 自动清理。
 - **手动管理反注册**：注册和反注册不对称，容易泄漏。应该对称——transform 自动 dispose。
+
+### 架构陷阱
+
+- **用致命错误做控制流**：用 `Effect.die()` / 异常来跳转到"压缩后继续执行"，然后用 `instanceof` 拦截。任何中间错误处理器都会把它当成真崩溃。控制流应该用显式的代数效果或返回值建模。
+  [→ knowledge/agent-development/opencode-code-review.md 3.2]
+- **多资源权限评估太粗糙**：`deny` 只要有一个资源被拒绝就全局拒绝，无法表达"部分允许、部分拒绝"。权限系统应该在每个资源级别独立评估。
+  [→ knowledge/agent-development/opencode-code-review.md 4.1]
 
 ---
 
