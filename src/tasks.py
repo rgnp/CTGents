@@ -381,24 +381,31 @@ def get_task_short_status() -> str:
     return f"📋 {title} ({done}/{total})"
 
 
-def read_current_active_step() -> str:
-    """解析 current.md，提取第一个未完成步骤（[ ] 或 [o]）的文本。
+def read_current_active_step() -> str | None:
+    """任务切片：解析 current.md，只返回当前第一个活跃的步骤和其子描述。
 
-    用于游离态挂尾注入——让模型聚焦"当前这一步"，而不是被整个任务列表稀释注意力。
-    返回格式：锚点摘要 + 步骤文本。无未完成步骤时返回空串。
+    避免把做完的 [x] 和整个长列表全喂给模型。
+    返回格式：步骤行 + 紧跟的子描述。无未完成步骤时返回 None。
     """
     text = read_current()
     if not text:
-        return ""
-    anchor = _extract_anchor(text)
-    active = ""
+        return None
+
+    active_lines: list[str] = []
+    found_active = False
+
     for line in text.splitlines():
         stripped = line.strip()
-        if stripped.startswith("- [ ]") or stripped.startswith("- [o]"):
-            active = stripped[5:].strip()
+        # 遇到第一个未完成的步骤，开始记录
+        if stripped.startswith(("- [ ]", "- [o]", "- [O]")):
+            found_active = True
+            active_lines.append(line)
+        # 如果已经找到了活跃步骤，且遇到了下一个步骤标记 → 结束
+        elif found_active and stripped.startswith("- ["):
             break
-    if not active:
-        return ""
-    if anchor:
-        return f"【目标】{anchor} | 【下一步】{active}"
-    return active
+        # 将紧跟的子描述也带上
+        elif found_active:
+            active_lines.append(line)
+
+    result = "\n".join(active_lines).strip()
+    return result if result else None

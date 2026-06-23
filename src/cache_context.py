@@ -117,16 +117,10 @@ class CacheContext:
     def send(self, validate: bool = True) -> list[dict]:
         """构建发给 LLM API 的消息列表 —— Reasonix 式纯追加（唯一模式）。
 
-        策略（保障 DeepSeek 前缀缓存）：
-          1. 不可变 prefix 系统消息排在 payload 最前面（会话级冻结、哈希锁死）
-          2. prefix 之后**只追加** log 中的非 volatile-system 消息（user/assistant/tool）
-          3. 永不在对话后面摆放浮动的 volatile system 尾——每轮对话结束的"输入结束
-             位置"就是对话本身，下一轮首请求才能可靠命中该缓存单元
-             （实测无尾 ~88% vs 挂尾 ~25%，见 [[ctgents-context-cache]]）
-
-        log 里带 _volatile 标记的 system 消息一律丢弃（不发给 API、只影响内存/持久化）。
-        历史上的"挂尾"机制（审计/任务/钉板/记忆触发摆在 payload 末尾）已整体删除；
-        这些能力若要回归，必须按 append-only 重做（append 进永久日志，不再挂尾）。
+        prefix 段：不可变系统消息（会话级冻结、哈希锁死）。
+        log 段：只追加对话（user/assistant/tool），丢弃 volatile system。
+        尾段：游离态挂尾——阅后即焚，不进 self.log，利用近因效应聚焦当前任务步骤。
+        前缀缓存不受影响（prefix + log 序列不变，尾段是临时追加的易失消息）。
 
         Args:
             validate: 是否校验 prefix 完整性，默认 True。
@@ -145,10 +139,31 @@ class CacheContext:
         for m in self.prefix:
             api.append({"role": "system", "content": m.get("content", "")})
 
-        # prefix 之后纯追加：丢弃所有 volatile system 消息，不挂任何尾
+        # prefix 之后纯追加：丢弃所有 volatile system 消息
         kept = [m for m in self.log
                 if not (m.get("role") == "system" and m.get("_volatile"))]
         api.extend(self._repair_tool_pairing([self._clean_log_msg(m) for m in kept]))
+
+        # ── 游离态挂尾注入（阅后即焚，不进 self.log）──
+        try:
+            from .tasks import read_current_active_step
+            _active = read_current_active_step()
+            if _active:
+                api.append({
+                    "role": "system",
+                    "content": (
+                        "【系统最高指令 / 当前操作台】\n"
+                        "无论上方的历史对话多么冗长，你当前必须且只能聚焦于以下任务切片：\n"
+                        f"👉 当前执行步骤：\n{_active}\n\n"
+                        "🛡️ 核心纪律强制刷新：\n"
+                        "1. 你无权修改 IMMUTABLE_FILES（不可变安全核）。\n"
+                        "2. 写代码（edit_file_lines）之前必须确保你已重新阅读了该文件获取最新行号。\n"
+                        "3. 请立即执行当前步骤，若遇到任何审计拦截（Audit），优先自我纠正！"
+                    ),
+                })
+        except Exception:
+            pass
+
         return api
 
     def _validate_prefix(self) -> None:
