@@ -1267,6 +1267,21 @@ class ChatScreen(Screen):
             inp.text = self._history_draft
             self._history_draft = ""
 
+    def action_copy_text(self) -> None:
+        """复制选中文本，出错不回退 UI（防某些 widget 渲染异常导致崩溃）。"""
+        try:
+            from textual.actions import SkipAction
+        except ImportError:
+            return
+        try:
+            super().action_copy_text()
+        except SkipAction:
+            return  # 没选中文本→正常跳过，不给用户报错
+        except Exception:  # noqa: BLE001
+            import logging
+            logging.getLogger("tui").warning("复制选中文本失败", exc_info=True)
+            self._mount("复制失败（选中区域不支持）", "err")
+
 
 # ═══════════════════════════════════════════════════════
 # App
