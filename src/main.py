@@ -232,10 +232,9 @@ def _run_post_turn_audits(ctx: CacheContext, disp) -> None:
     """④可信：轮末取证自检（谎报完成 / 编造引用 / 不读就改）。
 
     append-only：命中的 nudge 作为**非 volatile** system 消息追加进 log——send() 只丢
-    volatile system、保留它，故下一轮模型看得到、能自纠；永不挂尾、永不原地改历史
-    （这是用户定的 canonical，区别于 per-turn 动态的任务上下文）。去重：同一条 nudge
-    只在 log 里尚无同文 _audit 消息时追加一次——staleness 类 nudge 条件不变会每轮重复
-    返回，不去重会堆积刷屏。命中即同时打印给用户（你来抓 agent 谎报）。
+    volatile system、保留它，故下一轮模型看得到、能自纠；永不挂尾、永不原地改历史。
+    去重：按 _audit_id（类型标识，如 "completion"）去重，不按文本比对——
+    审计消息可能含动态内容（如引用的文件名列表），文本比对会被绕过导致复读机刷屏。
     """
     from .citation_audit import audit_citations
     from .completion_audit import (
@@ -246,18 +245,28 @@ def _run_post_turn_audits(ctx: CacheContext, disp) -> None:
     )
 
     log = ctx.all
-    nudges = [a(log) for a in (
-        audit_completion, audit_citations, audit_read_before_write,
-        audit_memory_consult, audit_quality_check)]
-    existing = {m.get("content") for m in ctx.log if m.get("_audit")}
-    # 每条 nudge 单独成一条 _audit 消息——去重按单条比对（join 后整体比对会让
-    # 单条 nudge 永远 != 历史里的 join 文本、每轮重复追加）。
-    fresh = [n for n in nudges if n and n not in existing]
-    if not fresh:
-        return
-    for n in fresh:
-        ctx.log.append({"role": "system", "content": n, "_audit": True})
-    disp.on_status("\n\n".join(fresh))
+    # 按审计类型 ID 去重，不按文本——文本可能含动态内容（文件名等）
+    existing_ids = {m.get("_audit_id") for m in ctx.log if m.get("_audit_id")}
+    audits = [
+        ("completion", audit_completion),
+        ("citations", audit_citations),
+        ("read_before_write", audit_read_before_write),
+        ("memory_consult", audit_memory_consult),
+        ("quality_check", audit_quality_check),
+    ]
+    fresh = []
+    for audit_id, audit_fn in audits:
+        if audit_id in existing_ids:
+            continue
+        nudge = audit_fn(log)
+        if nudge:
+            fresh.append(nudge)
+            ctx.log.append({
+                "role": "system", "content": nudge,
+                "_audit": True, "_audit_id": audit_id,
+            })
+    if fresh:
+        disp.on_status("\n\n".join(fresh))
 
 
 def run_agent_turn(ctx: CacheContext, user_input: str,
