@@ -114,6 +114,19 @@ TOOLS_CONTROL = [
 
 def execute(name: str, args: dict) -> str | None:
     if name == "task_done":
+        # 质量自检硬拦：current.md 中有 [ ] 质量自检 步骤但未标 [x] → 拒
+        try:
+            from ..tasks import read_current as _read_current
+            current = _read_current()
+            if "[ ] 质量自检" in current and "[x] 质量自检" not in current:
+                return (
+                    "❌ task_done 被拦截：current.md 中有未完成的 `[ ] 质量自检` 步骤。"
+                    "完成任务前，请先对照「三问质量方法论」做自检，"
+                    "完成后把该步标为 `[x] 质量自检`。"
+                    "（如果这是一个不需要自检的小任务，先把该步删掉或标 [x]。）"
+                )
+        except Exception:
+            pass  # 读不到 current.md 时放行（容错，不阻塞正常 task_done）
         return f"[任务完成信号] {(args.get('summary') or '').strip()}"
     if name == "need_user":
         return f"[需要用户拍板] {(args.get('question') or '').strip()}"

@@ -1,10 +1,13 @@
 """引用即取证：扫最终回复里的代码引用，没在本会话见过 referent 就提示。
 
-治 ④可信 的"编造"②里**可检查的那一片**，两类引用形态：
+治 ④可信 的"编造"②里**可检查的那一片**，三类引用形态：
 - `path:line` 行号引用：引用了行号却全程没读/grep/改过该文件 → 很可能凭印象编。
 - 反引号标识符（`snake_case` / `*.py`）：agent 谈论自身架构/代码的主要形态——
   曾整段描述 completion_audit 的设计然后宣布"这层我们没有"。代码体引用一个
   上下文里从没出现过的名字 → 要么凭印象编、要么是新提议（措辞留给 agent 判断）。
+- 纯文本 .py 文件断言：agent 说"在 guard.py 中……"但没读过该文件——
+  同样是凭印象编的，补充反引号和行号引用之外的漏网。
+
 编造的其余部分（API/库行为、概念过度自信、数字断言——合法算术必然误报）是
 判断题，留三态标注纪律（AGENTS.md），不在此机械化——同 recall 硬规则被否决的判别器。
 
@@ -27,6 +30,14 @@ _CITE_RE = re.compile(
 # 的强形态（含下划线 / .py 结尾）——泛词（`recall`）和带空格的命令不抓，precision 优先。
 _IDENT_RE = re.compile(r"`([A-Za-z_][\w.]*)`")
 
+# 纯文本 .py 文件断言：agent 在陈述性上下文中引用了 .py 文件（无反引号）。
+# 如"在 guard.py 中"、"从 utils.py 导入"——agent 在描述文件内容，不只是"看看"。
+# 避免误报"看看 llm.py"这类建议句式。只抓前面有"在"/"从"/"到"等介词的引用。
+_PLAIN_FILE_RE = re.compile(
+    r"(?:在|从|到|把|将|用|对)([\w-]+\.py)"
+)
+
+
 _NUDGE = (
     "⚠️ 取证自检：你在回复里给了 {files} 的具体行号，但本会话的工具活动里没有"
     "读/grep/改过它——这可能是凭印象编的。先 read_file 确认，或在措辞里标明是推测。"
@@ -36,6 +47,11 @@ _IDENT_NUDGE = (
     "⚠️ 取证自检：你的回复用代码体引用了 {names}，但它没在本会话的上下文里出现过——"
     "若你是在引用现有代码/机制，可能是凭印象编的，先 grep_code/read_file 取证；"
     "若是你新提议的命名，忽略本提示。"
+)
+
+_FILE_CLAIM_NUDGE = (
+    "⚠️ 取证自检：你在回复里提到了 {files}，但本会话没有读过/grep过它——"
+    "你可能在凭印象描述该文件的内容。先 read_file 确认后再下结论。"
 )
 
 
@@ -68,6 +84,20 @@ def _extract_identifiers(text: str) -> set[str]:
             continue
         if "_" in name or name.endswith(".py"):
             out.add(name)
+    return out
+
+
+def _extract_plain_file_refs(text: str) -> set[str]:
+    """抽出纯文本中提到的 .py 文件名（无反引号、无行号）。"""
+    backtick_zones: set[int] = set()
+    for m in re.finditer(r"`[^`]+`", text):
+        for i in range(m.start(), m.end()):
+            backtick_zones.add(i)
+
+    out: set[str] = set()
+    for m in _PLAIN_FILE_RE.finditer(text):
+        if m.start() not in backtick_zones:
+            out.add(m.group(1))
     return out
 
 
@@ -106,23 +136,40 @@ def _context_text(log: list[dict]) -> str:
 
 
 def audit_citations(log: list[dict]) -> str | None:
-    """最终回复引用了 path:line 或代码体标识符，但 referent 全程没进过上下文
-    → 返回提示，否则 None。两类各自成段，可同时触发。
+    """最终回复引用了 path:line 或代码体标识符或 .py 文件，但 referent
+    全程没进过上下文 → 返回提示，否则 None。三类各自成段，可同时触发。
     """
     final_text = _last_assistant_text(log)
     cites = _extract_citations(final_text)
     idents = _extract_identifiers(final_text)
-    if not cites and not idents:
+    plain_files = _extract_plain_file_refs(final_text)
+    if not cites and not idents and not plain_files:
         return None
     haystack = _context_text(log)
     nudges: list[str] = []
+
+    # 行号引用
     ungrounded_paths = sorted(c for c in cites if c not in haystack)
     if ungrounded_paths:
         nudges.append(_NUDGE.format(files="、".join(ungrounded_paths)))
+
+    # 反引号标识符
     known_tools = _known_tool_names()
     ungrounded_idents = sorted(
         i for i in idents if i not in known_tools and i not in haystack
     )
     if ungrounded_idents:
         nudges.append(_IDENT_NUDGE.format(names="、".join(f"`{i}`" for i in ungrounded_idents)))
+
+    # 纯文本 .py 文件断言（行号引用和反引号标识符没覆盖到的）
+    already_covered = set(ungrounded_paths) | {
+        i for i in idents if i.endswith(".py")
+    }
+    ungrounded_plain = sorted(
+        f for f in plain_files
+        if f not in already_covered and f not in haystack
+    )
+    if ungrounded_plain:
+        nudges.append(_FILE_CLAIM_NUDGE.format(files="、".join(ungrounded_plain)))
+
     return "\n".join(nudges) if nudges else None
