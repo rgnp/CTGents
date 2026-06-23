@@ -113,8 +113,8 @@ class RuntimeParams:
     # 可用 API 返回的 prompt_tokens 真值对账校准这两个旋钮。
     token_per_char_cjk: float = _env_float("CTG_TOKEN_PER_CHAR_CJK", 0.6)
     token_per_char_other: float = _env_float("CTG_TOKEN_PER_CHAR_OTHER", 0.3)
-    # git commit 超时地板（秒）：质量门全量 pytest 需 ~40s+，timeout 给小了
-    # 正道必死，会把 agent 推向绕门——commit 命令的 timeout 自动抬到此值
+    # git commit 超时地板（秒）：提交门现在只跑 ruff（~2s），此地板已是冗余余量
+    # （历史上为"门内全量 pytest"留的，pytest 已不进提交门）；留着无害，给慢环境兜底。
     git_commit_timeout_floor: int = _env_int("CTG_GIT_COMMIT_TIMEOUT_FLOOR", 300)
     # 测试命令（pytest）超时地板（秒）：快速套件 ~40s、全量 ~150s 都 > run_command
     # 默认 30s/run_async 默认 120s → 跑测试必超时被杀，逼 agent 去 async+反复 poll。

@@ -72,7 +72,7 @@ ruff check src/                  # lint（提交前 pre-commit 已强制）
 ## 代码替你守的（不用你记，知道在哪即可）
 - `tool_guard`：改文件限工作目录、读后才能写、文件放对目录、禁 `git add -A`、禁 force-push main/master。
 - `file.py`：不可变安全核（guard/tool_guard/gate_audit/pre-commit）拒写；核心业务文件可改但走 import 冒烟安全带，改坏自动回滚。
-- `pre-commit`：裸 except / 密钥 / 类型注解 / 函数行数 / lint 零错 + 全量 pytest——**提交即强制**，所以"改后即测、提交前 lint"代码替你兜了。
+- `pre-commit`：密钥扫描 + ruff（裸 except / 函数行数 / lint 零错，按已开规则）——**提交即强制**。⚠️ pytest **不进**提交门（太重，开发期要快提交），所以提交不等于测试通过——质量靠"改后即测 / 评审"兜。
 - 轮末审计：`completion`(谎报完成) / `citation`(编造引用) / `gate`(绕提交门) 给你事实提示，判断仍归你。
 - 注：会话关闭收割默认关；无覆盖率门。
 

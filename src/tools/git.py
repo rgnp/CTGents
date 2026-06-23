@@ -230,9 +230,9 @@ TOOLS_GIT = [
 def _git(args: list[str], cwd: str | None = None, timeout: int = 30) -> dict:
     """执行 Git 命令，返回结构化结果。
 
-    timeout 默认 30s（status/add/log 都够）；commit 会触发 pre-commit 钩子跑
-    pytest（80–220s），调用方必须抬高超时，否则 30s 掐断会把"慢但会成功的门禁"
-    伪装成提交失败、引发重试轮询/中断。
+    timeout 默认 30s（status/add/log 都够）；commit 触发 pre-commit 钩子（仅 ruff，
+    ~2s，pytest 按设计不进提交门——见 git_commit），故无需抬高超时；保留 timeout
+    形参只为给慢环境留余量。
     """
     workdir = Path(cwd).resolve() if cwd else Path.cwd()
     try:
@@ -609,16 +609,16 @@ def git_commit(message: str | None = None, auto_stage: bool = True, path: str | 
     if not r_check["stdout"].strip():
         return "没有需要提交的变更"
 
-    # 提交前质量门禁（ruff + pytest）由 pre-commit 钩子对【暂存快照】强制执行，
-    # 不在此内联重跑：内联测的是整个工作区（含未暂存脏改动）→ 双跑且可能假阴性误拒。
+    # 提交门只由 pre-commit 钩子跑 ruff（对暂存快照）。pytest 按设计不进提交门
+    # （开发期要快提交，pytest 太重）——质量靠"人跑测试 / 评审 + 事后 gate_audit"
+    # 兜底，不在此内联。注意：commit 不跑 pytest，所以提交本身很快。
 
     # 如果没有提供 message，自动分析变更生成
     if not message:
         message = _generate_commit_message(str(workdir))
 
-    # 提交（pre-commit 钩子在此跑质量门禁；门禁失败输出多在 stdout）。
-    # 门禁跑 pytest 可达 80–220s：commit 超时必须抬到 git_commit_timeout_floor，
-    # 否则 _git 默认 30s 会掐断门禁，把成功的慢门禁误报成提交失败（→ 重试轮询/中断）。
+    # 提交（pre-commit 钩子在此跑 ruff；失败输出多在 stdout）。钩子只跑 ruff、很快，
+    # git_commit_timeout_floor 现在只是给慢环境留的余量，并非为 pytest（已不进门）。
     from ..params import RUNTIME
     r2 = _git(["commit", "-m", message], str(workdir),
               timeout=RUNTIME.git_commit_timeout_floor)

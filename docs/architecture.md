@@ -63,7 +63,7 @@
 ### 安全边界
 - `guard` / `tool_guard`：C3 限 cwd、C10 读后写、C14 目录、P1 禁 git add -A、P2 禁 force-push。
 - `file.py`：不可变安全核拒写（`is_immutable`），核心业务可写但走 import 冒烟安全带。
-- pre-commit：裸 except / 密钥扫描 / 类型注解 / 函数行数 / lint 零错误 + 全量 pytest。
+- pre-commit：密钥扫描 + ruff（裸 except / 函数行数 / lint 零错，按已开规则）。pytest 不进提交门（太重），靠手动跑 / 评审兜底。
 
 ### 记忆与进化
 - `memory`（remember/recall/forget）+ `lesson`（机械收割教训）+ `experience`（相似历史任务检索）。

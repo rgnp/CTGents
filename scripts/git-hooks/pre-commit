@@ -1,6 +1,7 @@
 #!/bin/sh
 # CTGents 提交轻闸：只做快速 lint（ruff），不做 pytest（太重）。
-# pytest 质量由 git_commit 工具内联 + gate_audit 事后审计补位。
+# pytest 按设计不进提交门——质量靠"人跑测试 / 评审"兜底；gate_audit 事后只核对
+# 本 ruff 门跑过没（不核 pytest）。别再说"pytest 由别处补位"，没有那个别处。
 set -e
 
 record_gate_pass() {
