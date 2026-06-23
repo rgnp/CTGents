@@ -450,8 +450,6 @@ def _spike_verdict(e: dict, prev: dict | None, p: int, h: int, pct: float) -> st
         return "  ←突刺"
     return ""
 
-@builtin("/compact", description="手动压缩上下文：驱逐旧对话换摘要（不必等 65% 自动触发）")
-
 # ═══════════════════════════════════════════════════════════════
 # Psyche 指令
 # ═══════════════════════════════════════════════════════════════
@@ -490,6 +488,7 @@ def _cmd_psyche(r: CmdResult, ctx, _args, _sid) -> None:
         r.message = f"未知子指令 '{sub}'。可用: load, unload, list"
 
 
+@builtin("/compact", description="手动压缩上下文：驱逐旧对话换摘要（不必等 65% 自动触发）")
 def _cmd_compact(r: CmdResult, ctx, _args, _sid) -> None:
     from .llm import MAX_CONTEXT_TOKENS, _compact_context
     from .tools.tokens import count_messages_tokens
