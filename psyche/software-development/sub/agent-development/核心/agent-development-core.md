@@ -1,9 +1,9 @@
 # Agent 开发 Psyche 核心
 
-> 版本: 0.3 | 构建: 2026-06-21 | 更新: 2026-06-22（新增 OpenCode 代码审查发现：System Context 空渲染崩溃 / 工具结果静默丢失 / Effect.die 控制流 / 权限粗糙度）
+> 版本: 0.4 | 构建: 2026-06-21 | 更新: 2026-06-23（新增 CrewAI 分析：巨型文件风险 / role-based agent / 代码质量≠成功）
 > 依赖: 父 psyche（software-development）中的判断准则和工程原则
-> 覆盖精度: 🟢全景拓扑 🟡因果结构 🟢判断准则 🟢负面知识（新增）
-> 知识来源: Anthropic Agent 实践 + Ng 4种模式 + OpenCode (anomalyco/opencode) 完整架构分析
+> 覆盖精度: 🟢全景拓扑 🟢因果结构 🟢判断准则 🟢负面知识
+> 知识来源: Anthropic Agent 实践 + Ng 4种模式 + OpenCode (anomalyco/opencode) 完整架构分析 + CrewAI (crewAIInc/crewAI) 深度分析
 
 ---
 
@@ -140,6 +140,25 @@ reload() → 从 initial 开始重放所有活跃变换
 3. **每条上下文都需要有移除通知** — 不只是「加载时告诉 LLM」，也需要「卸载时告诉 LLM」。
 4. **Source 的 key 需要命名空间** — 防止不同模块注册相同 key 导致冲突。
 
+### Agent 人格设计
+
+Agent 的系统提示不一定需要复杂的 prompt engineering。CrewAI 的 role/goal/backstory 模式值得借鉴：
+
+```
+Agent(
+  role="CEO",                              # 角色定位
+  goal="Produce amazing content",          # 目标
+  backstory="You're a long time CEO...",   # 背景故事
+)
+```
+
+这个模式的好处：
+1. **用户不需要写 prompt** — 三个字段比一段提示语直观得多
+2. **LLM 角色扮演效果好** — 指定角色和目标比通用指令更容易让 LLM 产出一致行为
+3. **可组合** — 多 agent 场景下角色自然定义协作关系
+
+**不是所有场景都需要角色扮演，但角色扮演是降低 prompt 复杂度的有效模式。**
+
 ### Tool 设计原则
 
 1. **每只 tool 做一件事，做得好** — 单一职责原则同样适用于 tool
@@ -218,6 +237,12 @@ reload() → 从 initial 开始重放所有活跃变换
 - **工具热替换不做 stale 检测** — 旧工具还在运行新请求，导致数据不一致
 - **默认全放权** — Agent 有权限调用所有工具，没有资源级别的细粒度控制
 - **状态变更不可清理** — 插件注册了就留下了，不 Scope 管理导致泄漏
+- **巨型文件不拆** — 单个文件超过 1000 行是危险信号（CrewAI 多个 2K+ 行文件）。会导致：看不懂、改不动、测不细。Ousterhout 的深层模块不是大模块，是接口简单实现有结构的模块。
+  [→ knowledge/agent-development/crewai-analysis.md 问题1]
+- **多个 executor 并存不清理** — 实验性代码和主线代码共存，导致维护成本 double，且容易引入行为差异。
+  [→ knowledge/agent-development/crewai-analysis.md 问题2]
+- **代码质量不等于项目成功** — CrewAI 代码质量糟糕但有 60K+ stars。成功来自概念创新（角色扮演多 agent）+ 先行者优势。质量是长期竞争力的必要条件，但不是短期成功的充分条件。
+  [→ knowledge/agent-development/crewai-analysis.md 反直觉发现]
 
 ---
 
