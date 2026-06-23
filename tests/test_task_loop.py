@@ -155,6 +155,6 @@ def test_continuation_budget_caps_runaway(monkeypatch, tmp_path):
         task.write_text(f"# 目标锚点\nX\n\n- [o] S 进度{n[0]}\n", encoding="utf-8")
 
     status = []
-    run_task_continuation(object(), drive, on_status=status.append, budget=3)
+    run_task_continuation(object(), drive, on_status=status.append, budget=3, planning_interval=0)
     assert n[0] == 3, "应到自主上限即停"
     assert any("自主上限" in s or "上限" in s for s in status)

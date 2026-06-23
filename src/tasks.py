@@ -326,3 +326,57 @@ def clear_current() -> str:
         return "current.md 已是空的。"
     CURRENT_TASK_FILE.write_text("", encoding="utf-8")
     return "current.md 已清空（未归档）。"
+
+
+def update_plan(content: str) -> str:
+    """覆盖更新 current.md（agent 动态重规划用）。必须有 # 目标锚点。
+
+    与 create_task 不同：不自动追加归档步骤（已在计划中的步骤不动）。
+    让 agent 可以增删改步骤、重排序、更新描述。
+    """
+    final = content.strip()
+    if _ANCHOR_HEADING not in final:
+        return (
+            "拒绝：缺少 # 目标锚点。\n"
+            "更新计划必须保留目标锚点——它是方向之绳。\n"
+            "请加入 '# 目标锚点' 一行和一句描述。"
+        )
+    CURRENT_TASK_FILE.write_text(final + "\n", encoding="utf-8")
+    done, total = count_steps(final)
+    return f"✅ 计划已更新（{done}/{total} 步骤完成）:\n{final}"
+
+
+def count_steps(text: str) -> tuple[int, int]:
+    """统计 current.md 内容中的已完成/总步骤数。返回 (done, total)。"""
+    done = 0
+    total = 0
+    for line in text.splitlines():
+        stripped = line.strip()
+        if stripped.startswith("- [x]") or stripped.startswith("- [X]"):
+            done += 1
+            total += 1
+        elif stripped.startswith(("- [ ]", "- [o]", "- [r]", "- [!]")):
+            total += 1
+    return done, total
+
+
+def get_task_short_status() -> str:
+    """返回简练的任务状态行，给状态栏用。如 '📋 任务名 (2/5)'。"""
+    text = read_current()
+    if not text:
+        return ""
+    done, total = count_steps(text)
+    # 取标题（首个 # 或 ## 行）
+    title = ""
+    for line in text.splitlines():
+        s = line.strip()
+        if s.startswith("# ") and not s.startswith("# 目标锚点"):
+            title = s[2:].strip()
+            break
+        if s.startswith("## ") and title == "":
+            title = s[3:].strip()
+    if not title:
+        title = "任务"
+    if total == 0:
+        return f"📋 {title}"
+    return f"📋 {title} ({done}/{total})"

@@ -174,11 +174,20 @@ def _build(ctx, session_id: str):
     except Exception:
         pass
 
-    # ── 当前任务 ──
-    from .tasks import has_unfinished, read_current
+    # ── 已加载的 Psyche（从 pinboard 中过滤）──
+    from . import session_pins as _sp
+    psyches = []
+    for _p in _sp.list_pins():
+        if _p["text"].startswith("Psyche已加载:"):
+            # 提取领域名+版本，如 "software-development v0.2"
+            _rest = _p["text"].replace("Psyche已加载: ", "").split(" (")[0]
+            psyches.append(_rest)
+    if psyches:
+        segs.append(f"🧠 {' + '.join(psyches)}")
+    from .tasks import get_task_short_status, has_unfinished
     if has_unfinished():
-        title = _task_title(read_current())
-        if title:
-            segs.append(f"▶ {_html.escape(title)}")
+        status = get_task_short_status()
+        if status:
+            segs.append(f"<b>{_html.escape(status)}</b>")
 
     return HTML(" │ ".join(segs)) if segs else None

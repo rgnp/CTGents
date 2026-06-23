@@ -86,6 +86,29 @@ TOOLS_CONTROL = [
             },
         },
     },
+    {
+        "_meta": {"label": "更新计划", "dedup_blacklist": True},
+        "type": "function",
+        "function": {
+            "name": "update_plan",
+            "description": (
+                "重规划当前任务：改写 tasks/current.md 的步骤清单。"
+                "当任务推进中发现原计划不再匹配、步骤顺序不对、需新增或删除"
+                "步骤时调用。保留 # 目标锚点，重写步骤清单。"
+                "注意：这不是标记完成，这是重写计划本身。"
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "plan": {
+                        "type": "string",
+                        "description": "完整的 current.md 新内容，必须包含 # 目标锚点 行和步骤清单",
+                    },
+                },
+                "required": ["plan"],
+            },
+        },
+    },
 ]
 
 
@@ -94,6 +117,13 @@ def execute(name: str, args: dict) -> str | None:
         return f"[任务完成信号] {(args.get('summary') or '').strip()}"
     if name == "need_user":
         return f"[需要用户拍板] {(args.get('question') or '').strip()}"
+    if name == "update_plan":
+        try:
+            from ..tasks import update_plan as _update_plan
+            return _update_plan((args.get("plan") or "").strip())
+        except ImportError:
+            from src.tasks import update_plan as _update_plan
+            return _update_plan((args.get("plan") or "").strip())
     if name == "load_psyche":
         target = (args.get("name") or "").strip()
         if not target:

@@ -83,8 +83,8 @@ def test_cache_hidden_when_no_requests(monkeypatch):
 
 def test_task_segment_shown(monkeypatch):
     out = _render(monkeypatch, tokens=_at_pct(10), stats=Stats(),
-                  unfinished=True, current="# 重构缓存归因\n[ ] step")
-    assert "▶ 重构缓存归因" in out
+                  unfinished=True, current="# 重构缓存归因\n- [ ] step")
+    assert "📋 重构缓存归因 (0/1)" in out
 
 def test_no_task_segment_when_finished(monkeypatch):
     out = _render(monkeypatch, tokens=_at_pct(10), stats=Stats(),

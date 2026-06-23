@@ -199,3 +199,18 @@ class ProjectKnowledgeParams:
 
 
 PROJECT_KNOWLEDGE = ProjectKnowledgeParams()
+
+
+@dataclass(frozen=True)
+class TaskParams:
+    """长任务规划旋钮（planning_interval 等结构性参数，见 tasks.py / task_loop.py）。"""
+
+    # 自主续跑时每 N 步做一次计划审查（agent 停下来评估：计划还匹配现实吗？要不要重规划？）
+    # 0 = 关（旧行为，一直做不做审查）。建议值：3~5。
+    planning_interval: int = _env_int("CTG_PLANNING_INTERVAL", 3)
+    # 计划审查的预算步数：一次审查最多用多少步来调计划（防止 agent 在"调计划"里螺旋出不
+    # 去）。包含审查本身和后续的 update_plan 等工具调用。
+    plan_review_budget: int = _env_int("CTG_PLAN_REVIEW_BUDGET", 5)
+
+
+TASK = TaskParams()

@@ -1,6 +1,4 @@
-"""长任务自主续跑：agent 推进 current.md 后，由 REPL 自主驱动下一步，直到它自己停。
-
-按 current.md 的"步骤标记"驱动的长任务自主续跑（不评分——用户选定：让 agent 自己判断做不做）。
+"""长任务自主续跑 + 动态重规划：每 N 步跑一次计划审查，agent 可用 update_plan 重写计划。
 
 设计要点（见对话 2026-06-13，用户："让他自己判断做不做"）：
   - 续跑条件 = agent 这一轮【自己推进了】current.md，不是"任务还有未完成步骤"。
@@ -11,6 +9,8 @@
       停止推进（这一步没改 current.md）/ 标 [!][r]（要你拍板）/ 全 [x]（完成）。
     预算是兜底上限，不是主停因。
   - 不 import main：drive_turn 由调用方注入，避免环依赖。
+  - 动态重规划（F）：每 planning_interval 步，先注入计划审查 prompt，agent 可以
+    用 update_plan 工具重写计划结构（增删改步骤/重排序），审查本身也算一步预算。
 """
 
 from __future__ import annotations
@@ -18,9 +18,10 @@ from __future__ import annotations
 from collections.abc import Callable
 
 from .params import RUNTIME
+from .params import TASK as TASK_PARAMS
 from .tasks import _BLOCKED_MARKERS as BLOCKED_MARKERS
 from .tasks import _UNFINISHED_MARKERS as UNFINISHED_MARKERS
-from .tasks import archive_current, read_current
+from .tasks import archive_current, get_task_short_status, read_current
 
 
 def _has(text: str, markers: tuple[str, ...]) -> bool:
@@ -58,14 +59,65 @@ def _drive_prompt() -> str:
     )
 
 
+def _review_prompt() -> str:
+    """计划审查的驱动输入：让 agent 停下来评估计划是否还匹配现实。
+
+    不注入"继续"meta 指令——框架是"评估→决定→行动"，agent 自己决定是否需要
+    用 update_plan 重写，还是继续推进。
+    """
+    return (
+        "[长任务·计划审查] review 当前计划（current.md）是否还匹配实际情况。\n"
+        "行动选项（三选一，按你的判断）：\n"
+        "1. 计划仍然合适 → 直接执行下一步（标记步骤 [o] 或 [x]）\n"
+        "2. 计划需要调整 → 用 update_plan 工具重写步骤清单（增删改/重排序皆可）\n"
+        "3. 方向完全不对 → 调 need_user 说明情况，让我一起判断\n"
+        "注意：这是每 N 步一次的例行方向检查。"
+    )
+
+
+def _run_planning_review(
+    ctx,
+    drive_turn: Callable[[object, str], object],
+    on_status: Callable[[str], None],
+    review_budget: int,
+) -> bool:
+    """一次计划审查：让 agent 评估计划。返回 False 表示需要停（被中断/阻塞）。"""
+    before = read_current()
+    for _ in range(review_budget):
+        text = read_current()
+        if not text.strip():
+            return True  # 任务已被清空，继续会退出
+        if _has(text, BLOCKED_MARKERS):
+            return False  # 阻塞标记 → 停
+        drive_turn(ctx, _review_prompt())
+        sig = getattr(ctx, "control_signal", None)
+        if sig == "interrupted":
+            return False
+        if sig == "need_user":
+            return False
+        if sig == "task_done":
+            return False
+        # 如果 plan 变了（agent 调了 update_plan），审查目的已达到
+        if read_current() != before:
+            on_status(f"🔁 计划已调整：{get_task_short_status()}")
+            return True
+    return True  # 审查预算用完但没事，继续执行
+
+
 def run_task_continuation(
     ctx,
     drive_turn: Callable[[object, str], object],
     on_status: Callable[[str], None] = lambda _s: None,
     budget: int | None = None,
     stall_limit: int | None = None,
+    planning_interval: int | None = None,
+    plan_review_budget: int | None = None,
 ) -> None:
     """有未完成步骤就自主驱动下一步，直到 agent 显式喊停 / 全完成 / 卡死 / 预算上限。
+
+    新功能（vs 旧版）：
+    - planning_interval：每 N 步跑一次计划审查（动态重规划 F）
+    - 审查步骤计入 budget（防无限审查螺旋）
 
     停的优先级（显式 > 状态 > 兜底）：
       1. agent 调 need_user → 把问题交还用户，停。
@@ -79,8 +131,12 @@ def run_task_continuation(
     """
     budget = budget if budget is not None else RUNTIME.task_continue_budget
     stall_limit = stall_limit if stall_limit is not None else RUNTIME.task_stall_limit
+    planning_interval = planning_interval if planning_interval is not None else TASK_PARAMS.planning_interval
+    plan_review_budget = plan_review_budget if plan_review_budget is not None else TASK_PARAMS.plan_review_budget
+
     no_progress = 0
-    for _ in range(budget):
+
+    for step_num in range(1, budget + 1):
         text = read_current()
         if not text.strip():
             return  # 任务被清空/归档
@@ -91,7 +147,15 @@ def run_task_continuation(
             on_status(archive_current())
             on_status("✅ 长任务全部完成，已归档。")
             return
-        before = text
+
+        # ── 计划审查：每 planning_interval 步，先 review 再继续 ──
+        if planning_interval > 0 and step_num % planning_interval == 0:
+            on_status(f"🔎 第 {step_num} 步：计划审查（每 {planning_interval} 步一次）")
+            if not _run_planning_review(ctx, drive_turn, on_status, plan_review_budget):
+                return
+
+        # ── 执行步骤 ──
+        before = read_current()
         drive_turn(ctx, _drive_prompt())
 
         sig = getattr(ctx, "control_signal", None)
@@ -118,6 +182,7 @@ def run_task_continuation(
                 return
         else:
             no_progress = 0
+
     from .tasks import get_task_progress_line
     progress = get_task_progress_line()
     tail = f"（当前进度：{progress}）" if progress else ""
