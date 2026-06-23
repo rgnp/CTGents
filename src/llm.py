@@ -1637,32 +1637,44 @@ def _handle_tool_results(
 
 
 
-def _inject_psyche_self_check(ctx: CacheContext) -> None:
-    """如有已加载 psyche，在 ctx.log 注入一条自律检查消息（仅首次）。
+def _reconcile_system_context(ctx: CacheContext) -> None:
+    """在每轮 LLM 调用前，注册自律检查 source 并 reconcile。
 
-    消息标记 _psyche_self_check=True 做防重——重复调用不再重复注入。
-    作为普通 system 消息进 ctx.log → 发 API → 永久留存（不 volatile）。
-    后续每轮 LLM 调用都能看到它，让自律约束不随对话增长而注意力稀释。
+    自律检查 source 的 snapshot = 当前已加载的所有 psyche name 列表。
+    reconcile() 根据 snapshot 变化自动推送 baseline/update/removed。
     """
-    for msg in ctx.log:
-        if msg.get("_psyche_self_check"):
-            return
-    names: list[str] = []
-    for msg in ctx.log:
-        meta = msg.get("_psyche_meta")
-        if isinstance(meta, dict) and meta.get("name"):
-            names.append(meta["name"])
-    if not names:
-        return
-    ctx.log.append({
-        "role": "system",
-        "content": (
-            f"【自律检查】已加载psyche: {', '.join(names)}。\n"
-            "在写最终回复前，自检你的判断是否遵循了这些psych的准则。\n"
-            "每发现一条违反，在回复末尾追加: ⚠️ 违反psyche {name}: {说明}"
+    from .system_context import Source, loaded_keys, reconcile, register
+
+    # 获取当前已加载的 psyche 列表
+    psyche_keys = sorted(k for k in loaded_keys() if k.startswith("psyche/"))
+    names = [k.split("/", 1)[1] for k in psyche_keys]
+
+    def _make_msg(ns: list[str]) -> dict | None:
+        if not ns:
+            return None
+        return {
+            "role": "system",
+            "content": (
+                f"【自律检查】已加载psyche: {', '.join(ns)}。\n"
+                "在写最终回复前，自检你的判断是否遵循了这些psyche的准则。\n"
+                "每发现一条违反，在回复末尾追加: ⚠️ 违反psyche {name}: {说明}"
+            ),
+            "_system_context": "system/self-check",
+        }
+
+    msg = _make_msg(names)
+    register(Source(
+        key="system/self-check",
+        snapshot=names,
+        baseline=msg,
+        update=lambda _prev, _curr: _make_msg(
+            sorted(k.split("/", 1)[1] for k in loaded_keys() if k.startswith("psyche/"))
         ),
-        "_psyche_self_check": True,
-    })
+    ))
+
+    # reconcile 会处理所有 source 的 baseline/update/removed
+    reconcile(ctx)
+
 
 def run_conversation(
     ctx: CacheContext,
@@ -1727,8 +1739,8 @@ def run_conversation(
             on_reasoning(chunk)
 
 
-    # ── psyche 自律检查注入（仅首次，后续轮自带） ──
-    _inject_psyche_self_check(ctx)
+    # ── System Context reconcile：自律检查 + 生命周期管理 ──
+    _reconcile_system_context(ctx)
 
 
     while True:

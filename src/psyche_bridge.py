@@ -77,6 +77,16 @@ def inject_psyche(ctx: CacheContext, name: str) -> str:
         },
     }
 
+
+    # ── 注册 system context source（生命周期管理） ──
+    from .system_context import Source
+    from .system_context import register as _register_source
+    _register_source(Source(
+        key=f"psyche/{name}",
+        snapshot=version or "?",
+    ))
+
+
     ctx.log.insert(0, system_msg)
 
     return (
@@ -95,7 +105,17 @@ def remove_psyche(ctx: CacheContext, name: str) -> str:
     ]
     removed = before - len(ctx.log)
     if removed > 0:
-        return f"✅ 已卸载 psyche「{name}」（移除了 {removed} 条系统消息）。"
+        # ── 注销 system context source + 推送移除通知 ──
+        from .system_context import unregister as _unregister_source
+        _unregister_source(
+            f"psyche/{name}",
+            removed_message={
+                "role": "system",
+                "content": f"【Psyche 已卸载: {name}】不再需要遵守其准则。",
+                "_system_context": f"psyche/{name}",
+            },
+        )
+        return f"✅ 已卸载 psyche「{name}」（移除了 {removed} 条系统消息，自律检查已更新）。"
     return f"⚠️ 未找到已加载的 psyche「{name}」。可用 /psyche list 查看。"
 
 
