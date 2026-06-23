@@ -1745,6 +1745,7 @@ def run_conversation(
     logger.info("路由: '%s...' → %s", user_input[:30], backend.info.name)
 
     requests_made = 0
+    _tool_call_count = 0  # 工具调用步数（规划审查用）
     # ── stormBreaker：同轮连续同一错误 → 打破死亡螺旋 ──
     _storm_sig: str | None = None   # 上一轮失败签名
     _storm_count = 0                # 同一签名连续次数
@@ -1757,6 +1758,30 @@ def run_conversation(
         _reasoning_accum.append(chunk)
         if on_reasoning is not None:
             on_reasoning(chunk)
+
+
+    def _inject_planning_review(count: int) -> None:
+        """每 N 步工具调用注入一次计划审查（当前有任务时）。
+
+        作为 user 消息追加到 log，下一轮 LLM 调用时会看到并响应。
+        只在有未完成的任务时才触发，避免无任务时无意义打断。
+        """
+        from .params import TASK as _TASK_PARAMS
+        interval = _TASK_PARAMS.planning_interval
+        if interval <= 0 or count % interval != 0:
+            return
+        from .tasks import has_unfinished as _has_unfinished
+        if not _has_unfinished():
+            return
+        ctx.log.append({
+            "role": "user",
+            "content": (
+                "[计划审查] 当前计划（current.md）还匹配实际情况吗？三个方向：\n"
+                "1. 仍然合适 → 直接做下一步（标 [o] 或 [x]）\n"
+                "2. 需要调整 → 用 update_plan 重写（增删改步骤/重排序）\n"
+                "3. 方向不对 → 调 need_user 说清楚，让对方判断"
+            ),
+        })
 
 
     # ── System Context reconcile：自律检查 + 生命周期管理 ──
@@ -1821,6 +1846,9 @@ def run_conversation(
                 if on_progress:
                     on_progress()
                 return content or ""
+            # ── 规划审查：每 N 步工具调用触发一次方向检查 ──
+            _tool_call_count += 1
+            _inject_planning_review(_tool_call_count)
         else:
             _msg = {"role": "assistant", "content": content or ""}
             if _reasoning_accum:
