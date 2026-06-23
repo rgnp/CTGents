@@ -3,6 +3,7 @@
 > 分析日期: 2026-06-23
 > 项目: crewAIInc/crewAI (github.com/crewaiinc/crewai)
 > 方法: 按 learning-method 流程
+> 关键词: crewai, multi-agent, role-based, flow-dsl, start-listen-router, event-driven, orchestration
 
 ---
 
