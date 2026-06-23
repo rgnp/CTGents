@@ -165,11 +165,11 @@ class TestWriteInvalidation:
         r3 = storm_check("read_file", {"path": "main.py"})  # 第三次
         assert r3 is not None, "第三次仍未翻篇，应继续标记重复"
 
-    def test_think_is_blacklisted(self):
-        """Think 工具在黑名单中，不应去重。"""
+    def test_think_is_not_blacklisted(self):
+        """Think 工具不在黑名单中，应正常去重（纯读，无副作用）。"""
         storm_check("think", {"thought": "思考1"})
         r2 = storm_check("think", {"thought": "思考1"})
-        assert r2 is None, "think 在黑名单中，不应去重"
+        assert r2 is not None, "think 不在黑名单中，重复调用应被去重"
 
     def test_mcp_tools_not_blacklisted(self):
         """MCP 工具不在黑名单中，应执行去重（如 mcp_read）。"""
