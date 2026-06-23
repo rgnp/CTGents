@@ -12,7 +12,7 @@
   （确定的命令模式，零判断——P1 还正好对抗模型 `git add -A` 的强默认）。
 
 接口：check(name, args) → None 放行 / str 拒绝（execute_tool 直接回该串，不执行）。
-读/写工具顺带登记到 _known_files，作为 C10 的依据。判断类规则（DRY/魔法数字）
+读工具登记到 _read_files 作为 C10 依据；写工具记入 _written_files 但不给 C10 开绿灯。
 不在此处——机械化会误伤，留给 prose + 审查。
 """
 
@@ -23,8 +23,10 @@ from pathlib import Path
 
 _READ_TOOLS = {"read_file", "read_file_lines"}
 _BANNED_ROOT_EXTS = {".py", ".json", ".txt", ".log"}
-# 本进程已『见过』（读过或写过）的文件绝对路径，C10 依据
-_known_files: set[str] = set()
+# 本进程已『读过』的文件绝对路径，C10 依据（write_file 不加入此集——写过≠知道行号）
+_read_files: set[str] = set()
+# 本进程已『写过』的文件（供未来审计/其他规则用，但不给 C10 开绿灯）
+_written_files: set[str] = set()
 
 # P1：git add -A / --all / 裸点（git add . 末尾，不含 ./path 这种具体路径）
 _GIT_ADD_ALL = re.compile(r"\bgit\s+add\s+(?:-A\b|--all\b|\.(?:\s|$))")
@@ -44,13 +46,14 @@ def _resolve(path: str) -> Path:
 
 
 def reset_known() -> None:
-    """清空『已见过文件』集（新会话/clear 时可调，使 C10 按当前对话重新计）。"""
-    _known_files.clear()
+    """清空『已读过/已写过』文件集（新会话/clear 时可调，使 C10 按当前对话重新计）。"""
+    _read_files.clear()
+    _written_files.clear()
 
 
 def mark_known(path: str) -> None:
-    """显式登记一个文件为『见过』（如外部写入后）。"""
-    _known_files.add(str(_resolve(path)))
+    """显式登记一个文件为『已读过』（如外部写入后）。"""
+    _read_files.add(str(_resolve(path)))
 
 
 def check(name: str, args: dict) -> str | None:
@@ -63,26 +66,25 @@ def check(name: str, args: dict) -> str | None:
         return None
 
     if name in _READ_TOOLS:
-        _known_files.add(str(_resolve(path)))
+        _read_files.add(str(_resolve(path)))
         return None
 
     if name == "write_file":
         rejection = _check_placement(path)  # C14
         if rejection:
             return rejection
-        _known_files.add(str(_resolve(path)))  # 写过即算见过
+        _written_files.add(str(_resolve(path)))  # 记入"已写过"
+        # 任何写入都作废已读——文件内容已变，行号对应的东西不一样了
+        _read_files.discard(str(_resolve(path)))
         return None
 
     if name == "edit_file_lines":
         rejection = _check_read_before_edit(path)  # C10
         if rejection:
             return rejection
-        # 任何改变总行数的编辑 → 其后行号全部失效。作废"已读"，逼下次 edit 先重读拿新
-        # 行号。键于不变量（行数变没变）而非动作类型：insert/delete/行数变了的多行
-        # replace 一网打尽，不为每种动作各打补丁（曾 insert/delete 漂移误删 P1；又多行
-        # replace 漂移把验证节改出重复标题+删 bullet）。
-        if _edit_changes_line_count(args):
-            _known_files.discard(str(_resolve(path)))
+        # 任何编辑都使行号失效，无论行数变没变——
+        # 等长 replace 行数不变但内容已变，下一轮 edit 拿旧行号指的就是别的东西了。
+        _read_files.discard(str(_resolve(path)))
         return None
 
     return None
@@ -119,33 +121,16 @@ def _check_placement(path: str) -> str | None:
 
 
 def _check_read_before_edit(path: str) -> str | None:
-    """C10：edit_file_lines 前必须先读过该文件。"""
+    """C10：edit_file_lines 前必须先读过该文件（write_file 不赋予读权限）。"""
     target = _resolve(path)
     if not target.exists():
         return None  # 不存在 → 交给 edit 自己报错
-    if str(target) not in _known_files:
+    if str(target) not in _read_files:
         return (
             f"⛔ C10 拒绝：edit_file_lines 前必须先 read_file({path})。"
             "未读就按行号编辑是行号错位的头号原因。"
         )
     return None
-
-
-def _edit_changes_line_count(args: dict) -> bool:
-    """该次 edit_file_lines 会不会改变文件总行数（→ 其后行号失效）。
-
-    insert 加行、delete 删行 → 必变；replace 仅当新行数 ≠ 被替区间行数才变
-    （单行换单行不漂移，多行换 N 行漂移）。信息不全（真实 replace 必带 end_line+
-    new_lines，否则工具自身报错）→ 当作不变，不误作废、不破坏单行 replace 连改。
-    """
-    action = args.get("action")
-    if action in ("insert", "delete"):
-        return True
-    if action == "replace":
-        start, end, new_lines = args.get("start_line"), args.get("end_line"), args.get("new_lines")
-        if isinstance(start, int) and isinstance(end, int) and isinstance(new_lines, str):
-            return len(new_lines.split("\n")) != (end - start + 1)
-    return False
 
 
 def _check_command(command: str | None) -> str | None:

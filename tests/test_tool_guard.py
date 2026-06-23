@@ -45,12 +45,13 @@ def test_c10_allows_edit_after_read(_isolate):
     assert tg.check("read_file", {"path": "f.py"}) is None  # 登记
     assert tg.check("edit_file_lines", {"path": "f.py", "action": "replace", "start_line": 1}) is None
 
-def test_c10_write_counts_as_seen(_isolate):
-    """write_file 写过的文件，后续 edit_file_lines 放行。"""
+def test_c10_write_does_not_bypass_read_requirement(_isolate):
+    """write_file 写入已有文件后，edit_file_lines 仍需先 read_file（后门修复）。"""
     (_isolate / "src").mkdir()
     (_isolate / "src" / "g.py").write_text("a\n", encoding="utf-8")
-    assert tg.check("write_file", {"path": "src/g.py", "content": "a\n"}) is None  # 登记
-    assert tg.check("edit_file_lines", {"path": "src/g.py", "action": "replace", "start_line": 1}) is None
+    assert tg.check("write_file", {"path": "src/g.py", "content": "a\n"}) is None  # 只登记到 _written_files
+    msg = tg.check("edit_file_lines", {"path": "src/g.py", "action": "replace", "start_line": 1})
+    assert msg is not None and "C10" in msg, "write 不应赋予 C10 读权限"
 
 def test_c10_nonexistent_passes_through(_isolate):
     """不存在的文件 → 不拦，交给 edit 自己报错。"""
@@ -69,20 +70,23 @@ def test_c10_insert_forces_reread_before_next_edit(_isolate):
     assert tg.check("read_file", {"path": "f.py"}) is None
     assert tg.check("edit_file_lines", {"path": "f.py", "action": "delete", "start_line": 3}) is None
 
-def test_c10_replace_keeps_read_status(_isolate):
-    """单行 replace 不改行数 → 不作废已读，连续 replace 不被逼重读。"""
+def test_c10_replace_forces_reread_even_when_balanced(_isolate):
+    """任何 replace 都作废已读——即使只是单行换单行。"""
     (_isolate / "f.py").write_text("a\nb\nc\n", encoding="utf-8")
     assert tg.check("read_file", {"path": "f.py"}) is None
     assert tg.check("edit_file_lines", {"path": "f.py", "action": "replace", "start_line": 1}) is None
-    assert tg.check("edit_file_lines", {"path": "f.py", "action": "replace", "start_line": 2}) is None
+    msg = tg.check("edit_file_lines", {"path": "f.py", "action": "replace", "start_line": 2})
+    assert msg is not None and "C10" in msg, "任何 replace 后 edit 都必须重读"
 
-def test_c10_balanced_replace_keeps_status(_isolate):
-    """行数相等的 replace（1 行换 1 行）不漂移 → 保留已读，连改放行。"""
+def test_c10_balanced_replace_forces_reread(_isolate):
+    """等长 replace（1 行换 1 行）行数不变但内容已变 → 作废已读，逼重读。"""
     (_isolate / "f.py").write_text("a\nb\nc\n", encoding="utf-8")
     assert tg.check("read_file", {"path": "f.py"}) is None
     one = {"path": "f.py", "action": "replace", "start_line": 1, "end_line": 1, "new_lines": "x"}
     assert tg.check("edit_file_lines", one) is None
-    assert tg.check("edit_file_lines", one) is None  # 仍放行
+    # 等长 replace 也作废已读——内容变了行号语义就死了
+    msg = tg.check("edit_file_lines", one)
+    assert msg is not None and "C10" in msg, "等长 replace 后仍需重读"
 
 def test_c10_multiline_replace_forces_reread(_isolate):
     """改变行数的多行 replace → 作废已读，逼重读（堵住 insert/delete 护栏漏的同类漂移）。
