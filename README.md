@@ -1,90 +1,136 @@
 <p align="center">
-  <img src="https://img.shields.io/badge/python-3.11+-blue.svg" alt="Python 3.11+">
-  <img src="https://img.shields.io/badge/license-MIT-green.svg" alt="License MIT">
-  <img src="https://img.shields.io/badge/tests-677%20passed-brightgreen.svg" alt="Tests">
-  <img src="https://img.shields.io/badge/coverage-gated-success.svg" alt="Coverage Gated">
+  <img src="https://img.shields.io/badge/python-3.12+-blue?style=flat-square" alt="Python 3.12+">
+  <img src="https://img.shields.io/badge/tests-789%20passed-22c55e?style=flat-square" alt="789 tests">
+  <img src="https://img.shields.io/badge/license-MIT-8b5cf6?style=flat-square" alt="MIT">
+  <img src="https://img.shields.io/badge/status-active-06b6d4?style=flat-square" alt="Active">
 </p>
 
-# CTGents — 自进化 AI 编程助手
+<br>
 
-终端里的 AI 编程助手。能写代码、搜索网络、管理知识库，通过**多层机械安全门禁**保护自身不被破坏。
+<p align="center">
+  <strong>CTGents</strong> &nbsp;·&nbsp;
+  自进化 AI 编程助手
+  <br>
+  <sub>终端里的 agent。不是又一层 LLM wrapper——</sub>
+  <br>
+  <sub>安全不是靠自觉，是代码兜底。</sub>
+</p>
 
-> 不是又一个 LLM wrapper。规则不是靠 AI 自觉——到不了的防线代码兜底。
+<br>
+
+---
+
+## 这是什么
+
+终端里的 AI 编程助手。能写代码、搜网络、管知识库。核心区别在两层：
+
+**第一层：安全机制是机械的，不是自觉的。**
+写文件限工作目录没商量、读后才让改、不可变核心文件 agent 根本动不了、提交前 lint+测试代码替你强检——不是"希望你别做"，是"你做不了"。
+
+**第二层：越用越有用，不是每次从零开始。**
+跨会话的用户理解、项目知识、失败教训自动收割。同类错误第二次会被提前拦住。新会话自动知道你上次做到哪。
 
 ---
 
 ## 快速开始
 
 ```bash
+git clone https://github.com/rgnp/CTGents.git
+cd CTGents
+
 pip install -r requirements.txt
-cp .env.example .env              # 编辑 .env 填入 API 密钥
+cp .env.example .env              # 填入 API 密钥
 python scripts/install_hooks.py   # 安装 Git 提交钩子
 python src/main.py                # 启动
 ```
 
----
+> `.env` 需要至少一个 DeepSeek API key。Tavily key 可选（不配则 web search 不可用）。
 
-## 能力概览
-
-| 类别 | 能力 |
-|------|------|
-| 代码 | 读写文件、静态分析、运行测试、语义搜索 |
-| 网络 | 网页搜索、论文检索（arxiv / Semantic Scholar）、URL 阅读 |
-| 知识 | 知识库索引与检索、论文卡片管理、交叉验证 |
-| Git | 提交、审查、分支、PR、日志 |
-| 成长 | 越用越懂你：跨会话收割用户理解、项目知识、失败教训 |
-| 监控 | 独立的只读 Web 面板（`python -m dashboard.server`）|
+支持行式 REPL 和 **TUI**（默认自动检测）。输入 `/help` 查看指令列表。
 
 ---
 
-## 核心机制
+## 能力
+
+### 核心循环
+
+```
+用户输入 → 自动路由(Pro/Flash) → 工具循环 → 审计 → 记忆
+           ├── 代码读写/分析/搜索
+           ├── 网络搜索/论文检索
+           ├── Git 操作(commit/push/PR)
+           ├── 知识库索引/RAG
+           └── 计划审查(每 N 步方向检查)
+```
+
+### 工具索引
+
+| 类 | 工具 |
+|---|---|
+| 代码 | `read_file` · `write_file` · `edit_file_lines` · `grep_code` · `replace_in_file` · `analyze_code` · `scan_project` · `find_files` |
+| 执行 | `run_python` · `run_command` · `run_async` · `poll` |
+| 网络 | `search_web` · `read_page` · `learn` |
+| 论文 | `scan_papers` · `read_papers` · `analyze_paper` · `cross_validate` · `paper_grid` · `save_paper_card` |
+| 知识 | `rag_index` · `rag_query` · `rag_search` · `remember` · `recall` · `forget` |
+| Git | `git_status` · `git_diff` · `git_log` · `git_commit` · `git_push` · `git_pr` · `git_branch` · `git_review` |
+| 项目 | `check_project` · `generate_agents_md` · `docs_sync_check` · `repo_clone` |
+| 系统 | `self` · `think` · `pin` · `unpin` · `task_done` · `need_user` · `update_plan` · `load_psyche` |
+
+---
+
+## 架构亮点
+
+### 三段式上下文（CacheContext）
+
+针对 DeepSeek 前缀缓存优化的三段式架构：
+
+```
+┌──────────────────────────┐
+│  IMMUTABLE PREFIX        │ ← 会话级冻结（AGENTS.md + 记忆索引 + 长期目标）
+│  哈希锁死，不被污染      │
+├──────────────────────────┤
+│  APPEND-ONLY LOG         │ ← 用户/助手/工具结果，只追加不改
+│  无挂尾，无 volatile 尾  │    实测命中率 88-96%
+├──────────────────────────┤
+│  VOLATILE SCRATCH        │ ← 纯内存，不发 API
+└──────────────────────────┘
+```
 
 ### 机械安全门禁
 
-规则不是靠 LLM 自觉——到不了的防线代码兜底：
-
-| 层 | 管什么 | 怎么拦 |
-|---|---|---|
-| 工具边界 | 文件操作限 cwd、读后写、禁 src/tools/ 新建 `.py` | `tool_guard.py` 在执行前机械校验 |
-| 文件保护 | 禁止修改 guard.py 等核心文件 | `file.py` → `is_immutable()` |
-| 提交闸 | lint 零错误 + 全量 pytest | pre-commit hook，任何路径提交都绕不过 |
-| 记忆收割 | 会话关闭自动提取失败模式 | `_finalize_session` → `extract_lessons` |
-| Tavily 自愈 | API quota 耗尽自动切 key | `MultiKeyTavilyClient` 轮换 + 热重载 |
+| 边界 | 规则 | 实现 |
+|------|------|------|
+| 文件 | 限工作目录、读后写、禁 root 新建 `.py` | `tool_guard.check()` 执行前拦截 |
+| 核心文件 | guard.py/tool_guard.py — agent 改不动 | `is_immutable()` 在 write/edit/delete 拦截 |
+| 提交 | ruff + 快速测试强制通过 | pre-commit hook + gate_audit 事后审计 |
+| 危险命令 | `git add -A` / `force-push main` / `rm -rf` 零容忍 | `_git_guard_block` + P1/P2 规则 |
+| Shell 注入 | 元字符 `&|;<>` 拒绝执行 | `_split_command` |
 
 ### 记忆 → 行为闭环
 
-打破"跨会话记住了但不改变行为"的死结：
+不是"记住了但不改变行为"——失败模式四指纹检测，下回自动注入经验提醒：
 
-- **检测失败**：四指纹检测器（签名漂移 / 重复编辑 / 工具参数错 / pre-commit 拒）
-- **自动收割**：会话关闭时机械提取教训存入 `memory/`
-- **下次注入**：匹配失败模式时自动在上下文尾部注入 `[⚠️ 经验提醒]`
-- **工具自愈**：search_web quota 耗尽自动重读 `.env` 并轮换 key
-
-### DeepSeek 前缀缓存
-
-三段式 CacheContext：不可变 prefix + 只追加 log + 易失 scratch。日常编码命中率 **94-96%**。
-
----
-
-## 监控面板
-
-独立的只读 Web 面板，与 agent 进程完全解耦：
-
-```bash
-python -m dashboard.server          # http://127.0.0.1:8765
+```
+检测 → 收割 → 存储 → 下次匹配 → 上下文注入 → 防复发
 ```
 
-四个视图：总览（健康 / 命中率 / Token）· 安全门禁 · 记忆教训 · 进化日志。5 秒自动刷新，agent 重启不影响。
-
 ---
 
-## AGENTS.md — AI 操作手册
+## Psyche — 领域认知框架
 
-[AGENTS.md](AGENTS.md) 是给 AI 看的操作手册，三层结构：
+跨会话的"行为一致性"机制。不是知识库，是思维方式：
 
-- **必须遵守**：8 条 LLM 操心的规则 + 11 条禁止
-- **后台保障**：11 行机械保障清单（已代码强制）
-- **行为准则**：节奏 / 任务追踪 / 沟通 / 记忆边界
+```
+加载 psyche → 改变判断准则 → 同类场景做同类决定
+```
+
+- **software-development** — 代码审查、架构判断、安全编码
+- **agent-development** — Agent 系统特有陷阱、工具设计、循环控制
+- **aesthetic-design** — TUI 审美、配色、终端 UX
+- **learning-method** — 深度阅读外部项目/论文的方法论
+- **testing** — FIRST 原则、AAA 模式、测试速度优化
+
+加载：`/psyche load <name>`。自动持久化，跨会话有效。
 
 ---
 
@@ -92,21 +138,47 @@ python -m dashboard.server          # http://127.0.0.1:8765
 
 ```
 src/
-  main.py              # 主入口 + 管线注入
-  llm.py               # LLM 后端 + eager 并行执行
-  cache_context.py     # 三段式上下文管理器
-  commands.py          # 指令系统
-  config.py            # 配置中心 + MultiKeyTavilyClient
-  guard.py             # 自我保护（不可变文件保护）
-  validate.py          # 三阶段验证（AST → pytest → 覆盖率 / lint）
-  lesson.py            # 教训提取 + 记忆存储
-  autonomic.py         # 自主神经系统（第 4 层）
-  tools/               # 12 个工具模块
-dashboard/             # 只读监控面板
-tests/                 # 677 个测试用例
-memory/                # 跨会话记忆
-knowledge/             # 研究知识库
+├── main.py               # 主入口 + 一轮对话管线
+├── llm.py                # LLM 后端 + 工具循环（eager 并行 + 规划审查）
+├── cache_context.py      # 三段式上下文管理器
+├── system_context.py     # 可刷新的上下文源（OpenCode 模式）
+├── commands.py           # 指令系统（/help /clear /psyche 等）
+├── guard.py              # 文件分级（不可变 / 核心 / 自由）
+├── task_loop.py          # 长任务自主续跑 + 动态重规划
+├── tasks.py              # current.md 的读写/创建/更新/归档
+├── tools/                # 61 个工具，19 个模块
+│   ├── tool_guard.py     # 工具边界机械校验
+│   ├── file.py           # 文件读写 + 备份回滚
+│   ├── exec.py           # 命令执行 + Git 护栏
+│   ├── control.py        # task_done / need_user / update_plan
+│   ├── storm.py          # 工具调用去重（滑动窗口）
+│   └── ...
+├── status_bar.py         # 底部状态条（ctx 充满度 / 缓存命中 / 任务进度）
+├── psyche_bridge.py      # Psyche 注入/卸载
+├── session_pins.py       # 会话钉板（关键约束持久化）
+├── organs.py             # 器官生命体征（只读产物派生）
+└── ...
+tests/                    # 789 个测试（129 个 @slow）
+scripts/
+├── git-hooks/pre-commit  # 提交钩子（ruff + 密钥扫描）
+└── install_hooks.py      # 钩子安装器（core.hooksPath）
+psyche/                   # 领域认知框架
+knowledge/                # 研究知识库（论文/笔记）
+tasks/                    # 长任务追踪
+memory/                   # 跨会话记忆
+docs/                     # 文档
 ```
+
+---
+
+## 依赖
+
+- **Python 3.12+**
+- **DeepSeek API** — 模型调用（必须）
+- **Tavily API** — 网页搜索（可选，不配则 search_web 不可用）
+- **Semantic Scholar API** — 论文检索（可选，scan_conf 用）
+
+安装：`pip install -r requirements.txt`
 
 ---
 
