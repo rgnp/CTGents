@@ -163,6 +163,131 @@ class TestToolPairingRepair:
         assert [m["role"] for m in api] == ["system", "user", "assistant", "tool", "assistant"]
 
 
+def _turn(uq: str, tcid: str, tool_content: str) -> list[dict]:
+    """造一轮：user 提问 + assistant 工具调用 + tool 结果。"""
+    return [
+        {"role": "user", "content": uq},
+        {"role": "assistant", "content": None,
+         "tool_calls": [{"id": tcid, "function": {"name": "read_file"}}]},
+        {"role": "tool", "tool_call_id": tcid, "content": tool_content},
+    ]
+
+
+class TestStaleToolCollapse:
+    """中段陈旧工具结果折叠（send() 视图变换，默认 keep_turns=3 / threshold=600）。"""
+
+    def _ctx_with_turns(self, n: int, big: bool = True) -> CacheContext:
+        body = ("X" * 700) if big else "small"
+        log: list[dict] = []
+        for i in range(n):
+            log += _turn(f"Q{i}", f"t{i}", f"结果{i}头行\n{body}")
+        return CacheContext(prefix_msgs=[{"role": "system", "content": "sys"}],
+                            log_msgs=log)
+
+    def test_stale_big_tool_collapsed(self):
+        """超出最近 3 轮的大工具结果 → 折成 stub，含折叠标记。"""
+        ctx = self._ctx_with_turns(4)
+        api = ctx.send()
+        tools = [m for m in api if m["role"] == "tool"]
+        assert "折叠" in tools[0]["content"], "最老一轮的大结果应被折叠"
+        assert "结果0头行" in tools[0]["content"], "应保留首行信号"
+        assert len(tools[0]["content"]) < 700
+
+    def test_recent_tool_verbatim(self):
+        """最近 3 轮内的工具结果 → 逐字保留。"""
+        ctx = self._ctx_with_turns(4)
+        api = ctx.send()
+        tools = [m for m in api if m["role"] == "tool"]
+        assert "折叠" not in tools[-1]["content"], "最近一轮不该折"
+        assert len(tools[-1]["content"]) > 700 - 50
+
+    def test_small_stale_not_collapsed(self):
+        """陈旧但小于阈值的结果 → 不折（折了没意义还丢信号）。"""
+        ctx = self._ctx_with_turns(4, big=False)
+        api = ctx.send()
+        tools = [m for m in api if m["role"] == "tool"]
+        assert all("折叠" not in t["content"] for t in tools)
+
+    def test_self_log_untouched(self):
+        """只动发出去的副本，self.log 原文不变（落盘/可 recall 不受损）。"""
+        ctx = self._ctx_with_turns(4)
+        ctx.send()
+        # log 里最老的 tool 结果仍是原文全长
+        old_tool = next(m for m in ctx.log if m.get("role") == "tool")
+        assert len(old_tool["content"]) > 700
+        assert "折叠" not in old_tool["content"]
+
+    def test_pairing_preserved_after_collapse(self):
+        """折叠保留 tool_call_id → 配对完整性不破。"""
+        ctx = self._ctx_with_turns(4)
+        api = ctx.send()
+        tools = [m for m in api if m["role"] == "tool"]
+        assert tools[0]["tool_call_id"] == "t0"
+
+    def test_short_session_untouched(self):
+        """轮数 < keep_turns → 全部新鲜，一律不折。"""
+        ctx = self._ctx_with_turns(2)
+        api = ctx.send()
+        tools = [m for m in api if m["role"] == "tool"]
+        assert all("折叠" not in t["content"] for t in tools)
+
+    def test_disabled_flag(self, monkeypatch):
+        """开关关 → 大陈旧结果也逐字保留。
+
+        注：params 的 _env_* 默认值在类定义时求值一次，实例化不重读 env，故这里用
+        dataclasses.replace 造禁用实例、替换单例（不能 setenv，也不能 setattr frozen）。
+        """
+        import dataclasses
+
+        import src.params as params
+        disabled = dataclasses.replace(params.CONTEXT, stale_tool_collapse_enabled=False)
+        monkeypatch.setattr(params, "CONTEXT", disabled)
+        ctx = self._ctx_with_turns(4)
+        api = ctx.send()
+        tools = [m for m in api if m["role"] == "tool"]
+        assert all("折叠" not in t["content"] for t in tools)
+
+
+class TestLiveContextTokensCoherence:
+    """压缩/熔断判定量"实际发送体积"（折叠后），而非 self.log 原文全长。"""
+
+    def test_live_tokens_below_raw_when_stale_collapsed(self):
+        """有陈旧大工具结果时，_live_context_tokens < 原文计数（折叠生效）。"""
+        import src.llm as llm
+        from src.tools.tokens import count_messages_tokens
+        log: list[dict] = []
+        for i in range(5):  # 5 轮 → 老的几轮工具结果会被折叠
+            log += _turn(f"Q{i}", f"t{i}", "结果头\n" + "Z" * 3000)
+        ctx = CacheContext(prefix_msgs=[{"role": "system", "content": "sys"}],
+                           log_msgs=log)
+        live = llm._live_context_tokens(ctx)
+        raw = count_messages_tokens(ctx.all)
+        assert live < raw, "折叠后发送体积应小于原文全长"
+
+    def test_live_tokens_legacy_list(self):
+        """传 flat list（legacy）→ 直接按其计数，不报错。"""
+        import src.llm as llm
+        from src.tools.tokens import count_messages_tokens
+        msgs = [{"role": "user", "content": "hi"}, {"role": "assistant", "content": "yo"}]
+        assert llm._live_context_tokens(msgs) == count_messages_tokens(msgs)
+
+
+class TestCompactionEffectiveness:
+    """防抖计数器按真实 token 节省更新（不再用 len(msgs)*80 假数）。"""
+
+    def test_low_saving_increments(self):
+        import src.llm as llm
+        llm._ineffective_compression_count = 0
+        llm._update_compaction_effectiveness(before=1000, after=950)  # 省 5% < 10%
+        assert llm._ineffective_compression_count == 1
+
+    def test_good_saving_resets(self):
+        import src.llm as llm
+        llm._ineffective_compression_count = 2
+        llm._update_compaction_effectiveness(before=1000, after=700)  # 省 30% >= 10%
+        assert llm._ineffective_compression_count == 0
+
+
 class TestPrefixIntegrity:
     """前缀完整性校验测试。"""
 

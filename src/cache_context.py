@@ -33,6 +33,16 @@ def _compute_msg_hash(msgs: list[dict]) -> str:
     return _hashlib.sha256(safe.encode()).hexdigest()[:16]
 
 
+def _stub_tool_content(content: str) -> str:
+    """把陈旧大工具结果折成一行：保留首行信号 + 原长度 + 取回指引。
+
+    首行常含关键信号（"已写入: path" / "退出码:..." / read 的文件头），留它让
+    模型知道这步干了啥；原文不丢（在 self.log 里，落盘 + 可 recall）。
+    """
+    head = content.split("\n", 1)[0].strip()[:160]
+    return f"{head} … 〔旧工具结果已折叠·原 {len(content)} 字·原文见 session / 可 recall〕"
+
+
 class PrefixIntegrityError(RuntimeError):
     """前缀哈希校验失败 — 不可变前缀被意外修改。"""
 
@@ -142,7 +152,10 @@ class CacheContext:
         # prefix 之后纯追加：丢弃所有 volatile system 消息
         kept = [m for m in self.log
                 if not (m.get("role") == "system" and m.get("_volatile"))]
-        api.extend(self._repair_tool_pairing([self._clean_log_msg(m) for m in kept]))
+        cleaned = [self._clean_log_msg(m) for m in kept]
+        # 中段视图变换：折叠陈旧大工具结果（不动 self.log，原文照常落盘/可 recall）
+        cleaned = self._collapse_stale_tool_results(cleaned)
+        api.extend(self._repair_tool_pairing(cleaned))
 
         # ── 游离态挂尾注入（阅后即焚，不进 self.log）──
         try:
@@ -186,6 +199,42 @@ class CacheContext:
         if m.get("tool_call_id"):
             clean["tool_call_id"] = m["tool_call_id"]
         return clean
+
+    @staticmethod
+    def _collapse_stale_tool_results(msgs: list[dict]) -> list[dict]:
+        """中段视图变换：把不在最近 N 个 user 轮内的大工具结果折成一行 stub。
+
+        log→document 转向（缓存命中不再是约束、文字稿洁净优先）的第一刀，A 方案：
+        只折 role==tool 的大结果、只动发出去的副本（msgs 已是 _clean_log_msg 产物），
+        self.log 原文不动 → 照常落盘、可 recall（"驱逐到磁盘不销毁"）。配对完整性
+        不受影响（消息还在、只缩 content），一个开关全关、完全可逆。对话轮不碰。
+        """
+        from .params import CONTEXT
+        if not CONTEXT.stale_tool_collapse_enabled:
+            return msgs
+        keep_turns = CONTEXT.stale_tool_keep_turns
+        threshold = CONTEXT.stale_tool_collapse_threshold
+
+        # 新鲜窗口边界：从尾部数 keep_turns 个 user 消息，其位置之前为陈旧区。
+        # 数不够 keep_turns 个（短会话）→ fresh_start=0 → 全部新鲜、一律不折。
+        fresh_start = 0
+        seen = 0
+        for i in range(len(msgs) - 1, -1, -1):
+            if msgs[i].get("role") == "user":
+                seen += 1
+                if seen >= keep_turns:
+                    fresh_start = i
+                    break
+
+        out: list[dict] = []
+        for idx, m in enumerate(msgs):
+            content = m.get("content")
+            if (idx < fresh_start and m.get("role") == "tool"
+                    and isinstance(content, str) and len(content) > threshold):
+                out.append({**m, "content": _stub_tool_content(content)})
+            else:
+                out.append(m)
+        return out
 
     @staticmethod
     def _repair_tool_pairing(msgs: list[dict]) -> list[dict]:

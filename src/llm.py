@@ -36,7 +36,7 @@ from .tools import execute_tool, get_tools
 # 工具显示标签（安全确认 + 终端回显共用）
 from .tools._tool_meta import PARALLEL_SAFE as _PARALLEL_SAFE
 from .tools._tool_meta import SKIP_COMPRESS_TOOLS as _SKIP_COMPRESS_TOOLS
-from .tools.tokens import count_messages_tokens, truncate_to_budget
+from .tools.tokens import truncate_to_budget
 
 logger = logging.getLogger(__name__)
 
@@ -1065,6 +1065,22 @@ _ineffective_compression_count: int = 0       # 连续低效压缩计数
 
 
 
+def _live_context_tokens(ctx) -> int:
+    """实际发给模型的上下文 token 数（中段折叠/挂尾/配对修复之后）。
+
+    压缩与熔断都按这个判定，而非 self.log 原文全长——与中段折叠咬合：折叠后发出去
+    小了，就该按小的算。用户语义上忍受的是"模型真正读到的"体积，量它才对得上。
+    """
+    from .cache_context import CacheContext
+    from .tools.tokens import count_messages_tokens
+    if isinstance(ctx, CacheContext):
+        try:
+            return count_messages_tokens(ctx.send(validate=False))
+        except Exception:  # noqa: BLE001 — 测量不能阻断主循环，退回原文计数
+            return count_messages_tokens(ctx.all)
+    return count_messages_tokens(ctx)
+
+
 def _compact_context(ctx, user_input: str, force: bool = False):
     """In-place compaction. Returns None for CacheContext, list for legacy flat list.
 
@@ -1084,16 +1100,17 @@ def _compact_context(ctx, user_input: str, force: bool = False):
 
 
 def _compact_cache_context(ctx, user_input: str, force: bool = False) -> None:
-    """滑窗压缩：超阈值时驱旧消息，替换为摘要。"""
-    from .tools.tokens import count_messages_tokens
+    """滑窗压缩：超阈值时驱旧消息，替换为摘要。
+
+    判定与效果度量都用 _live_context_tokens（实际发送体积），不用 self.log 原文全长。
+    """
     global _previous_summary, _ineffective_compression_count
 
     log = ctx.log
     if not log:
         return
 
-    all_msgs = ctx.prefix + log
-    used = count_messages_tokens(all_msgs)
+    used = _live_context_tokens(ctx)
 
     if not force and not _should_compact(used):
         return
@@ -1108,8 +1125,8 @@ def _compact_cache_context(ctx, user_input: str, force: bool = False) -> None:
     if not summary:
         return
 
-    _track_compaction_effectiveness(all_msgs, ctx.prefix, kept)
     _replace_log_with_summary(ctx, kept, evicted, summary)
+    _update_compaction_effectiveness(before=used, after=_live_context_tokens(ctx))
     _previous_summary = summary
     logger.info("滑窗压缩：驱 %d 条旧消息，保留 %d 条", len(evicted), len(kept))
 
@@ -1153,12 +1170,13 @@ def _fix_last_user_boundary(log: list[dict], keep_start: int) -> int:
     return start
 
 
-def _track_compaction_effectiveness(all_msgs: list[dict],
-                                    prefix: list[dict], kept: list[dict]) -> None:
-    """追踪压缩节省效果并更新防抖计数器。"""
+def _update_compaction_effectiveness(before: int, after: int) -> None:
+    """按真实 token 节省更新防抖计数器（连续低效→暂停压缩，避免空转刷 LLM）。
+
+    旧版用 len(msgs)*80 拍脑袋估 token 判"有没有效"——假精确数，已删。这里 before/
+    after 都是 _live_context_tokens 的真值，省得 <10% 才算一次低效。
+    """
     global _ineffective_compression_count
-    before = len(all_msgs) * 80
-    after = (len(prefix) + len(kept) + 1) * 80
     pct = (before - after) / before * 100 if before > 0 else 0
     if pct < 10:
         _ineffective_compression_count += 1
@@ -1799,7 +1817,7 @@ def run_conversation(
             )
             on_token("\n" + msg + "\n")
             return msg
-        used = count_messages_tokens(ctx.all)
+        used = _live_context_tokens(ctx)   # 量实际发送体积（折叠后），非原文全长
         limit = int(MAX_CONTEXT_TOKENS * TOOL_LOOP_THRESHOLD)
         if used >= limit:
             msg = (

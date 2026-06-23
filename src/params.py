@@ -42,14 +42,26 @@ def _env_bool(key: str, default: bool) -> bool:
 class ContextParams:
     """上下文窗口与压缩/清理相关旋钮。"""
 
-    # 上下文 token 上限（达到 tool_loop_threshold 比例即拒绝继续）
-    max_context_tokens: int = _env_int("CTG_MAX_CONTEXT_TOKENS", 960_000)
+    # 上下文 token 上限（达到 tool_loop_threshold 比例即拒绝继续）。
+    # 设 50w 而非模型 96w 物理上限：实测最多忍受 ~30w 实际上下文就觉得注意力散了，
+    # 50w×65%=32.5w 触发压缩，正落在该区间。判定量的是"实际发出去"的体积（见
+    # _live_context_tokens：中段折叠后），不是 self.log 原文全长。
+    max_context_tokens: int = _env_int("CTG_MAX_CONTEXT_TOKENS", 500_000)
     # 工具循环硬顶：用量达此比例即停止本轮，提示开新会话
     tool_loop_threshold: float = _env_float("CTG_TOOL_LOOP_THRESHOLD", 0.95)
     # 滑窗压缩触发比例：超过即驱逐旧对话换摘要
     compact_threshold: float = _env_float("CTG_COMPACT_THRESHOLD", 0.65)
     # 压缩后保留最近多少比例的消息
     compact_keep_ratio: float = _env_float("CTG_COMPACT_KEEP_RATIO", 0.50)
+
+    # ── 中段陈旧工具结果折叠（send() 视图变换，不动 self.log）──
+    # 文字稿洁净优先于缓存命中：把不在最近 N 轮内的大工具结果折成一行 stub，
+    # 让 LLM 注意力别被陈旧 read/命令输出稀释。原文留在 self.log（落盘 + 可 recall）。
+    stale_tool_collapse_enabled: bool = _env_bool("CTG_STALE_TOOL_COLLAPSE", True)
+    # 最近多少个 user 轮内的工具结果逐字保留（热区，刚读的文件还要用）
+    stale_tool_keep_turns: int = _env_int("CTG_STALE_TOOL_KEEP_TURNS", 3)
+    # 工具结果超过多少字符才折叠（小结果折了没意义、还丢信号）
+    stale_tool_collapse_threshold: int = _env_int("CTG_STALE_TOOL_COLLAPSE_THRESHOLD", 600)
 
 
 CONTEXT = ContextParams()
