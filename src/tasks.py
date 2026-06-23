@@ -84,19 +84,18 @@ def has_ambitions() -> bool:
 
 
 def _extract_anchor(text: str) -> str:
-    """从 current.md 内容提取目标锚点：`# 目标锚点` 后到下一个空行或标题为止。"""
+    """从 current.md 提取目标锚点：`# 目标锚点` 后第一行非空文本。"""
     lines = text.splitlines()
     in_anchor = False
-    anchor_lines: list[str] = []
     for line in lines:
         stripped = line.strip()
         if in_anchor:
-            if not stripped or stripped.startswith("#"):
-                break
-            anchor_lines.append(stripped)
+            if stripped and not stripped.startswith("-") and not stripped.startswith("#"):
+                return stripped
+            break
         elif stripped == _ANCHOR_HEADING:
             in_anchor = True
-    return " ".join(anchor_lines).strip()
+    return "".strip()
 
 
 def get_task_progress_line() -> str:
@@ -380,3 +379,26 @@ def get_task_short_status() -> str:
     if total == 0:
         return f"📋 {title}"
     return f"📋 {title} ({done}/{total})"
+
+
+def read_current_active_step() -> str:
+    """解析 current.md，提取第一个未完成步骤（[ ] 或 [o]）的文本。
+
+    用于游离态挂尾注入——让模型聚焦"当前这一步"，而不是被整个任务列表稀释注意力。
+    返回格式：锚点摘要 + 步骤文本。无未完成步骤时返回空串。
+    """
+    text = read_current()
+    if not text:
+        return ""
+    anchor = _extract_anchor(text)
+    active = ""
+    for line in text.splitlines():
+        stripped = line.strip()
+        if stripped.startswith("- [ ]") or stripped.startswith("- [o]"):
+            active = stripped[5:].strip()
+            break
+    if not active:
+        return ""
+    if anchor:
+        return f"【目标】{anchor} | 【下一步】{active}"
+    return active

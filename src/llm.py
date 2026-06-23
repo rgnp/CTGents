@@ -1696,6 +1696,30 @@ def _reconcile_system_context(ctx: CacheContext) -> None:
     reconcile(ctx)
 
 
+def _make_tail_message() -> dict | None:
+    """构建游离态挂尾消息：当前任务步骤 + 核心纪律。
+
+    不写 ctx.log，不落盘，阅后即焚。只在有未完成的任务时注入。
+    放在 payload 最末尾利用近因效应——让模型无论历史多长都能聚焦当前步骤。
+    """
+    from .tasks import read_current_active_step
+    step = read_current_active_step()
+    if not step:
+        return None
+    return {
+        "role": "system",
+        "content": (
+            "【系统最高指令 / 当前操作台】\n"
+            "无论上方的历史对话多么冗长，你当前必须且只能聚焦于以下任务切片：\n"
+            f"👉 当前执行步骤：{step}\n\n"
+            "🛡️ 核心纪律强制刷新：\n"
+            "1. 你无权修改 IMMUTABLE_FILES（不可变安全核）。\n"
+            "2. 写代码（edit_file_lines）之前必须确保你已重新阅读了该文件获取最新行号。\n"
+            "3. 请立即执行当前步骤，若遇到任何审计拦截（Audit），优先自我纠正！"
+        ),
+    }
+
+
 def run_conversation(
     ctx: CacheContext,
     user_input: str,
@@ -1817,8 +1841,13 @@ def run_conversation(
 
         try:
             _reasoning_accum.clear()
+            # ── 游离态挂尾：ctx.send() 之后、LLM 调用之前，追加当前任务步骤 ──
+            api_messages = ctx.send()
+            tail = _make_tail_message()
+            if tail:
+                api_messages = api_messages + [tail]
             content, tool_calls, eager_results = _invoke_llm_eager(
-                backend, ctx.send(), on_token, session_id, on_reasoning=_capture_reasoning,
+                backend, api_messages, on_token, session_id, on_reasoning=_capture_reasoning,
             )
             requests_made += 1
         except UserInterruptError:

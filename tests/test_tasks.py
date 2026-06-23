@@ -116,8 +116,9 @@ class TestExtractAnchor:
         assert anchor == "一句话目标。"
 
     def test_multiline_anchor(self):
+        """锚点只取第一行非空文本（不包含后续行）。"""
         anchor = tasks._extract_anchor("# 目标锚点\n第一行。\n第二行。\n\n正文")
-        assert anchor == "第一行。 第二行。"
+        assert anchor == "第一行。", "锚点只取目标锚点之后第一行非空文本"
 
     def test_no_anchor(self):
         assert tasks._extract_anchor("无锚点内容") == ""
