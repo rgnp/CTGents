@@ -1826,6 +1826,11 @@ def run_conversation(
             # 显式停止信号：用户截停本轮。外层主干 gate（control_signal is None 才续跑）
             # 与 run_task_continuation 据此停——否则中断后续跑会接着跑下一步、"截停"失效。
             ctx.control_signal = "interrupted"
+            # ① 中断标记落 log：下次加载能看到"这里被中断过"
+            ctx.log.append({"role": "system", "content": "⏹️ 本轮被用户中断，以上是中断前已完成的步骤。"})
+            # ② 中断时存盘：保证中断时的上下文不丢
+            if on_progress:
+                on_progress()
             return "\n\n[⏹️ 已中断]"
         if tool_calls:
             # 解析→执行→stormBreaker→压缩→写 log 全部走 _handle_tool_results（单一实现）。
