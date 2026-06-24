@@ -179,6 +179,23 @@ def test_run_agent_turn_injects_resume_reminder_once(monkeypatch):
     assert sum(1 for m in ctx.log if m.get("_resume")) == 1, "首轮提醒一次，后续不重复"
 
 
+def test_run_agent_turn_injects_gate_notice_once(monkeypatch):
+    """会话首轮门通行证审计有发现 → append-only 注入一次 _gate_notice；后续轮不重复。"""
+    import src.gate_audit as gate_audit
+    from src.cache_context import CacheContext
+    calls: list[str] = []
+    _stub_backbone(monkeypatch, calls, progressed=False)
+    monkeypatch.setattr(gate_audit, "head_gate_notice", lambda: "⚠ 该提交可能绕过了门")
+    main._session_state["task_reminded"] = True       # 隔离：只走 gate 块
+    main._session_state["base_psyche_ensured"] = True
+    main._session_state["gate_checked"] = False
+    ctx = CacheContext()
+    main.run_agent_turn(ctx, "hi", "sid0")
+    assert sum(1 for m in ctx.log if m.get("_gate_notice")) == 1
+    main.run_agent_turn(ctx, "hi again", "sid0")
+    assert sum(1 for m in ctx.log if m.get("_gate_notice")) == 1, "首轮一次，后续不重复"
+
+
 def test_post_turn_audits_dedup_no_repeat():
     """同一条 nudge 条件不变 → 第二次审计不重复追加（去重防刷屏）。"""
     from src.cache_context import CacheContext

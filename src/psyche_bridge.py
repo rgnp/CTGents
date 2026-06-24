@@ -226,6 +226,91 @@ def _check_parent_dependency(core_path: str, loaded: list[dict]) -> str | None:
 
 
 
+def _top_level_psyche_names() -> list[str]:
+    """顶层领域 psyche 名（有核心文件的目录）。子 psyche 不参与自动加载（需父依赖）。"""
+    names = []
+    if os.path.isdir(_PSYCHE_ROOT):
+        for d in os.listdir(_PSYCHE_ROOT):
+            core_dir = os.path.join(_PSYCHE_ROOT, d, "核心")
+            if os.path.isdir(core_dir) and any(f.endswith("-core.md") for f in os.listdir(core_dir)):
+                names.append(d)
+    return names
+
+
+def _trigger_keywords(name: str) -> list[str]:
+    """读 psyche 核心 meta 块的「触发词」行 → 关键词列表。未声明则返回空（不参与自动加载）。"""
+    core = _find_core_file(name)
+    if not core:
+        return []
+    try:
+        with open(core, encoding="utf-8") as f:
+            raw = _extract_meta(f.read(), "触发词")
+    except Exception:
+        return []
+    return [k.strip() for k in re.split(r"[,，、]", raw) if k.strip()]
+
+
+def detect_psyche_for(text: str) -> str | None:
+    """按触发词匹配 → 返回命中最多的顶层 psyche（无命中 None）。
+
+    关键词来源是每个 psyche 自己核心文件里声明的「触发词」——psyche 进化时关键词随之演进，
+    不在代码里另维护一张表。匹配大小写不敏感、子串命中。
+
+    ⚠️ 临时 v1（2026-06-24，用户"先用着，后面再换"）：硬关键词子串匹配偏死板——换种说法
+    （"占用栅格"vs occupancy）或领域词出现在别的语境会漏/误载。计划换成语义路由（用 psyche
+    的领域描述做依据、随其进化）：优先 embedding 相似度（复用 RAG 向量、零额外 LLM 调用、不是
+    多 agent），噪声硌着了再考虑轻量 LLM 路由。换时把本函数整体替掉即可，调用点 maybe_autoload
+    不动。
+    """
+    if not text:
+        return None
+    low = text.lower()
+    best, best_hits = None, 0
+    for name in _top_level_psyche_names():
+        hits = sum(1 for kw in _trigger_keywords(name) if kw.lower() in low)
+        if hits > best_hits:
+            best, best_hits = name, hits
+    return best
+
+
+# 通用人格：不分领域、每会话常驻注入（log-0），领域 psyche 在其上叠加。
+# 实验（2026-06-24）：AGENTS.md 的 <bias>+<tone> 改写成第一人称人格搬到这里，从前缀删除——
+# 测"通用姿态写成人格 vs 写成前缀规则"哪个真改行为（领域 psyche 起效是形式还是内容的隔离实验）。
+_BASE_PSYCHE = "general"
+
+
+def ensure_base_psyche(ctx: CacheContext) -> str | None:
+    """常驻基础人格：未加载则注入 general psyche。返回注入提示或 None。
+
+    幂等（已加载/文件不存在/关闭开关 → None）。CTG_BASE_PSYCHE=0 可关。
+    删掉 psyche/general/ 目录也能禁用（_find_core_file 找不到即 None）。
+    """
+    if os.environ.get("CTG_BASE_PSYCHE", "1") == "0":
+        return None
+    if not _find_core_file(_BASE_PSYCHE):
+        return None
+    if any(meta.get("name") == _BASE_PSYCHE for meta in loaded_psyches_in_log(ctx)):
+        return None
+    return inject_psyche(ctx, _BASE_PSYCHE)
+
+
+def maybe_autoload_psyche(ctx: CacheContext, text: str) -> str | None:
+    """开局钩子：用户输入命中某 psyche 触发词且未加载 → 自动注入。返回注入提示或 None。
+
+    把"该不该加载 psyche"从 AGENTS.md 那条 inert 的前缀散文（"任务匹配关键词→必须先加载"，
+    实测从不触发，三天里 agent 一次没自己加载过），挪到这条会真触发的开局检测通道。
+    CTG_PSYCHE_AUTOLOAD=0 可关闭（测试/排查用）。
+    """
+    if os.environ.get("CTG_PSYCHE_AUTOLOAD", "1") == "0":
+        return None
+    name = detect_psyche_for(text)
+    if not name:
+        return None
+    if any(meta.get("name") == name for meta in loaded_psyches_in_log(ctx)):
+        return None
+    return inject_psyche(ctx, name)
+
+
 def _list_available() -> str:
     """列出所有可用的 psyche。"""
     names = []

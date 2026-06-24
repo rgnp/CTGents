@@ -313,6 +313,14 @@ def _runtime_section() -> str:
     except Exception:
         pass
 
+    # Psyche（已加载的领域/通用人格——自知工具曾对这层瞎，见 152122 会话）
+    try:
+        from ..system_context import loaded_keys
+        psyches = [k.split("/", 1)[1] for k in loaded_keys() if k.startswith("psyche/")]
+        lines.append(f"Psyche: {', '.join(psyches) if psyches else '无加载'}")
+    except Exception:
+        pass
+
     lines.append("")
     return "\n".join(lines)
 

@@ -69,7 +69,8 @@ def _stop_esc_listener() -> None:
 
 # 本进程是否真跑过一轮（产生过新内容）。空会话 / 加载后未改动的会话退出时
 # 不触发反思/摘要/收割（那是白烧 LLM）。加载/清空会话时复位。
-_session_state = {"turn_ran": False, "task_reminded": False}
+_session_state = {"turn_ran": False, "task_reminded": False,
+                  "base_psyche_ensured": False, "gate_checked": False}
 
 
 def _make_memory_context() -> dict | None:
@@ -97,7 +98,7 @@ def _make_agents_message() -> dict:
 def _make_ambitions_message() -> dict | None:
     """长期目标（tasks/ambitions.md）放进缓存前缀——它 session 稳定、是弱方向参考。
 
-    曾在挂尾(make_task_context_message)，但任何挂尾内容都让"对话"不再是请求的输入结束
+    曾随 per-turn 任务上下文挂尾，但任何挂尾内容都让"对话"不再是请求的输入结束
     位置，轮首只能命中脆弱内部单元、空闲~40s 即被服务端淘汰、整段对话重 miss。挪进前缀
     (会话开始建一次、冻结)后对话重新成为可靠的输入结束单元。见 [[ctgents-context-cache]]。
     """
@@ -285,6 +286,31 @@ def run_agent_turn(ctx: CacheContext, user_input: str,
         if rem:
             ctx.log.append({"role": "system", "content": rem, "_resume": True})
             disp.on_status(rem)
+
+    # 门通行证审计：会话首轮核对 HEAD 树在不在质量门通过记录里——有人 --no-verify 绕门 → 拍肩。
+    # 原挂在 dormant 的 make_task_context_message 下（随挂尾删除已断），改 append-only 接回活路径。
+    if not _session_state["gate_checked"]:
+        _session_state["gate_checked"] = True
+        from .gate_audit import head_gate_notice
+        gate_notice = head_gate_notice()
+        if gate_notice:
+            ctx.log.append({"role": "system", "content": gate_notice, "_gate_notice": True})
+            disp.on_status(gate_notice)
+
+    # 通用人格常驻：会话首轮注入基础工作人格（AGENTS.md 的 <bias>+<tone> 迁来，从前缀删除）。
+    if not _session_state["base_psyche_ensured"]:
+        _session_state["base_psyche_ensured"] = True
+        from .psyche_bridge import ensure_base_psyche
+        base_note = ensure_base_psyche(ctx)
+        if base_note:
+            disp.on_status(base_note)
+
+    # Psyche 自动加载：用户输入命中某领域 psyche 触发词且未加载 → 注入领域人格/经验/规范。
+    # 替代 AGENTS.md 那条从不触发的"记得先加载"前缀散文（见 psyche_bridge.maybe_autoload_psyche）。
+    from .psyche_bridge import maybe_autoload_psyche
+    note = maybe_autoload_psyche(ctx, user_input)
+    if note:
+        disp.on_status(note)
 
     before_task = read_current()
     _drive_turn(ctx, user_input, disp, sid)
@@ -611,15 +637,17 @@ def _run_line_repl(ctx: CacheContext, session_id: str | None) -> str | None:
                 status_bar.reset()  # 切会话复位 Δmiss 基线
                 _session_state["turn_ran"] = False  # 加载未改动则退出不收割
                 _session_state["task_reminded"] = False  # 切会话→新会话首轮重提醒未完成任务
+                _session_state["base_psyche_ensured"] = False  # 新会话首轮重新确保基础人格
+                _session_state["gate_checked"] = False  # 新会话首轮重新核对门通行证
                 print(f"已加载会话 [{r.load}]，共 {len(ctx)} 条消息")
                 _print_recent(ctx.all)
             if r.clear:
                 ctx.clear_log()
                 ctx.rebuild_prefix(_make_prefix_msgs())
+                _session_state["base_psyche_ensured"] = False  # 清空 log → 基础人格没了，下轮重注入
+                _session_state["gate_checked"] = False  # 清空 log → 门审计提醒没了，下轮重核对
                 if r.save:
                     session_id = None
-                    from .tasks import reset_gaps_cache
-                    reset_gaps_cache()
                     from . import status_bar
                     status_bar.reset()  # 清空会话复位 Δmiss 基线
                     _session_state["turn_ran"] = False  # 清空后空会话退出不收割
