@@ -227,7 +227,6 @@ def _run_post_turn_audits(ctx: CacheContext, disp) -> None:
     去重：按 _audit_id（类型标识，如 "completion"）去重，不按文本比对——
     审计消息可能含动态内容（如引用的文件名列表），文本比对会被绕过导致复读机刷屏。
     """
-    from .citation_audit import audit_citations
     from .completion_audit import (
         audit_completion,
         audit_memory_consult,
@@ -238,9 +237,12 @@ def _run_post_turn_audits(ctx: CacheContext, disp) -> None:
     log = ctx.all
     # 按审计类型 ID 去重，不按文本——文本可能含动态内容（文件名等）
     existing_ids = {m.get("_audit_id") for m in ctx.log if m.get("_audit_id")}
+    # citation_audit 已于 2026-06-24 从轮末审计摘除：反引号 snake_case 标识符那支
+    # 分不清"提议新名字"和"引用现有代码"，在设计/提议密集的工作流里持续误报=喊狼
+    # （训练人/agent 无视提示）。模块 citation_audit.py 保留休眠——若要恢复，建议只挂
+    # 高精度的 path:line 支（你不会凭空编行号），不要整支反引号标识符。
     audits = [
         ("completion", audit_completion),
-        ("citations", audit_citations),
         ("read_before_write", audit_read_before_write),
         ("memory_consult", audit_memory_consult),
         ("quality_check", audit_quality_check),
