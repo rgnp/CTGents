@@ -198,7 +198,7 @@ class TestStormBlacklist:
 
     def test_blacklist_contains_git_mutation_tools(self):
         bl = get_blacklist()
-        for tool in ("git_commit", "git_push", "git_pr"):
+        for tool in ("git_commit", "git_push"):
             assert tool in bl, f"{tool} 应在黑名单中"
 
     def test_blacklist_contains_memory_tools(self):

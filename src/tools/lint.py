@@ -16,75 +16,10 @@ from pathlib import Path
 
 # ── 工具定义 ──
 
-TOOLS_LINT = [
-    {
-        "_meta": {"label": "规范检查", "parallel_safe": True},
-        "type": "function",
-        "function": {
-            "name": "check_project",
-            "description": "六维度规范扫描（命令/测试/结构/风格/Git/边界），0-100 评分。",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "path": {
-                        "type": "string",
-                        "description": "项目路径，默认当前目录",
-                    },
-                    "fix": {
-                        "type": "boolean",
-                        "description": "自动修复可修复项，默认 False",
-                    },
-                },
-                "required": [],
-            },
-        },
-    },
-    {
-        "_meta": {"label": "生成规范", "parallel_safe": True},
-        "type": "function",
-        "function": {
-            "name": "generate_agents_md",
-            "description": "扫描项目生成/更新 AGENTS.md（构建/测试/风格/安全）。",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "path": {
-                        "type": "string",
-                        "description": "项目路径，默认当前目录",
-                    },
-                    "overwrite": {
-                        "type": "boolean",
-                        "description": "覆盖已有文件，默认 False（仅创建不存在时）",
-                    },
-                },
-                "required": [],
-            },
-        },
-    },
-    {
-        "_meta": {"label": "文档同步检查", "parallel_safe": True},
-        "type": "function",
-        "function": {
-            "name": "docs_sync_check",
-            "description": (
-                "检查当前 Git 工作区的文件变更是否违反了文档同步规范。"
-                "遍历所有修改/新增/删除的文件，根据硬编码的映射表检查"
-                "是否应该同步更新对应的文档。如果违反（改了代码但没改文档），"
-                "给出明确的违规提醒。建议每次 commit 前运行。"
-            ),
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "path": {
-                        "type": "string",
-                        "description": "项目路径，默认当前项目目录",
-                    },
-                },
-                "required": [],
-            },
-        },
-    },
-]
+# check_project / generate_agents_md / docs_sync_check 已从注册移除
+# （2026-06-23，82 会话零调用）：维护元工具，实现保留在本模块（lint 规则内部复用），
+# 仅不再作为 agent 工具暴露。需要时恢复对应 schema dict 即可。
+TOOLS_LINT: list = []
 
 
 # ═══════════════════════════════════════════════════════════════

@@ -51,22 +51,6 @@ def move_file(src: str, dst: str) -> str:
 
 
 @tk.tool(
-    label="复制文件",
-    params={"src": "现有文件路径", "dst": "目标路径"},
-    dedup_blacklist=True,
-)
-def copy_file(src: str, dst: str) -> str:
-    """复制文件（保留元数据）。"""
-    s, d = _resolve(src), _resolve(dst)
-    if not s.exists() or not s.is_file():
-        raise FileNotFoundError(f"源文件不存在或不是文件: {src}")
-    _guard_write(d)
-    d.parent.mkdir(parents=True, exist_ok=True)
-    shutil.copy2(str(s), str(d))
-    return f"已复制: {s} → {d}（{d.stat().st_size} 字节）"
-
-
-@tk.tool(
     label="按名查找",
     params={"pattern": "文件名 glob，如 *.py / test_*.py", "path": "搜索根目录，不传=当前目录"},
     parallel_safe=True,

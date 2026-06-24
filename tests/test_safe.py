@@ -24,8 +24,10 @@ class TestParallelSafeWhitelist:
             assert tool in _PARALLEL_SAFE, f"{tool} 应在并行白名单中"
 
     def test_project_tools_in_whitelist(self):
-        """项目扫描类工具应在白名单中。"""
-        for tool in ("scan_project", "check_project", "docs_sync_check", "generate_agents_md"):
+        """项目扫描类工具应在白名单中（check_project/docs_sync_check/generate_agents_md
+        已于 2026-06-23 移除——零调用的维护元工具）。
+        """
+        for tool in ("scan_project", "analyze_code"):
             assert tool in _PARALLEL_SAFE, f"{tool} 应在并行白名单中"
 
     def test_write_tools_not_in_whitelist(self):

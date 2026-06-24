@@ -61,16 +61,14 @@ def test_execute_wraps_exception_as_error_json():
 def test_new_file_tools_auto_discovered():
     from src.tools import get_tools
     names = {t["function"]["name"] for t in get_tools()}
-    assert {"move_file", "copy_file", "find_files", "make_dir"} <= names
+    assert {"move_file", "find_files", "make_dir"} <= names
 
-def test_move_copy_make_find(monkeypatch, tmp_path):
+def test_move_make_find(monkeypatch, tmp_path):
     monkeypatch.chdir(tmp_path)  # _ensure_in_workspace 用 cwd
     from src.tools import files_more as fm
 
     (tmp_path / "a.txt").write_text("hello", encoding="utf-8")
     assert "已创建目录" in fm.execute("make_dir", {"path": "sub"})
-    assert "已复制" in fm.execute("copy_file", {"src": "a.txt", "dst": "sub/b.txt"})
-    assert (tmp_path / "sub" / "b.txt").read_text(encoding="utf-8") == "hello"
     assert "已移动" in fm.execute("move_file", {"src": "a.txt", "dst": "sub/c.txt"})
     assert not (tmp_path / "a.txt").exists()
     assert (tmp_path / "sub" / "c.txt").exists()

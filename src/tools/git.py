@@ -148,36 +148,6 @@ TOOLS_GIT = [
         },
     },
     {
-        "_meta": {"label": "Git PR", "dedup_blacklist": True},
-        "type": "function",
-        "function": {
-            "name": "git_pr",
-            "description": "创建 Pull Request。title/body 不传则自动分析生成。",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "title": {
-                        "type": "string",
-                        "description": "PR 标题，不传=自动生成",
-                    },
-                    "body": {
-                        "type": "string",
-                        "description": "PR 描述，不传=自动生成",
-                    },
-                    "base_branch": {
-                        "type": "string",
-                        "description": "目标分支，默认 main",
-                    },
-                    "path": {
-                        "type": "string",
-                        "description": "Git 仓库路径，默认当前目录",
-                    },
-                },
-                "required": [],
-            },
-        },
-    },
-    {
         "_meta": {"label": "Git 分支", "parallel_safe": True},
         "type": "function",
         "function": {

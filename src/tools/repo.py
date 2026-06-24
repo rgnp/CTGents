@@ -42,19 +42,6 @@ TOOLS_REPO = [
         },
     },
     {
-        "_meta": {"label": "查看已克隆仓库", "parallel_safe": True},
-        "type": "function",
-        "function": {
-            "name": "repo_list",
-            "description": f"列出 {DEFAULT_REPO_ROOT} 下已克隆的所有仓库及其状态。",
-            "parameters": {
-                "type": "object",
-                "properties": {},
-                "required": [],
-            },
-        },
-    },
-    {
         "_meta": {"label": "仓库状态", "parallel_safe": True},
         "type": "function",
         "function": {

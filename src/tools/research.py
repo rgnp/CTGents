@@ -34,59 +34,9 @@ if str(_KNOWLEDGE_TOOLS) not in sys.path:
 # ── 工具定义 ──────────────────────────────────────────────
 
 TOOLS_RESEARCH = [
-    {
-        "_meta": {"label": "分析论文", "parallel_safe": True},
-        "type": "function",
-        "function": {
-            "name": "analyze_paper",
-            "description": "分析论文：方法论分类（6种类型）+ 已知Gap匹配 + 生成论文卡片模板。输入标题和摘要即可。",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "title": {"type": "string", "description": "论文标题"},
-                    "abstract": {"type": "string", "description": "论文摘要"},
-                    "contributions": {"type": "string", "description": "核心贡献（可选）"},
-                    "authors": {"type": "string", "description": "作者（可选）"},
-                    "conference": {"type": "string", "description": "会议/期刊（可选）"},
-                    "year": {"type": "string", "description": "年份（可选）"},
-                },
-                "required": ["title", "abstract"],
-            },
-        },
-    },
-    {
-        "_meta": {"label": "交叉验证", "parallel_safe": True},
-        "type": "function",
-        "function": {
-            "name": "cross_validate",
-            "description": "新论文与知识库已有论文交叉验证：矛盾检测、互补分析、Gap影响、方法论对比。",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "title": {"type": "string", "description": "论文标题"},
-                    "abstract": {"type": "string", "description": "论文摘要"},
-                    "contributions": {"type": "string", "description": "核心贡献（可选）"},
-                },
-                "required": ["title", "abstract"],
-            },
-        },
-    },
-    {
-        "_meta": {"label": "保存论文卡片", "dedup_blacklist": True},
-        "type": "function",
-        "function": {
-            "name": "save_paper_card",
-            "description": "将论文卡片 Markdown 保存到 knowledge/。",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "filename": {"type": "string", "description": "文件名，如 '2025-paper.md'"},
-                    "content": {"type": "string", "description": "卡片 Markdown 内容"},
-                },
-                "required": ["filename", "content"],
-            },
-        },
-    },
+    # 领域研究工具 analyze_paper/cross_validate/save_paper_card/paper_grid 已从注册移除
+    # （2026-06-23，82 会话零调用）：领域专用工具改 load-on-demand，做研究时再挂回 schema。
+    # 实现函数保留在本模块休眠（_analyze_paper 等），重新启用只需恢复这些 dict。
     {
         "_meta": {"label": "扫描论文", "parallel_safe": True},
         "type": "function",
@@ -138,22 +88,6 @@ TOOLS_RESEARCH = [
                     "ids": {"type": "string", "description": "JSON: [\"2601.01528\",...]"},
                 },
                 "required": ["ids"],
-            },
-        },
-    },
-    {
-        "_meta": {"label": "论文评分表"},
-        "type": "function",
-        "function": {
-            "name": "paper_grid",
-            "description": "生成领域论文评分表Markdown。输入领域名+read_papers返回的JSON。写入knowledge/。",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "area": {"type": "string", "description": "领域名"},
-                    "papers_json": {"type": "string", "description": "read_papers 返回的 JSON"},
-                },
-                "required": ["area", "papers_json"],
             },
         },
     },
