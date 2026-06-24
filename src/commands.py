@@ -454,6 +454,26 @@ def _spike_verdict(e: dict, prev: dict | None, p: int, h: int, pct: float) -> st
 # Psyche 指令
 # ═══════════════════════════════════════════════════════════════
 
+@builtin("/tools", description="加载/卸载/列出可选工具组（领域专用工具 load-on-demand）",
+         usage="/tools              — 列出可选工具组及状态\n"
+               "/tools load <组>    — 挂上工具组（如 research 文献工具）\n"
+               "/tools unload <组>  — 卸下工具组")
+def _cmd_tools(r: CmdResult, _ctx, args, _sid) -> None:
+    from .tools import disable_tool_group, enable_tool_group, list_tool_groups
+    if not args:
+        r.message = list_tool_groups()
+        return
+    sub = args[0].lower()
+    if sub == "load" and len(args) >= 2:
+        r.message = enable_tool_group(args[1].lower())
+    elif sub == "unload" and len(args) >= 2:
+        r.message = disable_tool_group(args[1].lower())
+    elif sub in ("list", "ls"):
+        r.message = list_tool_groups()
+    else:
+        r.message = "用法: /tools [load|unload <组>]"
+
+
 @builtin("/psyche", description="加载/卸载/列出 Psyche 认知框架",
          usage="/psyche load <name>  — 读取核心并注入上下文，位置固定，不影响缓存\n"
                "/psyche unload <name> — 从上下文移除\n"

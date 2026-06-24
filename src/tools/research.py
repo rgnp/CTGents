@@ -38,7 +38,7 @@ TOOLS_RESEARCH = [
     # （2026-06-23，82 会话零调用）：领域专用工具改 load-on-demand，做研究时再挂回 schema。
     # 实现函数保留在本模块休眠（_analyze_paper 等），重新启用只需恢复这些 dict。
     {
-        "_meta": {"label": "扫描论文", "parallel_safe": True},
+        "_meta": {"label": "扫描论文", "parallel_safe": True, "group": "research"},
         "type": "function",
         "function": {
             "name": "scan_papers",
@@ -57,7 +57,7 @@ TOOLS_RESEARCH = [
         },
     },
     {
-        "_meta": {"label": "扫描顶会", "parallel_safe": True},
+        "_meta": {"label": "扫描顶会", "parallel_safe": True, "group": "research"},
         "type": "function",
         "function": {
             "name": "scan_conf",
@@ -77,7 +77,7 @@ TOOLS_RESEARCH = [
         },
     },
     {
-        "_meta": {"label": "批量读论文", "parallel_safe": True},
+        "_meta": {"label": "批量读论文", "parallel_safe": True, "group": "research"},
         "type": "function",
         "function": {
             "name": "read_papers",

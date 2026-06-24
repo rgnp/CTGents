@@ -10,7 +10,7 @@ PAGE_SEP = "\n\n--- 第 {page} 页 ---\n\n"
 
 TOOLS_PAPER = [
     {
-        "_meta": {"label": "读论文", "parallel_safe": True},
+        "_meta": {"label": "读论文", "parallel_safe": True, "group": "research"},
         "type": "function",
         "function": {
             "name": "read_paper",

@@ -72,3 +72,43 @@ def test_healthy_registry_no_failures():
     """正常初始化后无故障模块。"""
     tools_pkg._init_registry()
     assert get_failed_modules() == []
+
+
+class TestOptionalToolGroups:
+    """可选工具组 load-on-demand：research 默认不挂、/tools load 才挂上。"""
+
+    def setup_method(self):
+        tools_pkg.disable_tool_group("research")  # 每例从干净（未加载）态开始
+
+    def teardown_method(self):
+        tools_pkg.disable_tool_group("research")
+
+    def _names(self):
+        return {t["function"]["name"] for t in get_tools()}
+
+    def test_research_excluded_by_default(self):
+        names = self._names()
+        for t in ("scan_papers", "scan_conf", "read_papers", "read_paper", "rag_index_research"):
+            assert t not in names, f"{t} 不该默认加载（research 组应 off）"
+
+    def test_enable_includes_research(self):
+        before = len(get_tools())
+        msg = tools_pkg.enable_tool_group("research")
+        assert "已加载" in msg
+        assert "scan_papers" in self._names()
+        assert len(get_tools()) > before, "加载组后工具数应增加（缓存已失效重建）"
+
+    def test_disable_removes_research(self):
+        tools_pkg.enable_tool_group("research")
+        tools_pkg.disable_tool_group("research")
+        assert "scan_papers" not in self._names()
+
+    def test_unknown_group_rejected(self):
+        msg = tools_pkg.enable_tool_group("nonexistent_xyz")
+        assert "未知工具组" in msg
+        assert "scan_papers" not in self._names()
+
+    def test_non_group_tools_always_present(self):
+        """没标 group 的核心工具不受组开关影响。"""
+        for t in ("read_file", "write_file", "grep_code", "run_command"):
+            assert t in self._names()

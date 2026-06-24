@@ -187,7 +187,7 @@ TOOLS_RAG = [
         },
     },
     {
-        "_meta": {"label": "研究索引"},
+        "_meta": {"label": "研究索引", "group": "research"},
         "type": "function",
         "function": {
             "name": "rag_index_research",

@@ -22,7 +22,8 @@ src/ 源码 | src/tools/ 工具 | tests/ | docs/ | memory/(不提交) | knowledg
 改: 先 read_file(可带 start_line/end_line 取段) → replace_in_file(字符串精确匹配，首选，免行号漂) 或 write_file(整文件重写)。edit_file_lines 行号易漂少用。还有 move_file/make_dir/delete_file/count_lines。
 跑: run_command(短，有超时) | run_python | run_async(长命令如全量测试，完成自动通知你，派发后接着干别 poll)。
 任务(3+文件): 先写 tasks/current.md(含目标锚点)展示步骤，按步标 [x]/[o]/[ ]，做完 task_done，要拍板调 need_user(别只在回复里说"先停下"——会被自动续跑覆盖)。
-记忆/研究: remember/recall 跨会话；scan_papers/scan_conf 找最新 → read_papers 摘要 → rag_search 搜知识库 → learn 查概念；search_web → read_page 联网深读。
+记忆/研究: remember/recall 跨会话；learn 查概念；search_web → read_page 联网深读。
+文献工具(scan_papers/scan_conf/read_papers/read_paper/rag_index_research)默认不加载、省常驻 token——要做文献研究时提示用户输入 /tools load research 挂上。
 </tools>
 
 <psyche>

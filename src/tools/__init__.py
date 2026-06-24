@@ -3,6 +3,7 @@
 import importlib
 import json
 import logging
+import os
 import sys
 import time
 from collections import OrderedDict
@@ -70,13 +71,58 @@ _init_registry()
 # ── 工具列表缓存 ──
 _tools_cache: list[dict] | None = None
 
+# ── 可选工具组（load-on-demand）──
+# 领域专用工具（如文献研究）默认不挂常驻 prefix——省 token、不做该领域时不背着它们。
+# 组名标在工具 _meta["group"] 上；这里列哪些组默认关。做该领域时用 /tools load <组> 挂上，
+# 或开会话前设 CTG_TOOL_GROUPS=research。改前缀缓存不是约束（已判服务端问题）。
+_OPTIONAL_GROUPS: frozenset[str] = frozenset({"research"})
+_enabled_groups: set[str] = set()
+
+
+def _load_default_groups() -> None:
+    raw = os.getenv("CTG_TOOL_GROUPS", "")
+    for g in raw.replace(",", " ").split():
+        if g in _OPTIONAL_GROUPS:
+            _enabled_groups.add(g)
+
+
+_load_default_groups()
+
+
+def enable_tool_group(name: str) -> str:
+    """挂上一个可选工具组（失效缓存，下次 get_tools 带上它）。"""
+    global _tools_cache
+    if name not in _OPTIONAL_GROUPS:
+        return f"未知工具组 '{name}'。可选：{', '.join(sorted(_OPTIONAL_GROUPS)) or '（无）'}"
+    if name in _enabled_groups:
+        return f"工具组 '{name}' 已加载。"
+    _enabled_groups.add(name)
+    _tools_cache = None
+    return f"✅ 已加载工具组 '{name}'。"
+
+
+def disable_tool_group(name: str) -> str:
+    """卸下一个可选工具组。"""
+    global _tools_cache
+    if name in _enabled_groups:
+        _enabled_groups.discard(name)
+        _tools_cache = None
+        return f"✅ 已卸载工具组 '{name}'。"
+    return f"工具组 '{name}' 未加载。"
+
+
+def list_tool_groups() -> str:
+    lines = ["可选工具组（load-on-demand，默认不占常驻 prefix）："]
+    for g in sorted(_OPTIONAL_GROUPS):
+        lines.append(f"  {g}: {'已加载' if g in _enabled_groups else '未加载'}")
+    return "\n".join(lines)
+
 
 def get_tools() -> list[dict]:
-    """返回全部工具列表。
+    """返回当前生效的工具列表（剥离 _meta；按可选组过滤）。
 
-    剥离 _meta 后缓存——API 不可见元数据。
-    结果缓存复用，确保每轮返回的 tools 是同一个 list 对象，
-    OpenAI SDK 序列化后字节一致，保障 DeepSeek 前缀缓存命中。
+    剥离 _meta 后缓存——API 不可见元数据。结果缓存复用，确保每轮返回同一 list 对象、
+    字节一致以保 DeepSeek 前缀缓存命中（enable/disable 组会失效缓存重建）。
     """
     global _tools_cache
     if _tools_cache is not None:
@@ -84,7 +130,11 @@ def get_tools() -> list[dict]:
 
     tools: list[dict] = []
     for src in _TOOL_SOURCES:
-        tools.extend(src)
+        for t in src:
+            grp = t.get("_meta", {}).get("group")
+            if grp in _OPTIONAL_GROUPS and grp not in _enabled_groups:
+                continue  # 可选组未加载 → 不挂进 prefix
+            tools.append(t)
 
     # 剥离 _meta（API 不可见）
     tools = [{k: v for k, v in t.items() if k != "_meta"} for t in tools]
