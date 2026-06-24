@@ -244,36 +244,12 @@ def make_task_context_message() -> dict | None:
                 "↳ 每完成一个步骤，对照上方锚点检查当前方向：做的事还在解决这个问题吗？"
             )
 
-    # 被动进化反思已移入缓存前缀（main._make_reflections_message）——它 session 稳定
-    # （反思在会话边界写、本会话内不变），留在挂尾会让"对话"不再是输入结束位置、轮首
-    # 命中脆弱内部单元、负载尖峰时偶发整段重 miss（见 build_reflections_text / llm.py 注释）。
-
     if not parts:
         return None
     # _task_ctx: run_conversation 每轮按此标记剥旧再追加新——没有它剥除空转，
     # 任务上下文每轮堆一份副本(全在挂尾区,每个请求重算,白烧缓存 miss)。
     return {"role": "system", "content": "\n\n".join(parts),
             "_volatile": True, "_task_ctx": True}
-
-
-def build_reflections_text() -> str | None:
-    """被动进化反思文本（去重 → format_diagnostics）。session 稳定，供缓存前缀注入。"""
-    from .diagnostics import format_diagnostics
-    from .tracker import get_latest_reflections as _get_reflections
-    reflections = _get_reflections(limit=3)
-    if not reflections:
-        return None
-    seen: set[tuple[str, str]] = set()
-    anomalies: list[dict] = []
-    for ref in reflections:
-        for a in ref.get("anomalies", []):
-            key = (a.get("tool", ""), a.get("type", ""))
-            if key not in seen:
-                seen.add(key)
-                anomalies.append(a)
-    if not anomalies:
-        return None
-    return format_diagnostics(anomalies)
 
 
 def create_task(content: str) -> str:

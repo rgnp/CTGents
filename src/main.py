@@ -109,33 +109,24 @@ def _make_ambitions_message() -> dict | None:
     return {"role": "system", "content": content, "_volatile": True, "_label": "长期目标"}
 
 
-def _make_reflections_message() -> dict | None:
-    """被动进化反思放进缓存前缀——session 稳定（反思在会话边界写、本会话内不变）。
-
-    曾在挂尾(make_task_context_message)，是 ambitions 移走后最后一个 session 稳定的挂尾项；
-    任何挂尾内容都让"对话"成脆弱内部单元、负载尖峰时偶发整段重 miss。挪进前缀消灭这条。
-    """
-    from .tasks import build_reflections_text
-    text = build_reflections_text()
-    if not text:
-        return None
-    return {"role": "system", "content": text, "_volatile": True, "_label": "被动进化反思"}
-
-
 def _make_prefix_msgs() -> list[dict]:
     """缓存前缀的不可变系统消息（会话开始构建一次，会话内哈希锁死、不变）。
 
     缓存命中已判定为 DeepSeek 服务端问题、不再是约束（见 [[ctgents-context-cache]]），
-    故把 session 稳定的器官接回前缀：AGENTS.md + 记忆索引(轴①越用越懂你) + 长期目标
-    ambitions + 被动进化反思 reflections。这些都在会话边界产生/会话内不变，放冻结前缀里
-    既送达模型、又不破坏纯追加（per-turn 动态的任务上下文/审计不在这里，走 append-only）。
+    故把 session 稳定的器官接回前缀：AGENTS.md + 记忆索引(轴①越用越懂你) + 长期目标 ambitions。
+    这些都在会话边界产生/会话内不变，放冻结前缀里既送达模型、又不破坏纯追加（per-turn
+    动态的任务上下文/审计不在这里，走 append-only）。
     每个 _make_* 缺数据时返回 None，按序过滤——空记忆/无任务的会话前缀自动退回只剩 AGENTS.md。
+
+    「被动进化反思」(reflect_on_session 检出的工具耗时/失败/调用量异常) 已于 2026-06-23 移出
+    前缀：它测的是工具墙钟时间（run_command/git_commit 等被外部进程主导）、对接近 0ms 的值算
+    倍数产出荒谬比率（0→0=3.2x、git_commit 因提交门 833x），对 agent 无可行动性、纯噪声稀释
+    前缀。reflect_on_session 仍写 stats/*_reflection.json（dashboard 可看），只是不再每轮注入。
     """
     makers = (
         _make_agents_message,
         _make_memory_context,
         _make_ambitions_message,
-        _make_reflections_message,
     )
     return [m for m in (make() for make in makers) if m]
 
