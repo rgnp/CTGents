@@ -18,10 +18,6 @@ def _isolate_task_state(tmp_path, monkeypatch):
     import src.tasks as _tasks
     monkeypatch.setattr(_tasks, "CURRENT_TASK_FILE", tmp_path / "_no_current.md")
     monkeypatch.setattr(_tasks, "AMBITIONS_FILE", tmp_path / "_no_ambitions.md")
-    # _gaps_reported=True：抑制测试期触发真实 detect_all_gaps(慢+读真实代码库+不确定)。
-    # _task_suggested=False：让建任务建议可触发。二者均 monkeypatch，teardown 自动还原。
-    monkeypatch.setattr(_tasks, "_gaps_reported", True)
-    monkeypatch.setattr(_tasks, "_task_suggested", False)
 
 
 @pytest.fixture

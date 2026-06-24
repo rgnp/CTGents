@@ -5,11 +5,7 @@
 「提交的树是否有通行证」这个不变量，事后兜底全部路径。
 """
 
-import pytest
-
 import src.gate_audit as gate_audit
-import src.tasks as tasks
-from src.gaps import GapReport
 
 
 def _fake_git(tmp_path, head_tree="tree_abc"):
@@ -53,38 +49,5 @@ def test_silent_when_not_a_git_repo(monkeypatch):
     assert gate_audit.head_gate_notice() == ""
 
 
-def test_notice_injected_at_session_start(tmp_path, monkeypatch):
-    """接线：make_task_context_message 会话首次调用注入审计提醒。"""
-    sentinel = "GATE_AUDIT_SENTINEL_4417"
-    monkeypatch.setattr(gate_audit, "head_gate_notice", lambda: sentinel)
-    monkeypatch.setattr("src.gaps.detect_all_gaps", lambda top_n=5: GapReport())
-    monkeypatch.setattr("src.tracker.get_latest_reflections", lambda limit=3: [])
-    monkeypatch.setattr(tasks, "CURRENT_TASK_FILE", tmp_path / "current.md")
-    monkeypatch.setattr(tasks, "_gaps_reported", False)
-
-    msg = tasks.make_task_context_message()
-    assert msg is not None
-    assert sentinel in msg["content"]
-
-
-def test_notice_only_once_per_session(tmp_path, monkeypatch):
-    """第二次调用不再重复注入（同 gaps 的每会话一次语义）。"""
-    sentinel = "GATE_AUDIT_SENTINEL_4417"
-    monkeypatch.setattr(gate_audit, "head_gate_notice", lambda: sentinel)
-    monkeypatch.setattr("src.gaps.detect_all_gaps", lambda top_n=5: GapReport())
-    monkeypatch.setattr("src.tracker.get_latest_reflections", lambda limit=3: [])
-    monkeypatch.setattr(tasks, "CURRENT_TASK_FILE", tmp_path / "current.md")
-    monkeypatch.setattr(tasks, "_gaps_reported", False)
-
-    first = tasks.make_task_context_message()
-    assert first is not None and sentinel in first["content"]
-    second = tasks.make_task_context_message()
-    assert second is None or sentinel not in second["content"]
-
-
-@pytest.fixture(autouse=True)
-def _restore_gaps_flag():
-    """测试间复位会话级标志，避免串扰其他模块的测试。"""
-    saved = tasks._gaps_reported
-    yield
-    tasks._gaps_reported = saved
+# 会话首轮注入接线（原经 make_task_context_message，已迁到 run_agent_turn）见
+# test_main.test_run_agent_turn_injects_gate_notice_once。

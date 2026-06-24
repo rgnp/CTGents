@@ -813,8 +813,6 @@ class ChatScreen(Screen):
         if r.save:
             self.app.session_id = None
             from . import status_bar
-            from .tasks import reset_gaps_cache
-            reset_gaps_cache()
             status_bar.reset()
         self._status_cache = (-1, -1, "")
         self.query_one("#transcript").remove_children()

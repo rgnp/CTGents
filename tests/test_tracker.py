@@ -8,7 +8,6 @@ from src.tracker import (
     detect_anomalies,
     flush,
     get_cross_session_baseline,
-    get_latest_reflections,
     get_session_aggregates,
     record_tool_call,
     reflect_on_session,
@@ -192,11 +191,6 @@ class TestReflection:
         result = reflect_on_session(sid)
         assert result is not None
         assert len(result["anomalies"]) > 0
-
-    def test_get_latest_reflections_empty(self, tmp_path, monkeypatch):
-        monkeypatch.setattr("src.tracker._STATS_DIR", tmp_path)
-        refs = get_latest_reflections(limit=3)
-        assert refs == []
 
 
 class TestInternal:

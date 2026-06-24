@@ -320,18 +320,6 @@ def reflect_on_session(session_id: str) -> dict | None:
     return reflection
 
 
-def get_latest_reflections(limit: int = 5) -> list[dict]:
-    """获取最近的会话反思，供 agent 在启动时读取。"""
-    if not _STATS_DIR.exists():
-        return []
-    reflections: list[dict] = []
-    for f in sorted(_STATS_DIR.iterdir(), reverse=True):
-        if f.name.endswith(_REFLECTION_SUFFIX):
-            try:
-                data = json.loads(f.read_text(encoding="utf-8"))
-                reflections.append(data)
-            except (OSError, json.JSONDecodeError):
-                pass
-            if len(reflections) >= limit:
-                break
-    return reflections
+# get_latest_reflections（供 agent 启动时读反思）已删除（2026-06-24）：其唯一消费者「被动进化
+# 反思」前缀注入 2026-06-23 已移出，此后生产侧零调用、只剩测试。reflection 文件仍由 dashboard
+# 直接读 stats/*_reflection.json 展示，不经此函数。

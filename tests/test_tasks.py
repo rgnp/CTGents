@@ -47,44 +47,6 @@ def test_has_unfinished_false(content, desc, _isolate_tasks):
     assert tasks.has_unfinished() is False
     assert tasks.has_unfinished() is False
 
-class TestIsAllDone:
-    def test_true_when_all_x(self, _isolate_tasks):
-        _isolate_tasks[0].write_text(_DONE, encoding="utf-8")
-        assert tasks.is_all_done() is True
-
-    def test_false_when_empty(self, _isolate_tasks):
-        assert tasks.is_all_done() is False
-
-    def test_false_when_missing(self, _isolate_tasks):
-        assert tasks.is_all_done() is False
-
-    def test_false_when_has_retry(self, _isolate_tasks):
-        _isolate_tasks[0].write_text(_HAS_RETRY, encoding="utf-8")
-        assert tasks.is_all_done() is False
-
-    def test_false_when_has_blocked(self, _isolate_tasks):
-        _isolate_tasks[0].write_text(_HAS_BLOCKED, encoding="utf-8")
-        assert tasks.is_all_done() is False
-
-    def test_false_when_has_todo(self, _isolate_tasks):
-        _isolate_tasks[0].write_text(_UNFINISHED, encoding="utf-8")
-        assert tasks.is_all_done() is False
-
-    def test_false_on_no_step_placeholder(self, _isolate_tasks):
-        """非空但无步骤标记的占位文本不该被当成"全完成"而触发多余归档（要求至少一个 [x]）。
-
-        例：归档后 agent 写的"（无进行中的任务）"。
-        """
-        _isolate_tasks[0].write_text("（无进行中的任务）", encoding="utf-8")
-        assert tasks.is_all_done() is False
-
-    def test_false_when_mixed_x_and_todo(self, _isolate_tasks):
-        _isolate_tasks[0].write_text(
-            "# 测试\n\n# 目标锚点\n测。\n\n- [x] Done\n- [ ] Not done\n",
-            encoding="utf-8",
-        )
-        assert tasks.is_all_done() is False
-
 class TestCreateTask:
     def test_appends_archive_step(self, _isolate_tasks):
         current, _ = _isolate_tasks
@@ -127,65 +89,8 @@ class TestExtractAnchor:
         anchor = tasks._extract_anchor("# 目标锚点\n某目标。\n## 步骤\n- [ ] 1")
         assert anchor == "某目标。"
 
-class TestAnchorInjection:
-    def test_anchor_injected_in_context(self, _isolate_tasks):
-        _isolate_tasks[0].write_text(_UNFINISHED, encoding="utf-8")
-        msg = tasks.make_task_context_message()
-        assert msg is not None
-        assert "🎯 目标锚点" in msg["content"]
-        assert "轨迹预测论文" in msg["content"]
-        assert "↳" in msg["content"]
-
-    def test_no_anchor_no_injection(self, _isolate_tasks):
-        """没有锚点时不注入对照提示。"""
-        _isolate_tasks[0].write_text("# 无锚点任务\n\n- [o] Step 1\n")
-        msg = tasks.make_task_context_message()
-        assert msg is not None
-        assert "🎯 目标锚点" not in msg["content"]
-
-class TestAutoArchive:
-    def test_auto_archives_when_all_done(self, _isolate_tasks, monkeypatch):
-        current, archive = _isolate_tasks
-        current.write_text(_DONE, encoding="utf-8")
-        monkeypatch.setattr(
-            "src.tracker.get_latest_reflections", lambda limit=3: []
-        )
-        msg = tasks.make_task_context_message()
-        assert msg is not None
-        assert "已自动归档" in msg["content"]
-        assert current.read_text(encoding="utf-8") == ""
-        assert archive.exists()
-        archived = list(archive.glob("*.md"))
-        assert len(archived) == 1
-
-    def test_does_not_auto_archive_when_has_retry(self, _isolate_tasks, monkeypatch):
-        current, _ = _isolate_tasks
-        current.write_text(_HAS_RETRY, encoding="utf-8")
-        monkeypatch.setattr(
-            "src.tracker.get_latest_reflections", lambda limit=3: []
-        )
-        msg = tasks.make_task_context_message()
-        assert msg is None
-        assert current.read_text(encoding="utf-8") == _HAS_RETRY
-
-def test_context_message_injected_when_unfinished(_isolate_tasks):
-    _isolate_tasks[0].write_text(_UNFINISHED, encoding="utf-8")
-    msg = tasks.make_task_context_message()
-    assert msg is not None
-    assert msg["_volatile"] is True
-    assert msg["role"] == "system"
-    assert "未完成的长任务" in msg["content"]
-    assert "47/250" in msg["content"]
-
-def test_context_message_with_auto_archive_when_done(_isolate_tasks, monkeypatch):
-    _isolate_tasks[0].write_text(_DONE, encoding="utf-8")
-    monkeypatch.setattr(
-        "src.tracker.get_latest_reflections", lambda limit=3: []
-    )
-    msg = tasks.make_task_context_message()
-    assert msg is not None
-    assert "已自动归档" in msg["content"]
-    assert _isolate_tasks[0].read_text(encoding="utf-8") == ""
+# make_task_context_message 已删除（dormant 孤儿，2026-06-24）——锚点注入/自动归档/未完成提醒
+# 的活路径分别由 _extract_anchor 单测、task_loop、resume_reminder(test_main) 覆盖。
 
 def test_archive_moves_and_clears(_isolate_tasks):
     current, archive = _isolate_tasks
@@ -235,28 +140,3 @@ class TestTaskCommand:
         _isolate_tasks[0].write_text(_UNFINISHED, encoding="utf-8")
         r = cmds.dispatch("/task archive ad-papers", CacheContext(), None)
         assert "已归档" in r.message
-
-class TestSuggestTaskNudge:
-    """maybe_suggest_task_nudge: 事实触发(请求数+无任务)、判断留 agent、一会话一次。"""
-
-    def test_suggests_when_busy_and_no_task(self, _isolate_tasks):
-        tasks.reset_gaps_cache()
-        assert tasks.maybe_suggest_task_nudge(6, threshold=5) is not None
-
-    def test_silent_below_threshold(self, _isolate_tasks):
-        tasks.reset_gaps_cache()
-        assert tasks.maybe_suggest_task_nudge(2, threshold=5) is None
-
-    def test_silent_when_task_exists(self, _isolate_tasks):
-        """已有 current.md 任务在跟踪 → 不重复建议(逃生口:agent 已经建了)。"""
-        tasks.reset_gaps_cache()
-        _isolate_tasks[0].write_text(_UNFINISHED, encoding="utf-8")
-        assert tasks.maybe_suggest_task_nudge(99, threshold=5) is None
-
-    def test_only_once_per_session(self, _isolate_tasks):
-        """同会话只提示一次,防每轮唠叨;reset 后可再触发。"""
-        tasks.reset_gaps_cache()
-        assert tasks.maybe_suggest_task_nudge(6, threshold=5) is not None
-        assert tasks.maybe_suggest_task_nudge(6, threshold=5) is None  # 第二次静默
-        tasks.reset_gaps_cache()
-        assert tasks.maybe_suggest_task_nudge(6, threshold=5) is not None  # 新会话再提示

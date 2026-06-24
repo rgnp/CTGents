@@ -19,45 +19,11 @@ AMBITIONS_FILE = TASKS_DIR / "ambitions.md"
 ARCHIVE_DIR = TASKS_DIR / "archive"
 # 步骤标记
 _UNFINISHED_MARKERS = ("[ ]", "[o]", "[O]")  # 活跃未完成（has_unfinished 判活用）
-_BLOCKED_MARKERS = ("[r]", "[R]", "[!]")     # 阻塞/需重试（不触发续做注入，但不算全完成）
-_ALL_NOT_DONE = _UNFINISHED_MARKERS + _BLOCKED_MARKERS  # 全完成判定用
-_DONE_MARKERS = ("[x]", "[X]")               # 已完成步骤（is_all_done 要求至少一个）
+_BLOCKED_MARKERS = ("[r]", "[R]", "[!]")     # 阻塞/需重试（task_loop 用：不触发续做）
 _SLUG_FALLBACK = "task"
 _ANCHOR_HEADING = "# 目标锚点"
-# 方向发现缓存：同会话只跑一次（~5s），不进每轮循环
-_gaps_reported = False
-# 建任务建议：同会话只提示一次，避免每轮唠叨
-_task_suggested = False
-# 经验检索：同会话只检索一次，避免重复注入
-_experience_reported = False
-
-
-def reset_gaps_cache() -> None:
-    """新会话开始时重置会话级一次性缓存（方向发现 + 建任务建议 + 经验检索）。"""
-    global _gaps_reported, _task_suggested, _experience_reported
-    _gaps_reported = False
-    _task_suggested = False
-    _experience_reported = False
-
-
-def maybe_suggest_task_nudge(requests_made: int, threshold: int) -> str | None:
-    """干了不少活（requests_made>=threshold）却没有 current.md 任务 → 一次性建议建任务。
-
-    触发是【事实】（这一轮的请求数 + 没有任务文件），可机械判定、无假阳性；
-    '这到底算不算需要跟踪的长任务' 是【判断】，连同 opt-out 一起留给 agent——
-    不机械分类长任务（那会假阳性，见记忆 rule-placement）。同会话只提示一次。
-    """
-    global _task_suggested
-    if _task_suggested or requests_made < threshold:
-        return None
-    if read_current().strip():  # 已有任务在跟踪，无需建议
-        return None
-    _task_suggested = True
-    return (
-        "[任务建议] 这一轮做了不少步，且当前没有 tasks/current.md 任务记录。"
-        "如果这是个跨多步、可能跨会话的长任务，用 create_task 写下目标锚点 + 步骤清单——"
-        "之后断点能自动续做、换会话也接得上；若马上就收尾，忽略本提示即可。"
-    )
+# maybe_suggest_task_nudge + reset_gaps_cache + _task_suggested 已删除（2026-06-24）：
+# 建任务建议挂尾随挂尾机制废止后 dormant、生产侧零调用；连带会话级缓存全空，一并清掉。
 
 
 def read_ambitions() -> str:
@@ -156,17 +122,8 @@ def has_unfinished() -> bool:
     return bool(text) and any(marker in text for marker in _UNFINISHED_MARKERS)
 
 
-def is_all_done() -> bool:
-    """current.md 存在、且是一个所有步骤都完成（全 [x]）的任务。
-
-    有 [ ]/[o]/[r]/[!] 任一即 False；**还要求至少一个 [x]**——否则像
-    "（无进行中的任务）"这种无步骤的占位文本会被误判成"全完成"而触发多余归档。
-    """
-    text = read_current()
-    if not text:
-        return False
-    has_done = any(m in text for m in _DONE_MARKERS)
-    return has_done and not any(m in text for m in _ALL_NOT_DONE)
+# is_all_done 已删除（2026-06-24）：唯一调用方 make_task_context_message 删除后零生产调用；
+# 任务完成→归档由 task_loop 自有逻辑处理，不经此谓词。
 
 
 def resume_reminder() -> str | None:
@@ -187,69 +144,10 @@ def resume_reminder() -> str | None:
     return head + "\n\n" + text
 
 
-def make_task_context_message() -> dict | None:
-    """生成 volatile 上下文消息：经验检索 + 方向发现 + 长期目标 + 未完成长任务 + 被动进化反思。"""
-    global _gaps_reported, _experience_reported
-    parts: list[str] = []
-
-    # ── 会话启动一次性检查：门通行证审计 + 方向发现（~5s）──
-    if not _gaps_reported:
-        _gaps_reported = True
-        from .gate_audit import head_gate_notice
-        gate_notice = head_gate_notice()
-        if gate_notice:
-            parts.append(gate_notice)
-        from .gaps import detect_all_gaps as _detect_gaps
-        from .gaps import format_gap_report as _fmt_gaps
-        gap_report = _detect_gaps(top_n=5)
-        gap_text = _fmt_gaps(gap_report)
-        if gap_text:
-            parts.append(gap_text)
-
-    # 长期目标已移入缓存前缀（main._make_ambitions_message）——它 session 稳定，
-    # 留在挂尾会让"对话"不再是输入结束位置、轮首缓存被淘汰整段重 miss（见 llm.py 注释）。
-
-    # ── 经验检索：有未完成任务时，搜索相似历史任务注入教训 ──
-    if not _experience_reported and has_unfinished():
-        _experience_reported = True
-        from .experience import format_experience_context, search_similar_tasks
-        task_text = read_current()
-        similar = search_similar_tasks(task_text, top_k=3)
-        exp_ctx = format_experience_context(similar)
-        if exp_ctx:
-            parts.append(exp_ctx)
-
-    # ── 全完成自动归档（B 方案：下游兜底）──
-    if is_all_done():
-        result = archive_current()
-        parts.append(
-            "✅ 上次长任务所有步骤已完成，本次会话已自动归档。"
-            f"（{result}）"
-        )
-    # ── 未完成长任务 ──
-    elif has_unfinished():
-        text = read_current()
-        parts.append(
-            "⚠️ 你有一个未完成的长任务（tasks/current.md），上次没做完。"
-            "请从未完成步骤（[ ] / [o]）的断点继续，不要从头重来；"
-            "在步骤旁记录细进度（如 47/250），完成后按 AGENTS.md 清空并归档。\n\n"
-            + text
-        )
-        # ── 锚点对照：每轮提醒检查方向 ──
-        anchor = _extract_anchor(text)
-        if anchor:
-            parts.insert(
-                -1,  # 插在任务内容之前
-                f"🎯 目标锚点：{anchor}\n"
-                "↳ 每完成一个步骤，对照上方锚点检查当前方向：做的事还在解决这个问题吗？"
-            )
-
-    if not parts:
-        return None
-    # _task_ctx: run_conversation 每轮按此标记剥旧再追加新——没有它剥除空转，
-    # 任务上下文每轮堆一份副本(全在挂尾区,每个请求重算,白烧缓存 miss)。
-    return {"role": "system", "content": "\n\n".join(parts),
-            "_volatile": True, "_task_ctx": True}
+# make_task_context_message（挂尾 per-turn 任务上下文）已删除（2026-06-24）：随挂尾机制废止后
+# 它生产侧零调用、是 dormant 孤儿。其活的部分已各归各位——未完成任务提醒→resume_reminder
+# (main.run_agent_turn)、自动归档→task_loop、门通行证审计→main.run_agent_turn(append-only)、
+# 方向发现→/pulse 按需。经验检索(experience.py)随之删除（Jaccard 粗匹配，留待语义版重做）。
 
 
 def create_task(content: str) -> str:
