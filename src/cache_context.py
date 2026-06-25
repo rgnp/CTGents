@@ -33,14 +33,17 @@ def _compute_msg_hash(msgs: list[dict]) -> str:
     return _hashlib.sha256(safe.encode()).hexdigest()[:16]
 
 
-def _stub_tool_content(content: str) -> str:
-    """把陈旧大工具结果折成一行：保留首行信号 + 原长度 + 取回指引。
+def _stub_tool_content(content: str, tool_call_id: str = "") -> str:
+    """把陈旧大工具结果折成一行：保留首行信号 + 原长度 + 真实取回指引。
 
     首行常含关键信号（"已写入: path" / "退出码:..." / read 的文件头），留它让
-    模型知道这步干了啥；原文不丢（在 self.log 里，落盘 + 可 recall）。
+    模型知道这步干了啥；原文不丢（在 self.log 里、随会话落盘）。需要原文时调
+    fetch_tool_result(tool_call_id) 取回——folding 只动发送副本、原文一直在 log。
     """
     head = content.split("\n", 1)[0].strip()[:160]
-    return f"{head} … 〔旧工具结果已折叠·原 {len(content)} 字·原文见 session / 可 recall〕"
+    hint = (f'需要原文调 fetch_tool_result("{tool_call_id}")'
+            if tool_call_id else "原文在会话存档")
+    return f"{head} … 〔旧工具结果已折叠·原 {len(content)} 字·{hint}〕"
 
 
 class PrefixIntegrityError(RuntimeError):
@@ -231,7 +234,7 @@ class CacheContext:
             content = m.get("content")
             if (idx < fresh_start and m.get("role") == "tool"
                     and isinstance(content, str) and len(content) > threshold):
-                out.append({**m, "content": _stub_tool_content(content)})
+                out.append({**m, "content": _stub_tool_content(content, m.get("tool_call_id", ""))})
             else:
                 out.append(m)
         return out

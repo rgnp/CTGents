@@ -224,6 +224,30 @@ class TestStaleToolCollapse:
         tools = [m for m in api if m["role"] == "tool"]
         assert tools[0]["tool_call_id"] == "t0"
 
+    def test_stub_has_fetch_hint(self):
+        """折叠 stub 带 tool_call_id + fetch_tool_result 取回指引（真实可捞，非假承诺）。"""
+        ctx = self._ctx_with_turns(4)
+        api = ctx.send()
+        stub = next(m["content"] for m in api
+                    if m["role"] == "tool" and "折叠" in m["content"])
+        assert "fetch_tool_result" in stub
+        assert "t0" in stub  # 含 tool_call_id，模型据此取回
+
+    def test_fetch_tool_result_round_trip(self):
+        """fetch_tool_result(id) 从 self.log 取回被折叠结果的原文全长。"""
+        from src.llm import _fetch_tool_result_from_log
+        ctx = self._ctx_with_turns(4)
+        out = _fetch_tool_result_from_log(ctx, {"tool_call_id": "t0"})
+        assert "结果0头行" in out
+        assert "X" * 700 in out  # 原文未丢、全长取回
+
+    def test_fetch_tool_result_missing(self):
+        """不存在的 tool_call_id → 友好提示，不抛。"""
+        from src.llm import _fetch_tool_result_from_log
+        ctx = self._ctx_with_turns(2)
+        out = _fetch_tool_result_from_log(ctx, {"tool_call_id": "nope"})
+        assert "未找到" in out
+
     def test_short_session_untouched(self):
         """轮数 < keep_turns → 全部新鲜，一律不折。"""
         ctx = self._ctx_with_turns(2)

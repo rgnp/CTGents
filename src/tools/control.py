@@ -109,6 +109,28 @@ TOOLS_CONTROL = [
             },
         },
     },
+    {
+        "_meta": {"label": "取回折叠结果", "no_dedup": True},
+        # 不标 parallel_safe：取回要读 ctx.log，走带 ctx 的拦截路径，不能被无 ctx 的 eager 执行器预跑。
+        "type": "function",
+        "function": {
+            "name": "fetch_tool_result",
+            "description": (
+                "取回被折叠移出上下文的旧工具结果原文。看到 stub「…已折叠·调 "
+                "fetch_tool_result(id)」时用，传入其 tool_call_id 即可拿回原文。"
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "tool_call_id": {
+                        "type": "string",
+                        "description": "折叠 stub 里给出的 tool_call_id",
+                    },
+                },
+                "required": ["tool_call_id"],
+            },
+        },
+    },
 ]
 
 

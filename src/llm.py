@@ -1615,6 +1615,23 @@ def _handle_psyche_tools(ctx: CacheContext, approved: list[tuple]) -> None:
                 remove_psyche(ctx, name)
 
 
+def _fetch_tool_result_from_log(ctx, args: dict) -> str:
+    """按 tool_call_id 从 ctx.log 取回被折叠工具结果的原文。
+
+    陈旧大结果在 send() 时被折成 stub（_collapse_stale_tool_results），但只动发送副本，
+    self.log 原文一直在、随会话落盘。这里把它捞回来作为本次 fetch 的结果重新入上下文。
+    """
+    tcid = (args.get("tool_call_id") or "").strip()
+    if not tcid:
+        return "fetch_tool_result：需要 tool_call_id 参数。"
+    for m in ctx.log:
+        if m.get("role") == "tool" and m.get("tool_call_id") == tcid:
+            content = m.get("content") or ""
+            tool = m.get("_tool_name", "tool")
+            return f"[已取回 {tool} 结果 {tcid} 原文]\n{content}"
+    return f"fetch_tool_result：未找到 tool_call_id={tcid}（不在本会话 log 中）。"
+
+
 def _handle_tool_results(
     ctx: CacheContext,
     tool_calls: list[dict],
@@ -1661,6 +1678,12 @@ def _handle_tool_results(
     for i, eager_result in eager_results.items():
         if i < len(approved) and approved[i][4] is None:
             approved[i] = (approved[i][0], approved[i][1], approved[i][2], approved[i][3], eager_result)
+
+    # fetch_tool_result：从 ctx.log 取回被折叠工具结果的原文（需 ctx，普通执行器无 ctx）。
+    # 在此填好结果 → 跳过常规执行（折叠只动发送副本、原文一直在 log）。
+    for i, item in enumerate(approved):
+        if item[1] == "fetch_tool_result" and item[4] is None:
+            approved[i] = (item[0], item[1], item[2], item[3], _fetch_tool_result_from_log(ctx, item[2]))
 
     # 执行未跑的工具
     exec_indices = [i for i, item in enumerate(approved) if item[4] is None]
