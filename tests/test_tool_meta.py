@@ -66,8 +66,8 @@ class TestMetaStripping:
         names = {t["function"]["name"] for t in tools}
         # 下限而非精确值：开发期常加工具，精确计数每加一个就误红（反"更好维护"）。
         # 下限防"派生塌陷/批量掉工具",具体存在性靠点名 + 无重名结构不变量。
-        # 下限 40：默认 ~44（research 可选组 load-on-demand、默认不挂，见 test_tool_discovery）。
-        assert len(tools) >= 40, f"工具数异常偏低，实际 {len(tools)}"
+        # 下限 35：默认 ~37（research/rag/repo 可选组 load-on-demand、默认不挂，见 test_tool_discovery）。
+        assert len(tools) >= 35, f"工具数异常偏低，实际 {len(tools)}"
         assert len(names) == len(tools), "存在重名工具"
         for n in ("read_file", "write_file", "self", "run_async", "poll"):
             assert n in names

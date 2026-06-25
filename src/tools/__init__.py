@@ -75,7 +75,7 @@ _tools_cache: list[dict] | None = None
 # 领域专用工具（如文献研究）默认不挂常驻 prefix——省 token、不做该领域时不背着它们。
 # 组名标在工具 _meta["group"] 上；这里列哪些组默认关。做该领域时用 /tools load <组> 挂上，
 # 或开会话前设 CTG_TOOL_GROUPS=research。改前缀缓存不是约束（已判服务端问题）。
-_OPTIONAL_GROUPS: frozenset[str] = frozenset({"research"})
+_OPTIONAL_GROUPS: frozenset[str] = frozenset({"research", "rag", "repo"})
 _enabled_groups: set[str] = set()
 
 

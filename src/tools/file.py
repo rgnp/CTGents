@@ -247,38 +247,6 @@ TOOLS_FILE = [
         },
     },
     {
-        "_meta": {"label": "行级编辑", "dedup_blacklist": True},
-        "type": "function",
-        "function": {
-            "name": "edit_file_lines",
-            "description": "行级编辑（replace/delete/insert）。⚠️ 先 read_file 确认行号。",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "path": {"type": "string", "description": "文件路径"},
-                    "action": {
-                        "type": "string",
-                        "enum": ["replace", "delete", "insert"],
-                        "description": "操作类型",
-                    },
-                    "start_line": {
-                        "type": "integer",
-                        "description": "起始行号（从1开始），insert=在此行后插入",
-                    },
-                    "end_line": {
-                        "type": "integer",
-                        "description": "结束行号（含），del/replace必填，insert忽略",
-                    },
-                    "new_lines": {
-                        "type": "string",
-                        "description": "新内容（多行字符串），del忽略",
-                    },
-                },
-                "required": ["path", "action", "start_line"],
-            },
-        },
-    },
-    {
         "_meta": {"label": "浏览目录", "parallel_safe": True},
         "type": "function",
         "function": {

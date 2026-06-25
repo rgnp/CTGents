@@ -88,11 +88,15 @@ class TestToolRegistry:
             assert name in names, f"{name} 未注册"
 
     def test_rag_tools_registered(self):
-        from src.tools import get_tools
-        tools = get_tools()
-        names = [t["function"]["name"] for t in tools]
-        for name in ["rag_index", "rag_query", "rag_status"]:
-            assert name in names, f"{name} 未注册"
+        # rag 现为可选组（默认不挂、省 token）——加载后才在 get_tools 出现。
+        from src.tools import disable_tool_group, enable_tool_group, get_tools
+        enable_tool_group("rag")
+        try:
+            names = [t["function"]["name"] for t in get_tools()]
+            for name in ["rag_index", "rag_query", "rag_status"]:
+                assert name in names, f"{name} 加载 rag 组后仍未注册"
+        finally:
+            disable_tool_group("rag")
 
     """关键命令必须可执行且正确接线。"""
 

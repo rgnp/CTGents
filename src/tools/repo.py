@@ -13,7 +13,7 @@ DEFAULT_REPO_ROOT = Path(r"D:\git")
 
 TOOLS_REPO = [
     {
-        "_meta": {"label": "克隆仓库", "dedup_blacklist": True},
+        "_meta": {"label": "克隆仓库", "dedup_blacklist": True, "group": "repo"},
         "type": "function",
         "function": {
             "name": "repo_clone",
@@ -42,7 +42,7 @@ TOOLS_REPO = [
         },
     },
     {
-        "_meta": {"label": "仓库状态", "parallel_safe": True},
+        "_meta": {"label": "仓库状态", "parallel_safe": True, "group": "repo"},
         "type": "function",
         "function": {
             "name": "repo_status",

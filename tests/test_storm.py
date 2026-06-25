@@ -193,7 +193,7 @@ class TestStormBlacklist:
 
     def test_blacklist_contains_all_write_tools(self):
         bl = get_blacklist()
-        for tool in ("write_file", "edit_file_lines", "delete_file"):
+        for tool in ("write_file", "replace_in_file", "delete_file"):
             assert tool in bl, f"{tool} 应在黑名单中"
 
     def test_blacklist_contains_git_mutation_tools(self):
