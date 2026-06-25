@@ -95,29 +95,17 @@ def _make_agents_message() -> dict:
 # 是 _inject_* / _append_volatile_context 这些挂尾注入器，随挂尾机制整体删除已无对象可索引。
 
 
-def _make_ambitions_message() -> dict | None:
-    """长期目标（tasks/ambitions.md）放进缓存前缀——它 session 稳定、是弱方向参考。
-
-    曾随 per-turn 任务上下文挂尾，但任何挂尾内容都让"对话"不再是请求的输入结束
-    位置，轮首只能命中脆弱内部单元、空闲~40s 即被服务端淘汰、整段对话重 miss。挪进前缀
-    (会话开始建一次、冻结)后对话重新成为可靠的输入结束单元。见 [[ctgents-context-cache]]。
-    """
-    from .tasks import has_ambitions, read_ambitions
-    if not has_ambitions():
-        return None
-    content = ("📋 你们共同的长期目标（tasks/ambitions.md），所有决策的弱方向参考：\n\n"
-               + read_ambitions())
-    return {"role": "system", "content": content, "_volatile": True, "_label": "长期目标"}
-
-
 def _make_prefix_msgs() -> list[dict]:
     """缓存前缀的不可变系统消息（会话开始构建一次，会话内哈希锁死、不变）。
 
     缓存命中已判定为 DeepSeek 服务端问题、不再是约束（见 [[ctgents-context-cache]]），
-    故把 session 稳定的器官接回前缀：AGENTS.md + 记忆索引(轴①越用越懂你) + 长期目标 ambitions。
+    故把 session 稳定的器官接回前缀：AGENTS.md + 记忆索引(轴①越用越懂你)。
     这些都在会话边界产生/会话内不变，放冻结前缀里既送达模型、又不破坏纯追加（per-turn
     动态的任务上下文/审计不在这里，走 append-only）。
-    每个 _make_* 缺数据时返回 None，按序过滤——空记忆/无任务的会话前缀自动退回只剩 AGENTS.md。
+    每个 _make_* 缺数据时返回 None，按序过滤——空记忆的会话前缀自动退回只剩 AGENTS.md。
+
+    长期目标 ambitions 曾在此注入，已于 2026-06-25 移出前缀（用户减负）：它无主动消费者、
+    作为前缀散文对行为≈零效（见 rule-placement-three-layers）。/ambition 命令仍可查看管理。
 
     「被动进化反思」(reflect_on_session 检出的工具耗时/失败/调用量异常) 已于 2026-06-23 移出
     前缀：它测的是工具墙钟时间（run_command/git_commit 等被外部进程主导）、对接近 0ms 的值算
@@ -127,7 +115,6 @@ def _make_prefix_msgs() -> list[dict]:
     makers = (
         _make_agents_message,
         _make_memory_context,
-        _make_ambitions_message,
     )
     return [m for m in (make() for make in makers) if m]
 

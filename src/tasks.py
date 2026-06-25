@@ -44,11 +44,6 @@ def read_ambitions() -> str:
     return body
 
 
-def has_ambitions() -> bool:
-    """ambitions.md 存在且有实质目标。"""
-    return bool(read_ambitions())
-
-
 def _extract_anchor(text: str) -> str:
     """从 current.md 提取目标锚点：`# 目标锚点` 后第一行非空文本。"""
     lines = text.splitlines()

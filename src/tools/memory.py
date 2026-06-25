@@ -9,8 +9,6 @@ from ..params import MEMORY as _PARAMS
 
 # recall 片段长度(结构性常量,留本模块)。
 _SNIPPET_CHARS = 200
-# 策略级记忆注入上下文的最大 body 字符数
-_CONTEXT_BODY_CHARS = 300
 # 分词:ASCII alnum 词 + 中文连续块(下方切 bigram)。
 _TOKEN_ASCII = re.compile(r"[a-z0-9]+")
 _TOKEN_CJK = re.compile(r"[一-鿿]+")
@@ -65,22 +63,23 @@ def _split_frontmatter(text: str) -> tuple[dict[str, str], str]:
     return meta, body
 
 
-# ── 上下文注入用类型：策略/用户偏好注入全文；知识/参考注入摘要 ──
-_FULLBODY_TYPES = {"strategy", "user"}
+# ── 上下文注入用类型 ──
+# user（用户画像）→ 全文注入前缀、不截断：字数有限、是"懂你"的常驻地基，每轮都该看全。
+# 其余（strategy/knowledge/reference/lesson）→ 仅列主题名（name），不带描述：
+#   描述作为前缀散文本就 inert（不驱动行为，见 rule-placement-three-layers），且截断后半句烂尾、
+#   老数据还漏 markdown，看着乱。name（kebab 主题名）本身就是"存在性"指针——模型据此认得
+#   "我有这条"再用 recall 取详情（按名搜→认得）。详情归 recall，索引只给"在哪"。
 
 
 def _build_context() -> str | None:
-    """构建每轮注入上下文的记忆摘要。
+    """构建每轮注入前缀的记忆索引。
 
-    两级注入（业界共识）：
-    - 策略/用户偏好 → 注入全文（首 _CONTEXT_BODY_CHARS 字），每轮都看到完整内容
-    - 知识/参考 → 注入一行摘要，需要时 recall 深读
+    两级：用户画像(user) → 全文注入；其余 → 仅列主题名（紧凑、无描述），详情靠 recall。
     """
     mem_dir = Path(MEMORY_DIR)
     d = mem_dir
-    # 收集两类条目
-    full_entries: list[str] = []      # 策略/用户：全文注入
-    brief_entries: list[str] = []     # 知识/参考：摘要
+    full_entries: list[str] = []      # user：全文注入
+    topic_names: list[str] = []       # 其余：仅主题名（存在性指针）
 
     for f in sorted(d.iterdir()):
         if f.name == "MEMORY.md" or f.suffix != ".md":
@@ -89,27 +88,24 @@ def _build_context() -> str | None:
             meta, body = _split_frontmatter(f.read_text(encoding="utf-8"))
             name = meta.get("name", f.stem)
             mem_type = meta.get("type", "")
-            if mem_type in _FULLBODY_TYPES:
-                body_clean = body.replace("\n", " ")[:_CONTEXT_BODY_CHARS]
-                full_entries.append(f"  {name}: {body_clean}")
+            if mem_type == "user":
+                # 用户画像：全文注入、不截断，保留换行结构便于模型读
+                full_entries.append(f"  {name}:\n{body.strip()}")
             else:
-                desc = meta.get("description", "").rstrip(".")
-                short = desc.split("。")[0].split("，")[0][:40] if desc else ""
-                if short:
-                    brief_entries.append(f"  {name}: {short}")
+                topic_names.append(name)
         except Exception:
             continue
 
-    if not full_entries and not brief_entries:
+    if not full_entries and not topic_names:
         return None
 
-    lines = ["你拥有以下记忆（需要时用 recall 搜索详情，不要在回复中逐字复述）："]
+    lines = ["你拥有以下记忆（用 recall 按主题名取详情，不要在回复中逐字复述）："]
     if full_entries:
         lines.extend(full_entries)
         lines.append("")
-    if brief_entries:
-        lines.append("  此外还有：")
-        lines.extend(brief_entries)
+    if topic_names:
+        lines.append("  其它主题（recall 可取）：")
+        lines.append("  " + " · ".join(sorted(topic_names)))
 
     return "\n".join(lines)
 

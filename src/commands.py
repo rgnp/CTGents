@@ -197,14 +197,22 @@ def _cmd_model(r: CmdResult, _ctx, args, _sid) -> None:
 # 上下文诊断指令
 # ═══════════════════════════════════════════════════════════════
 
-@builtin("/context", description="上下文诊断：前缀/对话/尾部注入 + 缓存命中率")
+@builtin("/context", description="上下文诊断：前缀/对话/尾部注入 + 缓存命中率；/context prefix 打印前缀全文")
 def _cmd_context(r: CmdResult, ctx, _args, _sid) -> None:
-    """精简版：前缀缓存结构 + 尾部注入清单 + API 命中率。"""
+    """精简版：前缀缓存结构 + 尾部注入清单 + API 命中率。
+
+    `/context prefix` → 打印前缀每条消息的全文（肉眼核实冻结进前缀的确切内容，
+    如 AGENTS.md / 记忆索引含用户画像 / 长期目标），默认仍只显示分块大小摘要。
+    """
     from .config import MAX_CONTEXT_TOKENS
     from .tools.tokens import count_context_tokens
 
     if not hasattr(ctx, 'all'):
         r.message = "需要 CacheContext。"
+        return
+
+    if _args and _args[0].lower().startswith("prefix"):
+        _dump_prefix_content(r, ctx)
         return
 
     all_msgs = ctx.all
@@ -233,6 +241,27 @@ def _cmd_context(r: CmdResult, ctx, _args, _sid) -> None:
     _append_cache_section(lines, ctx, _sid)
 
     r.message = "\n".join(lines)
+
+
+def _dump_prefix_content(r: CmdResult, ctx) -> None:
+    """打印缓存前缀每条消息的全文——让用户肉眼核实到底有什么被冻结进了前缀。
+
+    默认 /context 只给分块大小摘要（_append_prefix_section）；这里给全文，按需调用。
+    """
+    if not getattr(ctx, "prefix", None):
+        r.message = "前缀为空（新会话尚未构建前缀，或无 AGENTS.md/记忆/长期目标）。"
+        return
+    from .tools.tokens import estimate_tokens
+    out = ["══ 前缀全文（会话开始冻结、始终命中）══"]
+    for i, m in enumerate(ctx.prefix):
+        label = m.get("_label", "前缀")
+        content = m.get("content", "")
+        out.append("")
+        out.append(f"── [{i + 1}] {label}  {len(content):,} 字符 ~{estimate_tokens(content):,} tok ──")
+        out.append(content)
+    out.append("")
+    out.append(f"哈希: {ctx.prefix_hash}")
+    r.message = "\n".join(out)
 
 
 def _append_prefix_section(lines: list[str], ctx) -> None:
