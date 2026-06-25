@@ -8,7 +8,7 @@ from __future__ import annotations
 from src.cache_context import CacheContext
 from src.psyche_bridge import (
     _BASE_PSYCHE,
-    detect_psyche_for,
+    detect_psyches_for,
     ensure_base_psyche,
     loaded_psyches_in_log,
     maybe_autoload_psyche,
@@ -19,23 +19,26 @@ def _ctx() -> CacheContext:
     return CacheContext(prefix_msgs=[{"role": "system", "content": "sys"}])
 
 
-# ── detect_psyche_for ───────────────────────────────────────────
+# ── detect_psyches_for（多选）─────────────────────────────────────
 
 def test_detect_matches_autonomous_driving():
-    """命中 AD 触发词（自动驾驶领域问题）→ 返回 autonomous-driving。"""
-    assert detect_psyche_for("世界模型现在最火，我想冲 CVPR") == "autonomous-driving"
-    assert detect_psyche_for("帮我看看自动驾驶的轨迹预测方向") == "autonomous-driving"
+    """命中 AD 触发词 → 列表含 autonomous-driving；学术词同时命中 research（多选叠加）。"""
+    hits = detect_psyches_for("世界模型现在最火，我想冲 CVPR")
+    assert "autonomous-driving" in hits      # 世界模型 = 领域
+    assert "research" in hits                 # 冲顶会/CVPR = 学术方法论
+    # 纯领域词、无学术信号 → 只领域，不误载科研 psyche
+    assert detect_psyches_for("帮我看看自动驾驶的轨迹预测方向") == ["autonomous-driving"]
 
 
 def test_detect_case_insensitive_english():
     """英文触发词大小写不敏感。"""
-    assert detect_psyche_for("which World Model subfield for CVPR?") == "autonomous-driving"
+    assert "autonomous-driving" in detect_psyches_for("which World Model subfield for CVPR?")
 
 
-def test_detect_no_match_returns_none():
-    """无关问题不命中任何 psyche。"""
-    assert detect_psyche_for("帮我重构一下登录页面的 CSS") is None
-    assert detect_psyche_for("") is None
+def test_detect_no_match_returns_empty():
+    """无关问题不命中任何 psyche。写代码说"方向"不会误载科研 psyche。"""
+    assert detect_psyches_for("帮我重构一下登录页面的 CSS，调整布局方向") == []
+    assert detect_psyches_for("") == []
 
 
 # ── maybe_autoload_psyche ───────────────────────────────────────
@@ -45,7 +48,16 @@ def test_autoload_injects_on_match():
     note = maybe_autoload_psyche(ctx, "世界模型最火，自动驾驶方向怎么选题")
     assert note is not None and "autonomous-driving" in note
     loaded = {m["name"] for m in loaded_psyches_in_log(ctx)}
-    assert "autonomous-driving" in loaded
+    assert "autonomous-driving" in loaded   # 领域
+    assert "research" in loaded             # 选题=学术触发 → 方法论 psyche 同时叠加
+
+
+def test_autoload_domain_only_when_no_academic_signal():
+    """纯领域词（无选题/投稿等学术信号）→ 只载领域，不载 research。"""
+    ctx = _ctx()
+    maybe_autoload_psyche(ctx, "自动驾驶 occupancy 网络怎么实现")
+    loaded = {m["name"] for m in loaded_psyches_in_log(ctx)}
+    assert loaded == {"autonomous-driving"}
 
 
 def test_autoload_noop_when_no_match():
@@ -99,5 +111,5 @@ def test_base_persona_disabled_by_env(monkeypatch):
 
 
 def test_base_persona_not_keyword_routed():
-    """无触发词的 general → 不会被 detect_psyche_for 命中（不抢领域路由）。"""
-    assert detect_psyche_for("随便聊聊今天的天气和心情") is None
+    """无触发词的 general → 不会被 detect_psyches_for 命中（不抢领域路由）。"""
+    assert detect_psyches_for("随便聊聊今天的天气和心情") == []

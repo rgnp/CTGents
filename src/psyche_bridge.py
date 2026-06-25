@@ -250,27 +250,29 @@ def _trigger_keywords(name: str) -> list[str]:
     return [k.strip() for k in re.split(r"[,，、]", raw) if k.strip()]
 
 
-def detect_psyche_for(text: str) -> str | None:
-    """按触发词匹配 → 返回命中最多的顶层 psyche（无命中 None）。
+def detect_psyches_for(text: str) -> list[str]:
+    """按触发词匹配 → 返回所有命中的顶层 psyche，按命中数降序（无命中=空 list）。
 
-    关键词来源是每个 psyche 自己核心文件里声明的「触发词」——psyche 进化时关键词随之演进，
-    不在代码里另维护一张表。匹配大小写不敏感、子串命中。
+    多选（2026-06-25）：方法论 psyche（research）与领域 psyche（autonomous-driving）该**叠加**——
+    "这个自动驾驶方向值不值得投顶会" 需要领域知识 + 怎么找方向两层，单选会丢一层（旧版只取
+    命中最多的一个）。关键词来源是各 psyche 自己核心的「触发词」（psyche 进化随之演进），
+    大小写不敏感、子串命中。
 
-    ⚠️ 临时 v1（2026-06-24，用户"先用着，后面再换"）：硬关键词子串匹配偏死板——换种说法
-    （"占用栅格"vs occupancy）或领域词出现在别的语境会漏/误载。计划换成语义路由（用 psyche
-    的领域描述做依据、随其进化）：优先 embedding 相似度（复用 RAG 向量、零额外 LLM 调用、不是
-    多 agent），噪声硌着了再考虑轻量 LLM 路由。换时把本函数整体替掉即可，调用点 maybe_autoload
-    不动。
+    ⚠️ 临时硬关键词 v1：换种说法（"占用栅格"vs occupancy）或领域词入别的语境会漏/误载。
+    research 触发词特意只收**学术强信号**（选题/投稿/顶会/CVPR…），不收 "方向/调研/gap" 这类
+    通用词——否则写代码说"方向"会误载科研 psyche。计划换语义路由（embedding 相似度、复用 RAG
+    向量、零额外调用）；换时整体替掉本函数即可，调用点 maybe_autoload 不动。
     """
     if not text:
-        return None
+        return []
     low = text.lower()
-    best, best_hits = None, 0
+    scored: list[tuple[int, str]] = []
     for name in _top_level_psyche_names():
         hits = sum(1 for kw in _trigger_keywords(name) if kw.lower() in low)
-        if hits > best_hits:
-            best, best_hits = name, hits
-    return best
+        if hits > 0:
+            scored.append((hits, name))
+    scored.sort(key=lambda x: (-x[0], x[1]))
+    return [name for _, name in scored]
 
 
 # 通用人格：不分领域、每会话常驻注入（log-0），领域 psyche 在其上叠加。
@@ -295,20 +297,18 @@ def ensure_base_psyche(ctx: CacheContext) -> str | None:
 
 
 def maybe_autoload_psyche(ctx: CacheContext, text: str) -> str | None:
-    """开局钩子：用户输入命中某 psyche 触发词且未加载 → 自动注入。返回注入提示或 None。
+    """开局钩子：用户输入命中 psyche 触发词且未加载 → 自动注入（命中几个加载几个）。
 
-    把"该不该加载 psyche"从 AGENTS.md 那条 inert 的前缀散文（"任务匹配关键词→必须先加载"，
-    实测从不触发，三天里 agent 一次没自己加载过），挪到这条会真触发的开局检测通道。
+    返回合并提示或 None。把"该不该加载 psyche"从 AGENTS.md 那条 inert 的前缀散文（实测从不
+    触发）挪到这条会真触发的开局检测通道。多选：方法论 + 领域可同时叠加（见 detect_psyches_for）。
     CTG_PSYCHE_AUTOLOAD=0 可关闭（测试/排查用）。
     """
     if os.environ.get("CTG_PSYCHE_AUTOLOAD", "1") == "0":
         return None
-    name = detect_psyche_for(text)
-    if not name:
-        return None
-    if any(meta.get("name") == name for meta in loaded_psyches_in_log(ctx)):
-        return None
-    return inject_psyche(ctx, name)
+    loaded = {meta.get("name") for meta in loaded_psyches_in_log(ctx)}
+    notes = [inject_psyche(ctx, name)
+             for name in detect_psyches_for(text) if name not in loaded]
+    return "\n".join(notes) if notes else None
 
 
 def _list_available() -> str:
