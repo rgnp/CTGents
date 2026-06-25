@@ -140,10 +140,10 @@ def _apply_prefix(ctx: CacheContext, session_id: str | None) -> None:
     ctx.rebuild_prefix(saved if saved else _make_prefix_msgs())
 
 
-# 旧的"挂尾"注入器（_append_volatile_context / _inject_* 把 volatile system 消息摆在
-# payload 末尾）已整体删除——那是破坏前缀缓存的根因。④可信审计已按 append-only 重新接回
-# （见 _run_post_turn_audits：nudge 追加进永久 log、不挂尾）。记忆触发逻辑当时连同测试
-# 一起删除，未重建。详见 [[ctgents-context-cache]]。
+# 旧的"挂尾"注入器（_append_volatile_context / _inject_*）已整体删除——破坏前缀缓存的根因。
+# ④可信"轮末审计追加"（_run_post_turn_audits）一度按 append-only 接回，又于 2026-06-25 整体移除：
+# 判断型 nudge 一直弹、无明显效果、还拖累客观审计可信度（用户决定）。completion 取证逻辑在 git
+# 历史里，需要"谎报完成"客观检查可单独捞回。详见 [[ctgents-context-cache]]。
 
 
 def process_turn(
@@ -207,55 +207,14 @@ def _drive_turn(ctx: CacheContext, user_input: str, disp, sid: list) -> None:
         disp.on_footer(footer)
 
 
-def _run_post_turn_audits(ctx: CacheContext, disp) -> None:
-    """④可信：轮末取证自检（谎报完成 / 编造引用 / 不读就改）。
-
-    append-only：命中的 nudge 作为**非 volatile** system 消息追加进 log——send() 只丢
-    volatile system、保留它，故下一轮模型看得到、能自纠；永不挂尾、永不原地改历史。
-    去重：按 _audit_id（类型标识，如 "completion"）去重，不按文本比对——
-    审计消息可能含动态内容（如引用的文件名列表），文本比对会被绕过导致复读机刷屏。
-    """
-    from .completion_audit import (
-        audit_completion,
-        audit_memory_consult,
-        audit_quality_check,
-        audit_read_before_write,
-    )
-
-    log = ctx.all
-    # 按审计类型 ID 去重，不按文本——文本可能含动态内容（文件名等）
-    existing_ids = {m.get("_audit_id") for m in ctx.log if m.get("_audit_id")}
-    # citation_audit 已于 2026-06-24 从轮末审计摘除：反引号 snake_case 标识符那支
-    # 分不清"提议新名字"和"引用现有代码"，在设计/提议密集的工作流里持续误报=喊狼
-    # （训练人/agent 无视提示）。模块 citation_audit.py 保留休眠——若要恢复，建议只挂
-    # 高精度的 path:line 支（你不会凭空编行号），不要整支反引号标识符。
-    audits = [
-        ("completion", audit_completion),
-        ("read_before_write", audit_read_before_write),
-        ("memory_consult", audit_memory_consult),
-        ("quality_check", audit_quality_check),
-    ]
-    fresh = []
-    for audit_id, audit_fn in audits:
-        if audit_id in existing_ids:
-            continue
-        nudge = audit_fn(log)
-        if nudge:
-            fresh.append(nudge)
-            ctx.log.append({
-                "role": "system", "content": nudge,
-                "_audit": True, "_audit_id": audit_id,
-            })
-    if fresh:
-        disp.on_status("\n\n".join(fresh))
-
-
 def run_agent_turn(ctx: CacheContext, user_input: str,
                    session_id: str | None, *, display=None) -> str | None:
     """主干：一次 agent 驱动。所有入口都走这里，保证不管从哪进、循环都是同一圈。
 
     一轮 = 一次 _drive_turn（对话）+ 任务自主续跑（若这轮真推进了 current.md，自主驱动
-    后续步骤直到 agent 自己停）+ 轮末 ④可信审计（append-only）。
+    后续步骤直到 agent 自己停）。轮末"反思追加"审计已整体移除（2026-06-25，用户：一直弹、
+    无明显效果——判断型 nudge 是误报机、还拖累客观审计的可信度；completion 取证逻辑在
+    git 历史里，需要"谎报完成"客观检查时可单独捞回）。
 
     display: 输出去向（默认 stdout=REPL；TUI 传写进 widget 的 Display）。循环不变。
     """
@@ -312,7 +271,6 @@ def run_agent_turn(ctx: CacheContext, user_input: str,
             on_status=disp.on_status,
         )
 
-    _run_post_turn_audits(ctx, disp)
     return sid[0]
 
 

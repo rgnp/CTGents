@@ -129,41 +129,6 @@ def test_run_agent_turn_no_continuation_when_no_progress(monkeypatch):
     assert "task_continuation" not in calls
 
 
-def _audit_disp(captured):
-    """最小 Display 替身，只捕获 on_status。"""
-    from src import ui
-    return ui.Display(
-        make_display=lambda: ((lambda _t: None), (lambda: False)),
-        on_tool=lambda *_a: None,
-        on_status=lambda s: captured.append(s),
-        on_footer=lambda *_a: None,
-        end_message=lambda *_a: None,
-    )
-
-
-def _write_without_read_log():
-    """构造一段触发审计的 log：本轮 write_file 了一个 .py 但没先 read_file。"""
-    return [
-        {"role": "user", "content": "改个文件"},
-        {"role": "assistant", "content": None,
-         "tool_calls": [{"id": "1", "function": {"name": "write_file", "arguments": "{}"}}]},
-        {"role": "tool", "tool_call_id": "1", "content": "已写入: x.py", "_tool_name": "write_file"},
-        {"role": "assistant", "content": "搞定了"},
-    ]
-
-
-def test_post_turn_audits_append_only_and_print():
-    """④审计命中 → 作为非 volatile _audit system 消息 append 进 log + 打印给用户。"""
-    from src.cache_context import CacheContext
-    ctx = CacheContext(log_msgs=_write_without_read_log())
-    captured: list[str] = []
-    main._run_post_turn_audits(ctx, _audit_disp(captured))
-    audit_msgs = [m for m in ctx.log if m.get("_audit")]
-    assert audit_msgs, "审计 nudge 应已 append 进 log"
-    assert all(m["role"] == "system" and not m.get("_volatile") for m in audit_msgs)
-    assert captured, "审计 nudge 应打印给用户"
-
-
 def test_run_agent_turn_injects_resume_reminder_once(monkeypatch):
     """会话首轮有未完成任务 → append-only 注入一次 _resume 提醒；后续轮不重复。"""
     import src.tasks as tasks
@@ -194,14 +159,3 @@ def test_run_agent_turn_injects_gate_notice_once(monkeypatch):
     assert sum(1 for m in ctx.log if m.get("_gate_notice")) == 1
     main.run_agent_turn(ctx, "hi again", "sid0")
     assert sum(1 for m in ctx.log if m.get("_gate_notice")) == 1, "首轮一次，后续不重复"
-
-
-def test_post_turn_audits_dedup_no_repeat():
-    """同一条 nudge 条件不变 → 第二次审计不重复追加（去重防刷屏）。"""
-    from src.cache_context import CacheContext
-    ctx = CacheContext(log_msgs=_write_without_read_log())
-    main._run_post_turn_audits(ctx, _audit_disp([]))
-    n_after_first = sum(1 for m in ctx.log if m.get("_audit"))
-    main._run_post_turn_audits(ctx, _audit_disp([]))
-    n_after_second = sum(1 for m in ctx.log if m.get("_audit"))
-    assert n_after_first == n_after_second
