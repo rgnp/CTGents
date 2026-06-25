@@ -311,6 +311,28 @@ class TestCompactionEffectiveness:
         llm._update_compaction_effectiveness(before=1000, after=700)  # 省 30% >= 10%
         assert llm._ineffective_compression_count == 0
 
+    def test_debounce_rearm_on_growth(self):
+        """单向锁修复：防抖关停后，用量涨过重试水位 → 重新允许压缩、计数复位。"""
+        import src.llm as llm
+        try:
+            llm._ineffective_compression_count = 0
+            llm._compact_skip_floor = 0
+            floor_used = int(llm.MAX_CONTEXT_TOKENS * llm._COMPACT_THRESHOLD) + 1000
+            # 连续 2 次低效 → 防抖关停 + 记下放弃水位
+            llm._update_compaction_effectiveness(before=floor_used, after=floor_used - 100)
+            llm._update_compaction_effectiveness(before=floor_used, after=floor_used - 100)
+            assert llm._ineffective_compression_count == 2
+            assert llm._compact_skip_floor == floor_used - 100
+            # 同水位 → 仍防抖，不压
+            assert llm._should_compact(floor_used) is False
+            # 涨过重试水位 → 重新武装、计数复位
+            grown = llm._compact_skip_floor + int(llm.MAX_CONTEXT_TOKENS * llm._COMPACT_REARM_GROWTH) + 1
+            assert llm._should_compact(grown) is True
+            assert llm._ineffective_compression_count == 0
+        finally:
+            llm._ineffective_compression_count = 0
+            llm._compact_skip_floor = 0
+
 
 class TestPrefixIntegrity:
     """前缀完整性校验测试。"""

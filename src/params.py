@@ -53,6 +53,9 @@ class ContextParams:
     compact_threshold: float = _env_float("CTG_COMPACT_THRESHOLD", 0.65)
     # 压缩后保留最近多少比例的消息
     compact_keep_ratio: float = _env_float("CTG_COMPACT_KEEP_RATIO", 0.50)
+    # 防抖重新武装：连续低效压缩停掉后，用量再涨 MAX 的此比例 → 解防抖再试一次。
+    # 治"单向锁"——清零原本只在有效压缩里发生，被跳过后永不复位 = 自动压缩永久关闭。
+    compact_rearm_growth: float = _env_float("CTG_COMPACT_REARM_GROWTH", 0.10)
 
     # ── 中段陈旧工具结果折叠（send() 视图变换，不动 self.log）──
     # 文字稿洁净优先于缓存命中：把不在最近 N 轮内的大工具结果折成一行 stub，

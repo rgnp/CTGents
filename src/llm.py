@@ -1058,9 +1058,11 @@ def _compress_tool_result(tool_name: str, result: str) -> str:
 # 上下文/压缩旋钮统一定义在 params.CONTEXT；此处绑定本地名，保持模块内引用与可 monkeypatch。
 _COMPACT_THRESHOLD = CONTEXT.compact_threshold          # 滑窗压缩触发比例 (65%)
 _COMPACT_KEEP_RATIO = CONTEXT.compact_keep_ratio        # 压缩后保留最近 N% 消息
+_COMPACT_REARM_GROWTH = CONTEXT.compact_rearm_growth    # 防抖后用量再涨 MAX 此比例 → 重新武装
 # ── 压缩防抖状态 ──
 _previous_summary: str | None = None          # 上次压缩的摘要，供迭代更新
 _ineffective_compression_count: int = 0       # 连续低效压缩计数
+_compact_skip_floor: int = 0                  # 防抖触发时的 used 水位；超它 _COMPACT_REARM_GROWTH 即重试
 
 
 
@@ -1145,7 +1147,16 @@ def _should_compact(used: int) -> bool:
     if used < limit:
         return False
     if _ineffective_compression_count >= 2:
-        logger.warning("压缩跳过——最近 %d 次节省 <10%%。", _ineffective_compression_count)
+        # 单向锁修复：防抖关停后，若上下文又显著长高（新可驱逐内容堆积），重新武装再试；
+        # 否则永久关闭（旧 bug：清零只发生在有效压缩里，被跳过后 _update 永不被调、计数卡死）。
+        rearm_at = _compact_skip_floor + int(MAX_CONTEXT_TOKENS * _COMPACT_REARM_GROWTH)
+        if _compact_skip_floor and used >= rearm_at:
+            logger.info("压缩重新武装：用量 %d→%d 已超重试水位 %d，解防抖。",
+                        _compact_skip_floor, used, rearm_at)
+            _ineffective_compression_count = 0
+            return True
+        logger.warning("压缩跳过——最近 %d 次节省 <10%%（用量 %d 未到重试水位 %d）。",
+                       _ineffective_compression_count, used, rearm_at)
         return False
     return True
 
@@ -1183,12 +1194,15 @@ def _update_compaction_effectiveness(before: int, after: int) -> None:
     旧版用 len(msgs)*80 拍脑袋估 token 判"有没有效"——假精确数，已删。这里 before/
     after 都是 _live_context_tokens 的真值，省得 <10% 才算一次低效。
     """
-    global _ineffective_compression_count
+    global _ineffective_compression_count, _compact_skip_floor
     pct = (before - after) / before * 100 if before > 0 else 0
     if pct < 10:
         _ineffective_compression_count += 1
+        if _ineffective_compression_count >= 2:
+            _compact_skip_floor = after   # 放弃时的水位：超它 _COMPACT_REARM_GROWTH 才重试
     else:
         _ineffective_compression_count = 0
+        _compact_skip_floor = 0
 
 
 def _replace_log_with_summary(ctx, kept: list[dict], summary: str | None,
