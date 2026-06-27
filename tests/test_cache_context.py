@@ -176,6 +176,17 @@ def _turn(uq: str, tcid: str, tool_content: str) -> list[dict]:
 class TestStaleToolCollapse:
     """中段陈旧工具结果折叠（send() 视图变换，默认 keep_turns=3 / threshold=600）。"""
 
+    @pytest.fixture(autouse=True)
+    def _force_normal_band(self, monkeypatch):
+        """这些用例测的是 age/threshold 折叠逻辑：舒适区下界置 0、上界置 unreachable，
+        让小上下文也恒走「正常档」，与舒适区分档解耦（分档另由 TestFoldPressureBands 测）。
+        """
+        import dataclasses
+
+        import src.params as params
+        monkeypatch.setattr(params, "CONTEXT", dataclasses.replace(
+            params.CONTEXT, comfort_zone_low=0, comfort_zone_high=10_000_000))
+
     def _ctx_with_turns(self, n: int, big: bool = True) -> CacheContext:
         body = ("X" * 700) if big else "small"
         log: list[dict] = []
@@ -272,13 +283,61 @@ class TestStaleToolCollapse:
         assert all("折叠" not in t["content"] for t in tools)
 
 
+class TestFoldPressureBands:
+    """舒适区自适应折叠：低于下界不折 / 区内正常档 / 高于上界紧逼加码。按 pre-fold 绝对体积。"""
+
+    def _ctx(self, n: int) -> CacheContext:
+        log: list[dict] = []
+        for i in range(n):
+            log += _turn(f"Q{i}", f"t{i}", f"头{i}\n" + "X" * 700)
+        return CacheContext(prefix_msgs=[{"role": "system", "content": "sys"}], log_msgs=log)
+
+    def _patch(self, monkeypatch, **kw):
+        import dataclasses
+
+        import src.params as params
+        monkeypatch.setattr(params, "CONTEXT", dataclasses.replace(params.CONTEXT, **kw))
+
+    def _n_folded(self, ctx: CacheContext) -> int:
+        return sum("折叠" in m["content"] for m in ctx.send() if m["role"] == "tool")
+
+    def test_below_comfort_low_no_fold(self, monkeypatch):
+        """体积 < comfort_zone_low → 完全不折，即便有 3 轮前的大结果（舒适区下方、有空间）。"""
+        self._patch(monkeypatch, comfort_zone_low=10_000_000)   # 永远到不了 → 恒不折
+        assert self._n_folded(self._ctx(5)) == 0
+
+    def test_squeeze_folds_more_than_normal(self, monkeypatch):
+        """高于上界的紧逼档比区内正常档折得多：keep_turns 1 vs 3 → 更多轮被折。"""
+        self._patch(monkeypatch, comfort_zone_low=0, comfort_zone_high=10_000_000,
+                    stale_tool_keep_turns=3, stale_tool_collapse_threshold=600)
+        normal = self._n_folded(self._ctx(5))               # 正常档 keep=3 → 折最老 2 轮
+        self._patch(monkeypatch, comfort_zone_low=0, comfort_zone_high=0,
+                    stale_tool_squeeze_keep_turns=1, stale_tool_squeeze_threshold=300)
+        squeeze = self._n_folded(self._ctx(5))              # 紧逼档 keep=1 → 折最老 4 轮
+        assert squeeze > normal, f"紧逼应折更多，实得 紧逼={squeeze} 正常={normal}"
+
+    def test_gate_uses_real_prefold_size(self, monkeypatch):
+        """同一上下文：下界设在其体积之下→折；设在之上→不折（绝对门按真实体积生效）。"""
+        # 折叠看的是 log（不含 prefix）；按 log 内容估，与 _collapse 内部口径一致。
+        approx = sum(len(m.get("content") or "") for m in self._ctx(5).log) // 4
+        self._patch(monkeypatch, comfort_zone_low=approx // 2, comfort_zone_high=10_000_000)
+        assert self._n_folded(self._ctx(5)) > 0, "体积超下界应折"
+        self._patch(monkeypatch, comfort_zone_low=approx * 2, comfort_zone_high=10_000_000)
+        assert self._n_folded(self._ctx(5)) == 0, "体积低于下界应保真不折"
+
+
 class TestLiveContextTokensCoherence:
     """压缩/熔断判定量"实际发送体积"（折叠后），而非 self.log 原文全长。"""
 
-    def test_live_tokens_below_raw_when_stale_collapsed(self):
+    def test_live_tokens_below_raw_when_stale_collapsed(self, monkeypatch):
         """有陈旧大工具结果时，_live_context_tokens < 原文计数（折叠生效）。"""
+        import dataclasses
+
         import src.llm as llm
+        import src.params as params
         from src.tools.tokens import count_messages_tokens
+        monkeypatch.setattr(params, "CONTEXT", dataclasses.replace(  # 小上下文也走正常档
+            params.CONTEXT, comfort_zone_low=0, comfort_zone_high=10_000_000))
         log: list[dict] = []
         for i in range(5):  # 5 轮 → 老的几轮工具结果会被折叠
             log += _turn(f"Q{i}", f"t{i}", "结果头\n" + "Z" * 3000)
@@ -317,7 +376,7 @@ class TestCompactionEffectiveness:
         try:
             llm._ineffective_compression_count = 0
             llm._compact_skip_floor = 0
-            floor_used = int(llm.MAX_CONTEXT_TOKENS * llm._COMPACT_THRESHOLD) + 1000
+            floor_used = llm.CONTEXT.comfort_zone_high + 1000
             # 连续 2 次低效 → 防抖关停 + 记下放弃水位
             llm._update_compaction_effectiveness(before=floor_used, after=floor_used - 100)
             llm._update_compaction_effectiveness(before=floor_used, after=floor_used - 100)

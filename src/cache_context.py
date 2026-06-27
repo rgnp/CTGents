@@ -204,31 +204,48 @@ class CacheContext:
         return clean
 
     @staticmethod
-    def _collapse_stale_tool_results(msgs: list[dict]) -> list[dict]:
-        """中段视图变换：把不在最近 N 个 user 轮内的大工具结果折成一行 stub。
-
-        log→document 转向（缓存命中不再是约束、文字稿洁净优先）的第一刀，A 方案：
-        只折 role==tool 的大结果、只动发出去的副本（msgs 已是 _clean_log_msg 产物），
-        self.log 原文不动 → 照常落盘、可 recall（"驱逐到磁盘不销毁"）。配对完整性
-        不受影响（消息还在、只缩 content），一个开关全关、完全可逆。对话轮不碰。
-        """
-        from .params import CONTEXT
-        if not CONTEXT.stale_tool_collapse_enabled:
-            return msgs
-        keep_turns = CONTEXT.stale_tool_keep_turns
-        threshold = CONTEXT.stale_tool_collapse_threshold
-
-        # 新鲜窗口边界：从尾部数 keep_turns 个 user 消息，其位置之前为陈旧区。
-        # 数不够 keep_turns 个（短会话）→ fresh_start=0 → 全部新鲜、一律不折。
-        fresh_start = 0
+    def _nth_user_from_end(msgs: list[dict], n: int) -> int:
+        """从尾部数第 n 个 user 消息的位置；不足 n 个（短会话）→ 0（全部算新鲜）。"""
         seen = 0
         for i in range(len(msgs) - 1, -1, -1):
             if msgs[i].get("role") == "user":
                 seen += 1
-                if seen >= keep_turns:
-                    fresh_start = i
-                    break
+                if seen >= n:
+                    return i
+        return 0
 
+    @staticmethod
+    def _collapse_stale_tool_results(msgs: list[dict]) -> list[dict]:
+        """中段视图变换：把陈旧大工具结果折成一行 stub。压力自适应——离上限越近折得越狠。
+
+        log→document（缓存命中不再约束、文字稿洁净优先）：只折 role==tool 的大结果、
+        只动发出去的副本（msgs 已是 _clean_log_msg 产物），self.log 原文不动 → 照常落盘 +
+        fetch_tool_result 可取回（"驱逐到磁盘不销毁"）。配对完整、一个开关全关、完全可逆。
+
+        三档舒适区（pre-fold 体积，//4 估，自含、不调 _live_context_tokens 防递归）：
+          < comfort_zone_low      宽松：不折，全保真（在舒适区下方、有空间，零 fetch 摩擦）；
+          [low, high)             正常：keep_turns / threshold（routinely 折过气信息，稳住）；
+          ≥ comfort_zone_high     紧逼：squeeze_keep_turns / squeeze_threshold（更狠），把 live
+                                   拉回舒适区。spike 那轮大读在热区不折、下一轮过气即折 → 1-2 轮归位。
+        stub 始终是省最多的那刀（不退让到 head+tail——那会留更多、省更少，反令 live 更高）。
+        """
+        from .params import CONTEXT
+        if not CONTEXT.stale_tool_collapse_enabled:
+            return msgs
+
+        # 折叠量按 pre-fold 体积估（与 stats 同口径 //4）；自含、绝不调 _live_context_tokens
+        # （后者会调 send()→本函数，递归）。绝对 token 对齐「15-25w」心智、与 MAX 解耦。
+        approx_tokens = sum(len(m.get("content") or "") for m in msgs) // 4
+        if approx_tokens < CONTEXT.comfort_zone_low:
+            return msgs
+        if approx_tokens >= CONTEXT.comfort_zone_high:
+            keep_turns = CONTEXT.stale_tool_squeeze_keep_turns
+            threshold = CONTEXT.stale_tool_squeeze_threshold
+        else:
+            keep_turns = CONTEXT.stale_tool_keep_turns
+            threshold = CONTEXT.stale_tool_collapse_threshold
+
+        fresh_start = CacheContext._nth_user_from_end(msgs, keep_turns)
         out: list[dict] = []
         for idx, m in enumerate(msgs):
             content = m.get("content")

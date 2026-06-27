@@ -15,6 +15,14 @@ def setup_function():
     llm._ineffective_compression_count = 0
 
 
+def _force_compaction(monkeypatch):
+    """把 compaction 触发线压到 1 token（舒适区上界 comfort_zone_high），让小上下文也触发。"""
+    import dataclasses
+
+    import src.params as params
+    monkeypatch.setattr(llm, "CONTEXT", dataclasses.replace(params.CONTEXT, comfort_zone_high=1))
+
+
 class TestCompactContext:
     """_compact_context：滑窗压缩（超阈值驱旧，短上下文不动）。"""
 
@@ -41,7 +49,7 @@ class TestCompactContext:
         """含"算了/换个"等口语词照常压缩——关键词换话题已删除。"""
         monkeypatch.setattr(llm, "_make_brief_summary",
                             lambda msgs, max_len=500, previous_summary=None: "测试摘要")
-        monkeypatch.setattr(llm, "_COMPACT_THRESHOLD", 0.001)
+        _force_compaction(monkeypatch)
 
         big = "X" * 5000
         msgs = self._make_compaction_messages(5, big)
@@ -78,7 +86,7 @@ class TestCompactContext:
         """大型上下文触发滑窗压缩：旧消息被驱替为摘要。"""
         monkeypatch.setattr(llm, "_make_brief_summary",
                             lambda msgs, max_len=500, previous_summary=None: "测试摘要")
-        monkeypatch.setattr(llm, "_COMPACT_THRESHOLD", 0.001)
+        _force_compaction(monkeypatch)
 
         big = "X" * 5000
         msgs = self._make_compaction_messages(5, big)

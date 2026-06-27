@@ -1056,7 +1056,7 @@ def _compress_tool_result(tool_name: str, result: str) -> str:
 # ═══════════════════════════════════════════════════════════════
 
 # 上下文/压缩旋钮统一定义在 params.CONTEXT；此处绑定本地名，保持模块内引用与可 monkeypatch。
-_COMPACT_THRESHOLD = CONTEXT.compact_threshold          # 滑窗压缩触发比例 (65%)
+# 压缩触发线已改读 CONTEXT.comfort_zone_high（绝对舒适区上界），旧的 compact_threshold 比例已删。
 _COMPACT_KEEP_RATIO = CONTEXT.compact_keep_ratio        # 压缩后保留最近 N% 消息
 _COMPACT_REARM_GROWTH = CONTEXT.compact_rearm_growth    # 防抖后用量再涨 MAX 此比例 → 重新武装
 # ── 压缩防抖状态 ──
@@ -1141,9 +1141,13 @@ def _compact_cache_context(ctx, user_input: str, force: bool = False) -> None:
 
 
 def _should_compact(used: int) -> bool:
-    """检查是否应该触发压缩（用量超阈值且未进入防抖）。"""
+    """检查是否应该触发压缩（live 超舒适区上界且未进入防抖）。
+
+    触发线 = comfort_zone_high（绝对 25w，对齐舒适区）。折叠（无损）够不着的对话文字
+    爬升到此即削有损摘要、把 live 拉回舒适区；折叠能摁住的 tool 体积根本到不了这条线。
+    """
     global _ineffective_compression_count
-    limit = int(MAX_CONTEXT_TOKENS * _COMPACT_THRESHOLD)
+    limit = CONTEXT.comfort_zone_high
     if used < limit:
         return False
     if _ineffective_compression_count >= 2:
@@ -1876,10 +1880,10 @@ def run_conversation(
             )
             on_token("\n" + msg + "\n")
             return msg
-        # 自动压缩旧对话（用量超过 _COMPACT_THRESHOLD 即触发）
-        compact_limit = int(MAX_CONTEXT_TOKENS * _COMPACT_THRESHOLD)
+        # 自动压缩旧对话（live 超舒适区上界即触发；_should_compact 内再做防抖判定）
+        compact_limit = CONTEXT.comfort_zone_high
         if used >= compact_limit:
-            logger.info("触发上下文优化：%d >= %d (%.0f%%)", used, compact_limit, _COMPACT_THRESHOLD * 100)
+            logger.info("触发上下文优化：%d >= %d（舒适区上界）", used, compact_limit)
             _compact_context(ctx, user_input)
             logger.info("压缩后消息数: %d", len(ctx))
 

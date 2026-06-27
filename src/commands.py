@@ -205,6 +205,8 @@ def _cmd_context(r: CmdResult, ctx, _args, _sid) -> None:
     如 AGENTS.md / 记忆索引含用户画像 / 长期目标），默认仍只显示分块大小摘要。
     """
     from .config import MAX_CONTEXT_TOKENS
+    from .llm import _live_context_tokens
+    from .params import CONTEXT
     from .tools.tokens import count_context_tokens
 
     if not hasattr(ctx, 'all'):
@@ -217,20 +219,25 @@ def _cmd_context(r: CmdResult, ctx, _args, _sid) -> None:
 
     all_msgs = ctx.all
     log_msgs = ctx.log
-    used_tokens = count_context_tokens(all_msgs)  # 含工具 schema(~5600)，否则窗口占用恒定偏低
-    usage_pct = used_tokens / MAX_CONTEXT_TOKENS * 100
+    # 主指标 = 实际发送体积（折叠后），舒适区真正管的就是这个；原文累计/上限作参考。
+    live_tokens = _live_context_tokens(ctx)
+    raw_tokens = count_context_tokens(all_msgs)   # 折叠前、含工具 schema(~5600)
+    low, high = CONTEXT.comfort_zone_low, CONTEXT.comfort_zone_high
 
-    if used_tokens >= int(MAX_CONTEXT_TOKENS * 0.85):
-        status = "🔴 紧急"
-    elif used_tokens >= int(MAX_CONTEXT_TOKENS * 0.70):
-        status = "⚠️ 过载"
+    if live_tokens >= high:
+        status = "⚠️ 超舒适区（将触发有损摘要拉回）"
+    elif live_tokens >= low:
+        status = "✅ 舒适区"
     else:
-        status = "✅ 正常"
+        status = "🟢 充裕"
+    saved = max(0, raw_tokens - live_tokens)
 
     lines = [
         "══ 上下文诊断 ══",
         "",
-        f"  Token:  {used_tokens:,} / {MAX_CONTEXT_TOKENS:,} ({usage_pct:.1f}%)  {status}",
+        f"  发送体积: {live_tokens:,}  舒适区 [{low:,}–{high:,}]  {status}",
+        f"  原文累计: {raw_tokens:,} / 上限 {MAX_CONTEXT_TOKENS:,}"
+        + (f"（折叠省 {saved:,}）" if saved else ""),
         f"  消息:    {len(all_msgs)} 条",
         "",
         "── 前缀（始终命中）──",

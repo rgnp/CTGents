@@ -49,8 +49,8 @@ class ContextParams:
     max_context_tokens: int = _env_int("CTG_MAX_CONTEXT_TOKENS", 500_000)
     # 工具循环硬顶：用量达此比例即停止本轮，提示开新会话
     tool_loop_threshold: float = _env_float("CTG_TOOL_LOOP_THRESHOLD", 0.95)
-    # 滑窗压缩触发比例：超过即驱逐旧对话换摘要
-    compact_threshold: float = _env_float("CTG_COMPACT_THRESHOLD", 0.65)
+    # 有损 compaction 触发线已改用绝对舒适区上界 comfort_zone_high（见下），旧的
+    # compact_threshold 比例旋钮已删——它当时是 0.65×MAX 的悬崖，现在被舒适区取代。
     # 压缩后保留最近多少比例的消息
     compact_keep_ratio: float = _env_float("CTG_COMPACT_KEEP_RATIO", 0.50)
     # 防抖重新武装：连续低效压缩停掉后，用量再涨 MAX 的此比例 → 解防抖再试一次。
@@ -65,6 +65,17 @@ class ContextParams:
     stale_tool_keep_turns: int = _env_int("CTG_STALE_TOOL_KEEP_TURNS", 3)
     # 工具结果超过多少字符才折叠（小结果折了没意义、还丢信号）
     stale_tool_collapse_threshold: int = _env_int("CTG_STALE_TOOL_COLLAPSE_THRESHOLD", 600)
+
+    # ── 舒适区自适应折叠：让 live 长期稳定在 [comfort_low, comfort_high]（绝对 token，
+    # 对齐心智「15-25w」、与 MAX 解耦）。离上限越近折得越狠，都仍无损可 fetch。──
+    # 折叠量按 pre-fold 体积估（与 stats 同口径 //4，自含、不调 _live_context_tokens 防递归）。
+    # < comfort_zone_low：不折，全保真（在舒适区下方、有空间，零 fetch 摩擦）。
+    comfort_zone_low: int = _env_int("CTG_COMFORT_ZONE_LOW", 150_000)
+    # ≥ comfort_zone_high：紧逼档，狠折把 live 拉回舒适区（spike 读了很多后 1-2 轮归位）。
+    comfort_zone_high: int = _env_int("CTG_COMFORT_ZONE_HIGH", 250_000)
+    # 紧逼档：更少轮内保留（更早折）+ 更小阈值（小结果也折）。
+    stale_tool_squeeze_keep_turns: int = _env_int("CTG_STALE_TOOL_SQUEEZE_KEEP_TURNS", 1)
+    stale_tool_squeeze_threshold: int = _env_int("CTG_STALE_TOOL_SQUEEZE_THRESHOLD", 300)
 
 
 CONTEXT = ContextParams()
