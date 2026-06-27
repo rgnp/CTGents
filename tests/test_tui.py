@@ -267,6 +267,37 @@ class TestChatScreen:
 
         asyncio.run(go())
 
+    def test_prune_keeps_last_three_turns(self, monkeypatch):
+        """组件累积多轮后剪枝：只留最近 3 轮用户头 + 顶部折叠提示。
+
+        "越用越卡"的真因=组件只增不减；_run_turn 前 _prune_transcript 守住上限，
+        只动显示层（不碰 ctx.log）。
+        """
+        async def go():
+            app = self._fresh_chat_app()
+            from textual.widgets import Label, Markdown, Static
+            async with app.run_test() as pilot:
+                await self._enter_chat(app, pilot)
+                s = app.screen
+                t = s.query_one("#transcript")
+                t.remove_children()
+                await pilot.pause()
+                for i in range(6):                       # 模拟 6 轮
+                    t.mount(Label(f"━ 你 {i}", classes="msg-header user"))
+                    t.mount(Markdown(f"问题{i}", classes="msg-body user-body"))
+                    t.mount(Label(f"━ CTGents {i}", classes="msg-header agent"))
+                    t.mount(Markdown(f"答复{i}", classes="msg-body"))
+                await pilot.pause()
+                s._prune_transcript()
+                await pilot.pause()
+                users = list(s.query(".msg-header.user"))
+                assert len(users) == 3, f"应只剩最近 3 轮用户头，实得 {len(users)}"
+                assert "你 3" in str(users[0].render()), "最早保留的应是第 3 轮"
+                markers = [w for w in s.query(Static) if "已折叠" in str(w.render())]
+                assert len(markers) == 1, "应有一行折叠提示"
+
+        asyncio.run(go())
+
     def test_interrupt_soft_then_terminate(self, monkeypatch):
         """Esc(运行中)=软中断置 pending → 本轮 done 进中断态(断点线+状态栏) → 再 Esc=终止。"""
         async def go():

@@ -631,6 +631,10 @@ class ChatScreen(Screen):
         Binding("enter", "submit_prompt", "发送", show=False, priority=True),
     ]
 
+    # 流式重渲节流：攒 token 仍每 30ms(便宜),但整段 markdown/思考重渲最多 ~10fps。
+    # 否则长回复时每帧重解析整段 markdown(33fps×越来越长)→ 越往后越卡。收尾必全渲。
+    _LIVE_RENDER_INTERVAL = 0.10
+
     def __init__(self) -> None:
         super().__init__()
         self._events: deque = deque()
@@ -664,6 +668,8 @@ class ChatScreen(Screen):
         self._turn_started: float = 0.0
         self._turn_count: int = 0
         self._echo_max_turns: int = 3  # 回放最多渲染的轮数
+        self._last_md_render: float = 0.0       # 流式 markdown 上次重渲时刻（节流）
+        self._last_reason_render: float = 0.0   # 思考流上次重渲时刻（节流）
     # ── 布局 ──
     def compose(self) -> ComposeResult:
         yield Static(id="topglow")
@@ -824,7 +830,35 @@ class ChatScreen(Screen):
         self._mount("上下文已清除", "meta")
 
     # ── 一轮 agent 驱动 ──
+    def _prune_transcript(self) -> None:
+        """只保留最近 _echo_max_turns 轮的显示组件，删掉更早的。
+
+        会话越用 transcript 里的 widget 越多 → Textual 重排/渲染越慢（"越用越卡"的真因）。
+        只动显示层：ctx.log（喂 LLM 的真上下文）与会话存档不受影响，重载仍可见历史。
+        每轮以"用户消息头"为起点；保留最后 keep 个起点及其之后的全部组件。
+        """
+        keep = self._echo_max_turns
+        try:
+            t = self.query_one("#transcript", VerticalScroll)
+        except Exception:
+            return
+        children = list(t.children)
+        user_idxs = [i for i, w in enumerate(children)
+                     if w.has_class("msg-header") and w.has_class("user")]
+        if len(user_idxs) <= keep:
+            return
+        cutoff = user_idxs[len(user_idxs) - keep]  # 第 keep-从后数 个用户头 = 保留起点
+        survivor = children[cutoff]
+        for w in children[:cutoff]:
+            with contextlib.suppress(Exception):
+                w.remove()
+        # 顶部留一行折叠提示（完整记录仍在会话存档，未受影响）
+        with contextlib.suppress(Exception):
+            t.mount(Static("⋯ 更早的对话已折叠（完整记录在会话存档）", classes="meta"),
+                    before=survivor)
+
     def _run_turn(self, text: str) -> None:
+        self._prune_transcript()  # 开新一轮前剪掉 3 轮前的旧组件，防越用越卡
         self._busy = True
         self._turn_started = time.monotonic()
         self._refresh_status()  # 即时反馈：状态栏立即闪烁，消除空档
@@ -890,7 +924,8 @@ class ChatScreen(Screen):
                 self._reasoning_dirty = True
             else:
                 # 思考在答案之前 → 先 flush 思考(挂折叠区)、再 flush 答案，顺序正确。
-                await self._flush_reasoning(transcript)
+                # 换阶段=封口，两者都强制全渲（force/finalize），不被节流截断。
+                await self._flush_reasoning(transcript, force=True)
                 await self._flush_md(transcript)
                 if kind == "tool":
                     label, detail = rest
@@ -953,6 +988,13 @@ class ChatScreen(Screen):
 
     async def _flush_md(self, transcript, finalize: bool = True) -> None:
         if self._cur_text:
+            # 节流：流式期间整段 markdown 重渲很贵，限到 ~10fps；token 已在外层每 tick 攒好，
+            # 跳过本次只是晚 ≤100ms 渲（_dirty 保持，下个 tick 再来）。finalize/封口必全渲。
+            now = time.monotonic()
+            if not finalize and self._cur_md is not None \
+                    and (now - self._last_md_render) < self._LIVE_RENDER_INTERVAL:
+                return
+            self._last_md_render = now
             if self._cur_md is None:
                 if not self._agent_header_mounted:
                     self._collapse_active()
@@ -970,10 +1012,11 @@ class ChatScreen(Screen):
             self._cur_md = None
             self._cur_text = ""
 
-    async def _flush_reasoning(self, transcript) -> None:
+    async def _flush_reasoning(self, transcript, force: bool = False) -> None:
         """把累进的思考挂进 Collapsible（展开），实时更新；下一阶段开始时折叠。
 
         首次 mount 时设为当前展开块(_activate 会先折上一个)，之后只更新内部 Static。
+        force=True（封口/换阶段）必渲；流式中限到 ~10fps，避免长思考逐帧重渲卡顿。
         """
         if not self._cur_reasoning:
             return
@@ -984,11 +1027,11 @@ class ChatScreen(Screen):
             await transcript.mount(box)
             self._activate(box)
         else:
+            now = time.monotonic()
+            if not force and (now - self._last_reason_render) < self._LIVE_RENDER_INTERVAL:
+                return
+            self._last_reason_render = now
             self._reasoning_box.update(self._cur_reasoning)
-            # 脉冲动效：微暗→恢复，让用户感知有新内容涌入
-            with contextlib.suppress(Exception):
-                self._reasoning_box.styles.animate("opacity", 0.85, duration=0.05)
-                self._reasoning_box.styles.animate("opacity", 1.0, duration=0.08)
         self._reasoning_dirty = False
 
     def _activate(self, box: Collapsible) -> None:
