@@ -47,6 +47,8 @@ def learn(topic: str) -> str:
 
     # Step 1: 搜 arxiv
     results = _arxiv_api_search(topic, max_results=_MAX_RESULTS)
+    if results is None:
+        return "⚠️ 网络不可达，无法连接 arxiv API。请换时段重试，或在运行环境配置 HTTP_PROXY/HTTPS_PROXY 代理。"
     if not results:
         return f"在 arxiv 上未找到与 '{topic}' 相关的近期论文。换个搜索词试试。"
 

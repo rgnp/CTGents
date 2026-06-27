@@ -140,12 +140,12 @@ def _parse_arxiv_feed(xml: str) -> list[tuple[str, str]]:
     return out
 
 
-def _arxiv_api_search(query: str, max_results: int = 20) -> list[tuple[str, str]]:
+def _arxiv_api_search(query: str, max_results: int = 20) -> list[tuple[str, str]] | None:
     """Arxiv 官方 API 按提交日期倒序检索，返回 [(id, 日期), ...]，最新在前。
 
     比 Tavily 网页搜索可靠地多：直接命中 arxiv、按日期倒序拿最新、无网页索引
     滞后、无页面引用噪声（网页搜索会把正文里引用的老论文 id 也抓出来）。
-    网络失败返回空列表，由调用方容错。
+    返回 None 表示网络不可达（与「真没结果」区分），调用方据此决定是否重试。
     """
     params = urllib.parse.urlencode({
         "search_query": f"all:{query}",
@@ -160,7 +160,7 @@ def _arxiv_api_search(query: str, max_results: int = 20) -> list[tuple[str, str]
         with urllib.request.urlopen(req, timeout=20) as resp:
             xml = resp.read().decode("utf-8", errors="replace")
     except Exception:
-        return []
+        return None  # 网络不可达，与 []（真没结果）区分
     return _parse_arxiv_feed(xml)
 
 
@@ -251,21 +251,31 @@ def scan_papers(queries: str) -> str:
 
     known = _load_known_ids()
     found: dict[str, str] = {}
+    net_errors: list[str] = []
 
     # 用 arxiv 官方 API（按提交日期倒序）发现最新论文，而非 Tavily 网页搜索——
     # 网页搜索按相关度排序、有索引滞后、且会抓到正文引用的老论文 id。
     for area, raw_query in _iter_query_pairs(query_list):
-        for aid, _pub in _arxiv_api_search(raw_query):
-            if _arxiv_year(aid) and aid not in found:
-                found[aid] = area
+        r = _arxiv_api_search(raw_query)
+        if r is None:
+            net_errors.append(area)
+        else:
+            for aid, _pub in r:
+                if _arxiv_year(aid) and aid not in found:
+                    found[aid] = area
         time.sleep(3.0)  # arxiv API 礼貌限速（官方建议 ≥3s/次）
+
+    if net_errors:
+        lines = [f"⚠️ 网络不可达 — 以下领域搜索失败: {', '.join(net_errors)}。换时段重试或用 agent 本地代理。\n"]
+    else:
+        lines = []
 
     new_papers = {k: v for k, v in found.items() if k not in known}
     overlap = {k: v for k, v in found.items() if k in known}
     y25 = sum(1 for k in new_papers if _arxiv_year(k) == "2025")
     y26 = sum(1 for k in new_papers if _arxiv_year(k) == "2026")
 
-    lines = [
+    lines += [
         f"搜索 {len(query_list)} 领域 → {len(found)} 篇",
         f"已知: {len(overlap)} | 新增: {len(new_papers)} (2025:{y25}, 2026:{y26})",
         f"总: {len(known) + len(new_papers)}",
