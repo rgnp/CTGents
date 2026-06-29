@@ -294,6 +294,41 @@ def _strip_user_wrappers(content: str) -> str:
     return content
 
 
+def _expand_file_mentions(text: str) -> tuple[str, list[str]]:
+    """把消息里的 @<path> 展开成附带文件内容的块（Claude Code 式文件引用）。
+
+    返回 (展开后的消息, 已附文件路径)。只展开真实存在的文件；单文件截到 400 行/20k 字。
+    展开内容追加在原消息后（原文里的 @path 保留，用户回显与 agent 输入都看得见引用了啥）。
+    """
+    import re
+    from pathlib import Path
+    blocks: list[str] = []
+    attached: list[str] = []
+    seen: set[str] = set()
+    for raw in re.findall(r'(?<![\w@])@([^\s@]+)', text):
+        raw = raw.rstrip(".,;:，。；：")   # 去掉粘在路径尾的标点
+        if not raw or raw in seen:
+            continue
+        p = Path(raw)
+        if not p.is_file():
+            continue
+        try:
+            content = p.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+        seen.add(raw)
+        attached.append(raw)
+        lines = content.splitlines()
+        truncated = len(lines) > 400 or len(content) > 20000
+        if truncated:
+            content = "\n".join(lines[:400])[:20000]
+        note = "（截断前 400 行）" if truncated else ""
+        blocks.append(f"### 引用文件 {raw}{note}\n```\n{content}\n```")
+    if not blocks:
+        return text, []
+    return text + "\n\n" + "\n\n".join(blocks), attached
+
+
 def _status_line(ctx, session_id: str) -> str:
     """底部状态条文本：模型·会话·上下文·状态，一眼看清当前情况。"""
     segs: list[str] = []
@@ -583,6 +618,13 @@ class ChatScreen(Screen):
     .tool-call { color: $primary-lighten-2; margin: 0 0 0 3; }
     .tool-call.running { color: $warning; }
     .tool-result { color: $secondary; margin: 0 0 0 5; text-style: dim; }
+    /* ── 长任务 live TODO 面板（顶部常驻，无任务时隐藏）── */
+    #taskpanel {
+        dock: top; height: auto; padding: 0 1;
+        background: $panel; color: $secondary;
+        border-bottom: solid $primary-darken-2;
+    }
+    #taskpanel.hidden { display: none; }
     /* ── 轮次分隔 ── */
     .turn-sep { color: $primary-darken-3; height: 1; margin: 1 0; }
     /* ── 元消息 ── */
@@ -659,6 +701,7 @@ class ChatScreen(Screen):
         self._pending_marker: Static | None = None  # 首 token 前的"思考中…"占位
     # ── 布局 ──
     def compose(self) -> ComposeResult:
+        yield Static("", id="taskpanel", classes="hidden")   # 长任务 live TODO 清单
         yield VerticalScroll(id="transcript")
         with Vertical(id="bottombar"):
             yield TextArea(
@@ -674,9 +717,11 @@ class ChatScreen(Screen):
         self._load_pending()
         self._refresh_status()
         self.query_one("#prompt", TextArea).focus()
+        self._refresh_task_panel()
         self.set_interval(0.03, self._drain_events)
         self.set_interval(0.1, self._tick_spinner)
         self.set_interval(0.5, self._refresh_status)
+        self.set_interval(0.5, self._refresh_task_panel)
         self.set_interval(0.5, self._drain_jobs)
 
     def on_text_area_changed(self, event: TextArea.Changed) -> None:
@@ -738,11 +783,14 @@ class ChatScreen(Screen):
         if text.startswith("/"):
             self._handle_command(text)
         else:
+            expanded, attached = _expand_file_mentions(text)   # @path → 附文件内容
+            if attached:
+                self._mount(f"📎 已附 {len(attached)} 个文件：{', '.join(attached)}", "meta")
             if self._pending_notices:
-                text = ("【后台作业完成】\n" + "\n\n".join(self._pending_notices)
-                        + "\n\n【用户消息】\n" + text)
+                expanded = ("【后台作业完成】\n" + "\n\n".join(self._pending_notices)
+                            + "\n\n【用户消息】\n" + expanded)
                 self._pending_notices.clear()
-            self._run_turn(text)
+            self._run_turn(expanded)
 
     # ── 指令 ──
     def _handle_command(self, text: str) -> None:
@@ -929,14 +977,16 @@ class ChatScreen(Screen):
                     await transcript.mount(line)
                     self._pending_tool_labels.append((line, text))  # 等结果回来标 ✓
                 elif kind == "tool_result":
-                    # FIFO 配对：最早发起的未完成工具行 → ⏺ 改 ✓、去掉进行中色
+                    result = rest[1] if len(rest) > 1 else ""
+                    renderable, stats = self._render_result(result)
+                    # FIFO 配对：最早发起的未完成工具行 → ⏺ 改 ✓、去进行中色、带 diff 统计
                     if self._pending_tool_labels:
                         lbl, text = self._pending_tool_labels.pop(0)
+                        done_text = "✓" + text[1:] + (f"  {stats}" if stats else "")
                         with contextlib.suppress(Exception):
-                            lbl.update("✓" + text[1:])
+                            lbl.update(done_text)
                             lbl.remove_class("running")
-                    block = self._result_block(rest[1] if len(rest) > 1 else "")
-                    await transcript.mount(Static(block, classes="tool-result", markup=False))
+                    await transcript.mount(Static(renderable, classes="tool-result", markup=False))
                     self._current_tool = ""
                 elif kind == "footer":
                     self._mount_footer(rest[0])
@@ -1039,6 +1089,33 @@ class ChatScreen(Screen):
         if extra > 0:
             out.append(f"  … +{extra} 行")
         return "\n".join(out)
+
+    @staticmethod
+    def _render_result(result: str):
+        """工具结果 → (可渲染对象, 统计串)。
+
+        含 git diff（编辑工具已带 ```diff 块）→ 彩色 Rich Text（+绿 / -红 / @@青）
+        + 统计 (+N −M)，给完成的 ✓ 行用；否则退回纯多行块字符串、无统计。
+        """
+        if "```diff" in result:
+            from rich.text import Text
+            body = result.split("```diff", 1)[1].split("```", 1)[0]
+            lines = [ln for ln in body.splitlines() if ln.strip()]
+            adds = sum(1 for ln in lines if ln.startswith("+"))
+            dels = sum(1 for ln in lines if ln.startswith("-"))
+            shown = lines[:40]
+            text = Text()
+            text.append("⎿ 变更", style="dim")
+            for ln in shown:
+                s = ln[:120]
+                style = ("green" if ln.startswith("+") else "red" if ln.startswith("-")
+                         else "cyan" if ln.startswith("@@") else "dim")
+                text.append("\n  " + s, style=style)
+            extra = len(lines) - len(shown)
+            if extra > 0:
+                text.append(f"\n  … +{extra} 行", style="dim")
+            return text, f"(+{adds} −{dels})"
+        return ChatScreen._result_block(result), ""
 
     async def _flush_md(self, transcript, finalize: bool = True) -> None:
         if self._cur_text:
@@ -1214,6 +1291,31 @@ class ChatScreen(Screen):
                 self._pending_notices.append(notice)
         except Exception:
             pass
+
+    def _refresh_task_panel(self) -> None:
+        """长任务 TODO 面板：读 current.md 步骤渲染成顶部常驻清单；无任务则隐藏。
+
+        agent 用 update_plan/create_task 维护 current.md，这里只读渲染（每 0.5s），
+        步骤完成/新增立即反映。纯只读，不碰 ctx/缓存。
+        """
+        try:
+            panel = self.query_one("#taskpanel", Static)
+        except Exception:
+            return
+        from .tasks import task_steps
+        try:
+            steps = task_steps()
+        except Exception:
+            steps = []
+        if not steps:
+            panel.add_class("hidden")
+            return
+        done = sum(1 for icon, _ in steps if icon == "✅")
+        lines = [f"📋 任务进度  {done}/{len(steps)}"]
+        for icon, label in steps:
+            lines.append(f"  {icon} {label[:72]}")
+        panel.update("\n".join(lines))
+        panel.remove_class("hidden")
 
     # ── 动作 ──
     def action_interrupt(self) -> None:

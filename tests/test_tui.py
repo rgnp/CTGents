@@ -16,6 +16,7 @@ from src.tui import (
     SplashScreen,
     _banner_plain,
     _banner_rows,
+    _expand_file_mentions,
     _fmt_tool,
     _status_line,
     _strip_user_wrappers,
@@ -86,6 +87,38 @@ class TestPureHelpers:
         b2 = ChatScreen._result_block(many, max_lines=3)
         assert "⎿ L0" in b2 and "… +7 行" in b2 and "L3" not in b2
         assert ChatScreen._result_block("   \n  ") == "⎿ 完成"
+
+    def test_render_result_diff_colored_and_stats(self):
+        """含 ```diff 块 → 返回 Rich Text(非纯串) + (+N −M) 统计；普通结果无统计。"""
+        from rich.text import Text
+        diff = "已写入: a.py\n变更:\n```diff\n@@ -1 +1,2 @@\n-old\n+new1\n+new2\n```"
+        renderable, stats = ChatScreen._render_result(diff)
+        assert isinstance(renderable, Text)
+        assert stats == "(+2 −1)"             # 2 加 1 减
+        plain, no_stats = ChatScreen._render_result("普通输出\n第二行")
+        assert isinstance(plain, str) and no_stats == ""
+
+    def test_expand_file_mentions(self, tmp_path):
+        """@<存在的文件> → 内容附在消息后 + 返回已附列表；不存在的 @ 原样不动。"""
+        f = tmp_path / "note.txt"
+        f.write_text("hello content", encoding="utf-8")
+        msg = f"看看 @{f} 这个文件"
+        expanded, attached = _expand_file_mentions(msg)
+        assert attached == [str(f)]
+        assert "hello content" in expanded and f"### 引用文件 {f}" in expanded
+        assert expanded.startswith(msg)       # 原文保留在前
+        # 不存在 → 不变、空附件
+        out, att = _expand_file_mentions("没有 @/nope/missing.xyz 文件")
+        assert att == [] and out == "没有 @/nope/missing.xyz 文件"
+
+    def test_expand_file_mentions_truncates_large(self, tmp_path):
+        """超 400 行文件 → 截断并标注。"""
+        big = tmp_path / "big.txt"
+        big.write_text("\n".join(f"line{i}" for i in range(600)), encoding="utf-8")
+        expanded, attached = _expand_file_mentions(f"@{big}")
+        assert attached == [str(big)]
+        assert "截断前 400 行" in expanded
+        assert "line399" in expanded and "line400" not in expanded
 
     def test_strip_preread(self):
         assert _strip_user_wrappers("[预读]\n── 用户问题 ──\n真问题") == "真问题"
@@ -304,6 +337,30 @@ class TestChatScreen:
                 assert "你 3" in str(users[0].render()), "最早保留的应是第 3 轮"
                 markers = [w for w in s.query(Static) if "已折叠" in str(w.render())]
                 assert len(markers) == 1, "应有一行折叠提示"
+
+        asyncio.run(go())
+
+    def test_task_panel_shows_and_hides(self, monkeypatch):
+        """有任务步骤 → 顶部 TODO 面板显示进度+清单；无步骤 → 隐藏。"""
+        import src.tasks as tasks
+
+        async def go():
+            app = self._fresh_chat_app()
+            async with app.run_test() as pilot:
+                await self._enter_chat(app, pilot)
+                s = app.screen
+                panel = s.query_one("#taskpanel")
+                monkeypatch.setattr(tasks, "task_steps",
+                                    lambda: [("✅", "第一步"), ("🔄", "第二步"), ("⬜", "第三步")])
+                s._refresh_task_panel()
+                await pilot.pause()
+                assert not panel.has_class("hidden")
+                rendered = str(panel.render())
+                assert "1/3" in rendered and "第二步" in rendered
+                monkeypatch.setattr(tasks, "task_steps", lambda: [])
+                s._refresh_task_panel()
+                await pilot.pause()
+                assert panel.has_class("hidden")
 
         asyncio.run(go())
 

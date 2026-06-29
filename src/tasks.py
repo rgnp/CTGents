@@ -90,6 +90,11 @@ def _parse_task_steps() -> list[tuple[str, str]]:
     return steps
 
 
+def task_steps() -> list[tuple[str, str]]:
+    """公开访问器：当前任务步骤 [(图标, 文本)]，供 TUI live TODO 面板渲染。"""
+    return _parse_task_steps()
+
+
 def _trim_progress(progress: str, labels: list, done: int, total: int) -> str:
     """超过 200 字符时截断进度线，保留前 4 步 + 省略标记。"""
     if len(progress) <= 200:
