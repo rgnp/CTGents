@@ -70,12 +70,22 @@ class TestPureHelpers:
         _, d_grep = _fmt_tool("grep_code", {"pattern": "foo", "path": "src"})
         assert "🔍 foo" in d_grep and "📁 src" in d_grep
         _, d_test = _fmt_tool("run_command", {"command": "pytest -q"})
-        assert d_test == "▶ 运行测试"
+        assert d_test == "$ pytest -q"          # 显真实命令，不再抽象成"▶ 运行测试"
 
     def test_fmt_tool_unknown_caps_value(self):
         """未知工具回退 k=v，单值超长截到 60 防一行刷屏。"""
         _, detail = _fmt_tool("x", {"k": "v" * 200})
         assert detail == "k=" + "v" * 60 + "…"
+
+    def test_result_block_multiline_and_cap(self):
+        """⎿ 多行结果：首行带 ⎿ 其余缩进；超 max_lines 标 … +N 行；空→完成。"""
+        from src.tui import ChatScreen
+        b = ChatScreen._result_block("line1\nline2", max_lines=6)
+        assert b.startswith("⎿ line1") and "  line2" in b
+        many = "\n".join(f"L{i}" for i in range(10))
+        b2 = ChatScreen._result_block(many, max_lines=3)
+        assert "⎿ L0" in b2 and "… +7 行" in b2 and "L3" not in b2
+        assert ChatScreen._result_block("   \n  ") == "⎿ 完成"
 
     def test_strip_preread(self):
         assert _strip_user_wrappers("[预读]\n── 用户问题 ──\n真问题") == "真问题"
@@ -235,10 +245,10 @@ class TestChatScreen:
                 app.screen.query_one("#transcript").remove_children()
                 app.screen._echo_conversation()
                 await pilot.pause()
-                # 用户消息现按 markdown 渲染(classes=msg-header user)，agent 回复 classes=msg-header agent；
+                # 用户=› 前缀块(.user-msg)，agent 回复挂一个 CTGents 头(.agent-name)；
                 # 工具结果/system 注入仍被跳过(不渲染)。
-                assert len(list(app.screen.query(".msg-header.user"))) == 1
-                assert len(list(app.screen.query(".msg-header.agent"))) == 1
+                assert len(list(app.screen.query(".user-msg"))) == 1
+                assert len(list(app.screen.query(".agent-name"))) == 1
 
         asyncio.run(go())
 
@@ -283,15 +293,14 @@ class TestChatScreen:
                 t.remove_children()
                 await pilot.pause()
                 for i in range(6):                       # 模拟 6 轮
-                    t.mount(Label(f"━ 你 {i}", classes="msg-header user"))
-                    t.mount(Markdown(f"问题{i}", classes="msg-body user-body"))
-                    t.mount(Label(f"━ CTGents {i}", classes="msg-header agent"))
+                    t.mount(Static(f"› 你 {i}", classes="user-msg"))
+                    t.mount(Label(f"CTGents {i}", classes="agent-name"))
                     t.mount(Markdown(f"答复{i}", classes="msg-body"))
                 await pilot.pause()
                 s._prune_transcript()
                 await pilot.pause()
-                users = list(s.query(".msg-header.user"))
-                assert len(users) == 3, f"应只剩最近 3 轮用户头，实得 {len(users)}"
+                users = list(s.query(".user-msg"))
+                assert len(users) == 3, f"应只剩最近 3 轮用户块，实得 {len(users)}"
                 assert "你 3" in str(users[0].render()), "最早保留的应是第 3 轮"
                 markers = [w for w in s.query(Static) if "已折叠" in str(w.render())]
                 assert len(markers) == 1, "应有一行折叠提示"
@@ -374,8 +383,8 @@ class TestChatScreen:
                     await pilot.pause(0.05)
                 assert s._interrupted is False
                 assert seen and "改用中文" in seen[0], seen
-                # 用户那条按 markdown 回显(classes=user)，source 即原文
-                assert any(getattr(u, "source", "") == "改用中文" for u in s.query(".msg-body"))
+                # 用户那条按 › 前缀块(.user-msg)回显
+                assert any("改用中文" in str(u.render()) for u in s.query(".user-msg"))
 
         asyncio.run(go())
 
