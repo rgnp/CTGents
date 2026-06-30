@@ -340,9 +340,13 @@ class TestChatScreen:
 
         asyncio.run(go())
 
-    def test_task_panel_shows_and_hides(self, monkeypatch):
-        """有任务步骤 → 顶部 TODO 面板显示进度+清单；无步骤 → 隐藏。"""
+    def test_task_panel_shows_hides_windows(self, monkeypatch):
+        """有未完成任务 → 面板显示(窗口≤4跟随活跃步)；无步骤/全做完 → 隐藏。"""
         import src.tasks as tasks
+
+        def set_steps(steps, unfinished=True):
+            monkeypatch.setattr(tasks, "task_steps", lambda: steps)
+            monkeypatch.setattr(tasks, "has_unfinished", lambda: unfinished)
 
         async def go():
             app = self._fresh_chat_app()
@@ -350,16 +354,26 @@ class TestChatScreen:
                 await self._enter_chat(app, pilot)
                 s = app.screen
                 panel = s.query_one("#taskpanel")
-                monkeypatch.setattr(tasks, "task_steps",
-                                    lambda: [("✅", "第一步"), ("🔄", "第二步"), ("⬜", "第三步")])
+                # 3 步、有未完成 → 显示
+                set_steps([("✅", "一"), ("🔄", "二"), ("⬜", "三")])
                 s._refresh_task_panel()
                 await pilot.pause()
                 assert not panel.has_class("hidden")
-                rendered = str(panel.render())
-                assert "1/3" in rendered and "第二步" in rendered
-                monkeypatch.setattr(tasks, "task_steps", lambda: [])
+                assert "1/3" in str(panel.render()) and "二" in str(panel.render())
+                # 8 步 → 只显窗口 4 + 「还有 N」滑动指示，不全列
+                set_steps([("✅", f"步{i}") for i in range(3)]
+                          + [("🔄", "步3")] + [("⬜", f"步{i}") for i in range(4, 8)])
+                s._refresh_task_panel()
+                r = str(panel.render())
+                assert "↑" in r and "↓ 还有" in r and "步7" not in r  # 窗口化、尾部未全列
+                # 全做完(无未完成) → 收起，不赖着
+                set_steps([("✅", "一"), ("✅", "二")], unfinished=False)
                 s._refresh_task_panel()
                 await pilot.pause()
+                assert panel.has_class("hidden")
+                # 无步骤 → 收起
+                set_steps([], unfinished=False)
+                s._refresh_task_panel()
                 assert panel.has_class("hidden")
 
         asyncio.run(go())

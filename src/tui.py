@@ -693,6 +693,7 @@ class ChatScreen(Screen):
     _LIVE_RENDER_INTERVAL = 0.10
     _SPINNER = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"   # 运行中工具行的转圈帧（10fps 循环）
     _AC_WINDOW = 10              # @ 文件补全下拉每屏可见行数（其余靠 ↑↓ 滑动）
+    _TASK_WINDOW = 4            # TODO 面板每屏可见步骤数（窗口跟随当前活跃步滑动）
 
     def __init__(self) -> None:
         super().__init__()
@@ -722,7 +723,7 @@ class ChatScreen(Screen):
         self._history: list[str] = []
         self._history_idx: int = -1
         self._history_draft: str = ""
-        self._status_cache: tuple[int, int, str] = (-1, -1, "")
+        self._status_cache: tuple = (None, "")   # (缓存键, 渲染好的状态行)
         self._turn_started: float = 0.0
         self._turn_count: int = 0
         self._echo_max_turns: int = 3  # 回放最多渲染的轮数
@@ -1008,7 +1009,7 @@ class ChatScreen(Screen):
         self.app.ctx.clear_log()
         self.app.ctx.log.extend(load_session(target))
         _apply_prefix(self.app.ctx, target)  # 复用该会话冻结前缀，重载不塌命中
-        self._status_cache = (-1, -1, "")
+        self._status_cache = (None, "")
         self.app.session_id = target
         self.app.final_session_id = target
         from . import status_bar
@@ -1033,7 +1034,7 @@ class ChatScreen(Screen):
             self.app.session_id = None
             from . import status_bar
             status_bar.reset()
-        self._status_cache = (-1, -1, "")
+        self._status_cache = (None, "")
         self.query_one("#transcript").remove_children()
         self._agent_header_mounted = False
         self._reset_reasoning()
@@ -1207,7 +1208,7 @@ class ChatScreen(Screen):
                         from .llm import clear_interrupt
                         clear_interrupt()  # 卫生：硬终止也要清中断标志，防下一轮流断
                         self._mount("──────── ■ 已强制终止本轮 ────────", "brk")
-                        self._status_cache = (-1, -1, "")
+                        self._status_cache = (None, "")
                     elif self._interrupt_pending:
                         self._enter_interrupted()
                 changed = True
@@ -1458,11 +1459,20 @@ class ChatScreen(Screen):
             except Exception:
                 model = ""
             sid_hash = hash((self.app.session_id or "", model))
-            if self._status_cache[0] != n_msgs or self._status_cache[1] != sid_hash:
+            # 缓存键含后台任务数 + 是否有未完成任务——否则它们做完后(n_msgs 没变)状态行赖着旧值不刷新
+            jobs, unfinished = 0, False
+            with contextlib.suppress(Exception):
+                from .tools.exec import running_job_count
+                jobs = running_job_count()
+            with contextlib.suppress(Exception):
+                from .tasks import has_unfinished
+                unfinished = has_unfinished()
+            key = (n_msgs, sid_hash, jobs, unfinished)
+            if self._status_cache[0] != key:
                 line = _status_line(self.app.ctx, self.app.session_id or "")
-                self._status_cache = (n_msgs, sid_hash, line)
+                self._status_cache = (key, line)
             else:
-                line = self._status_cache[2]
+                line = self._status_cache[1]
             status = self.query_one("#status", Static)
             if self._busy:
                 if self._hard_kill:
@@ -1503,18 +1513,31 @@ class ChatScreen(Screen):
             panel = self.query_one("#taskpanel", Static)
         except Exception:
             return
-        from .tasks import task_steps
+        from .tasks import has_unfinished, task_steps
         try:
             steps = task_steps()
+            active_task = has_unfinished()
         except Exception:
-            steps = []
-        if not steps:
+            steps, active_task = [], False
+        # 没步骤、或全做完无活跃未完成 → 收起（做完就别赖着）
+        if not steps or not active_task:
             panel.add_class("hidden")
             return
         done = sum(1 for icon, _ in steps if icon == "✅")
-        lines = [f"📋 任务进度  {done}/{len(steps)}"]
-        for icon, label in steps:
+        n = len(steps)
+        win = self._TASK_WINDOW
+        # 窗口跟随当前活跃步（第一个非 ✅）：上露一条已完成作上文，下接待办
+        active = next((i for i, (ic, _) in enumerate(steps) if ic != "✅"), n - 1)
+        start = 0 if n <= win else max(0, min(active - 1, n - win))
+        end = min(n, start + win)
+        lines = [f"📋 任务进度  {done}/{n}"]
+        if start > 0:
+            lines.append(f"  ↑ {start} 已完成")
+        for i in range(start, end):
+            icon, label = steps[i]
             lines.append(f"  {icon} {label[:72]}")
+        if end < n:
+            lines.append(f"  ↓ 还有 {n - end}")
         panel.update("\n".join(lines))
         panel.remove_class("hidden")
 
@@ -1552,7 +1575,7 @@ class ChatScreen(Screen):
         self._interrupted = True
         stamp = time.strftime("%H:%M:%S")
         self._mount(f"──────── ⏸ 推理已暂停，现场已保存 · {stamp} ────────", "brk")
-        self._status_cache = (-1, -1, "")
+        self._status_cache = (None, "")
         self._refresh_status()
         with contextlib.suppress(Exception):
             self.query_one("#prompt", TextArea).placeholder = "⏸ 已中断 · Enter 继续 · 输入新消息重开"
@@ -1586,7 +1609,7 @@ class ChatScreen(Screen):
         self._interrupted = False
         self._interrupt_pending = False
         self._hard_kill = False
-        self._status_cache = (-1, -1, "")
+        self._status_cache = (None, "")
         self._refresh_status()
         with contextlib.suppress(Exception):
             self.query_one("#prompt", TextArea).placeholder = "> 输入消息（/help 查看指令）"
