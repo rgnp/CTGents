@@ -393,6 +393,23 @@ class TestChatScreen:
 
         asyncio.run(go())
 
+    def test_code_block_renders_as_fence(self):
+        """输出的 ```代码块渲染成 MarkdownFence（语法高亮载体；CSS 给它对比底色）。"""
+        async def go():
+            from textual.widgets import Markdown
+            from textual.widgets._markdown import MarkdownFence
+            app = self._fresh_chat_app()
+            async with app.run_test() as pilot:
+                await self._enter_chat(app, pilot)
+                t = app.screen.query_one("#transcript")
+                md = Markdown(classes="msg-body")
+                await t.mount(md)
+                await md.update("```python\ndef foo(x):\n    return x + 1\n```")
+                await pilot.pause()
+                assert len(list(app.screen.query(MarkdownFence))) >= 1, "```块应渲染成 MarkdownFence"
+
+        asyncio.run(go())
+
     def test_slash_command_autocomplete(self, monkeypatch):
         """打 / → 命令补全下拉(带描述)；接受 → 回填 /命令 ；完整命令名时 Enter 直接运行。"""
         async def go():

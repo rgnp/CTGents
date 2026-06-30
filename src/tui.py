@@ -623,6 +623,13 @@ class ChatScreen(Screen):
     .agent-name { color: $primary; text-style: bold; margin: 1 0 0 0; padding: 0 0 0 1; }
     /* ── 输出正文 ── */
     .msg-body { margin: 0 0 1 0; padding: 0 0 0 3; }
+    /* ── 代码块：给对比底色 + 左色条，让语法高亮在深海 bg 上跳出来
+       （默认 black 10% 叠在 #0a101c 上几乎不可见，高亮等于白做）── */
+    MarkdownFence {
+        background: $surface;
+        border-left: thick $primary-darken-1;
+        margin: 1 0;
+    }
     /* ── 思考折叠区：缩进在 CTGents 之下，左竖线 ── */
     Collapsible { margin: 0 0 0 3; border: none; background: transparent; }
     .collapsible-chat {
@@ -1197,6 +1204,8 @@ class ChatScreen(Screen):
                     if self._hard_kill:
                         self._hard_kill = False
                         self._interrupt_pending = False
+                        from .llm import clear_interrupt
+                        clear_interrupt()  # 卫生：硬终止也要清中断标志，防下一轮流断
                         self._mount("──────── ■ 已强制终止本轮 ────────", "brk")
                         self._status_cache = (-1, -1, "")
                     elif self._interrupt_pending:
@@ -1373,10 +1382,12 @@ class ChatScreen(Screen):
         t.scroll_end(animate=False)
 
     def _echo_conversation(self) -> None:
-        """加载会话后回放：与实时同结构——每个用户轮一个 CTGents 头，思考折叠 + 文字归其下。
+        """加载会话后回放：与实时同结构——每个用户轮一个 CTGents 头，思考折叠 + 工具链 + 文字归其下。
 
         只显示最近 self._echo_max_turns 轮，超出部分折叠提示。
         """
+        import json
+
         t = self.query_one("#transcript", VerticalScroll)
         all_msgs = self.app.ctx.log
         # 找所有 user 消息的位置，只保留最近 N 轮
@@ -1386,7 +1397,7 @@ class ChatScreen(Screen):
         skip_up_to = user_indices[skip_users] if skip_users > 0 and skip_users < len(user_indices) else 0
 
         if skip_up_to > 0:
-            folded = len([m for m in all_msgs[:skip_up_to] if m.get("role") in ("user", "assistant")])
+            folded = len([m for m in all_msgs[:skip_up_to] if m.get("role") in ("user", "assistant", "tool")])
             t.mount(Static(f"⋯ 省略前 {len(user_indices) - n} 轮（{folded} 条消息）", classes="meta", markup=False))
 
         agent_named = False   # 一个用户轮只挂一次 CTGents 头（多个 assistant 循环归其下）
@@ -1402,16 +1413,30 @@ class ChatScreen(Screen):
                     agent_named = False
             elif role == "assistant":
                 reasoning = (m.get("_reasoning") or "").strip()
-                if not (content or reasoning):
-                    continue   # 纯 tool_calls 的 assistant（无文字无思考）跳过，不占位
+                tool_calls = m.get("tool_calls") or []
+                if not (content or reasoning or tool_calls):
+                    continue   # 纯中间 assistant（无文字无思考无工具）跳过，不占位
                 if not agent_named:
                     self._mount_agent_name()
                     agent_named = True
                 if reasoning:
                     self._mount_collapsed("💭 思考", reasoning)
+                for tc in tool_calls:
+                    fn = tc.get("function", {})
+                    name = fn.get("name", "")
+                    try:
+                        args = json.loads(fn.get("arguments", "{}"))
+                    except Exception:
+                        args = {}
+                    label, detail = _fmt_tool(name, args)
+                    t.mount(Label(f"✓ {label}  {detail}".rstrip(), classes="tool-call", markup=False))
                 if content:
                     t.mount(Markdown(content, classes="msg-body"))
                     t.scroll_end(animate=False)
+            elif role == "tool":
+                result = m.get("content", "")
+                renderable, _ = self._render_result(result)
+                t.mount(Static(renderable, classes="tool-result", markup=False))
         t.scroll_end(animate=False)
 
     def _mount_collapsed(self, title: str, body: str) -> None:
@@ -1448,7 +1473,7 @@ class ChatScreen(Screen):
                     dot = "●" if int(time.monotonic() * 2) % 2 == 0 else "○"
                     elapsed = time.monotonic() - self._turn_started
                     tool_info = f"  │  {self._current_tool}" if self._current_tool else ""
-                    tool_count = f"  🛠×{len(self._cur_tool_calls)}" if self._cur_tool_calls else ""
+                    tool_count = f"  🛠×{len(self._pending_tool_labels)}" if self._pending_tool_labels else ""
                     line = f"[yellow]{dot}[/]  思考中 {elapsed:.0f}s{tool_count}{tool_info}  │  {line}"
                 status.remove_class("interrupted")
             elif self._interrupted:
