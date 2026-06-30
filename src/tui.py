@@ -643,7 +643,7 @@ class ChatScreen(Screen):
     #taskpanel.hidden { display: none; }
     /* ── @ 文件补全下拉（输入框上方）── */
     #ac_popup {
-        height: auto; max-height: 10; padding: 0 1;
+        height: auto; max-height: 14; padding: 0 1;
         background: $panel; border: round $primary-darken-1;
     }
     #ac_popup.hidden { display: none; }
@@ -685,6 +685,7 @@ class ChatScreen(Screen):
     # 否则长回复时每帧重解析整段 markdown(33fps×越来越长)→ 越往后越卡。收尾必全渲。
     _LIVE_RENDER_INTERVAL = 0.10
     _SPINNER = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"   # 运行中工具行的转圈帧（10fps 循环）
+    _AC_WINDOW = 10              # @ 文件补全下拉每屏可见行数（其余靠 ↑↓ 滑动）
 
     def __init__(self) -> None:
         super().__init__()
@@ -802,7 +803,7 @@ class ChatScreen(Screen):
             matches.sort(key=lambda f: (pl not in Path(f).name.lower(), len(f)))
         else:
             matches = files
-        self._ac_options = matches[:10]
+        self._ac_options = matches[:50]   # 存全部匹配（上限 50），渲染时窗口化
         if not self._ac_options:
             self._ac_hide()
             return
@@ -814,13 +815,23 @@ class ChatScreen(Screen):
         with contextlib.suppress(Exception):
             from rich.text import Text
             popup = self.query_one("#ac_popup", Static)
+            opts = self._ac_options
+            n = len(opts)
+            win = self._AC_WINDOW
+            # 滑动窗口：让选中项尽量居中，到头/到尾贴边
+            start = 0 if n <= win else max(0, min(self._ac_index - win // 2, n - win))
+            end = min(n, start + win)
             t = Text()
-            for i, path in enumerate(self._ac_options):
+            if start > 0:
+                t.append(f"  ↑ 还有 {start} 个\n", style="dim")
+            for i in range(start, end):
                 sel = i == self._ac_index
-                line = ("▶ " if sel else "  ") + path
-                if i:
+                t.append(("▶ " if sel else "  ") + opts[i],
+                         style="bold #d4875e" if sel else "dim")
+                if i < end - 1:
                     t.append("\n")
-                t.append(line, style="bold #d4875e" if sel else "dim")
+            if end < n:
+                t.append(f"\n  ↓ 还有 {n - end} 个", style="dim")
             popup.update(t)
             popup.remove_class("hidden")
 

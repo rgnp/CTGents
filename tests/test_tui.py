@@ -393,6 +393,29 @@ class TestChatScreen:
 
         asyncio.run(go())
 
+    def test_at_file_autocomplete_windows_many(self, monkeypatch):
+        """匹配数 > 一屏 → 窗口化，↓ 滑动，显示『还有 N 个』。"""
+        async def go():
+            app = self._fresh_chat_app()
+            async with app.run_test() as pilot:
+                await self._enter_chat(app, pilot)
+                s = app.screen
+                s._ac_files_cache = [f"src/mod{i:02d}.py" for i in range(30)]  # 30 个都含 mod
+                popup = s.query_one("#ac_popup")
+                prompt = s.query_one("#prompt")
+                prompt.text = "@mod"
+                s._ac_update(prompt.text)
+                await pilot.pause()
+                assert len(s._ac_options) == 30        # 存全部（≤50），不再只 10
+                first = str(popup.render())
+                assert "↓ 还有" in first and "↑ 还有" not in first  # 在顶部，只有下方更多
+                for _ in range(29):                    # 一路 ↓ 到底
+                    s._ac_consume_key("down")
+                assert s._ac_index == 29
+                assert "↑ 还有" in str(popup.render())  # 滑到底，上方有更多
+
+        asyncio.run(go())
+
     def test_interrupt_soft_then_terminate(self, monkeypatch):
         """Esc(运行中)=软中断置 pending → 本轮 done 进中断态(断点线+状态栏) → 再 Esc=终止。"""
         async def go():
