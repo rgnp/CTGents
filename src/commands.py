@@ -66,6 +66,19 @@ def builtin_multi(names: list[str], description: str = "", usage: str = ""):
         return fn
     return deco
 
+
+def command_completions() -> list[tuple[str, str]]:
+    """[(主名, 描述)] 去重列表（同 handler 的别名合并、取首个），供 TUI / 命令补全下拉用。"""
+    seen: set[int] = set()
+    out: list[tuple[str, str]] = []
+    for cmd in _registry:
+        hid = id(cmd.handler)
+        if hid in seen:
+            continue
+        seen.add(hid)
+        out.append((cmd.name, cmd.description))
+    return out
+
 # ═══════════════════════════════════════════════════════════════
 # 内置指令
 # ═══════════════════════════════════════════════════════════════

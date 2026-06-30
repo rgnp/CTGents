@@ -722,11 +722,13 @@ class ChatScreen(Screen):
         self._last_md_render: float = 0.0       # 流式 markdown 上次重渲时刻（节流）
         self._last_reason_render: float = 0.0   # 思考流上次重渲时刻（节流）
         self._pending_marker: Static | None = None  # 首 token 前的"思考中…"占位
-        # @ 文件补全状态
+        # 输入补全状态（@ 文件 / 命令两种模式共用一套下拉）
         self._ac_active = False
-        self._ac_options: list[str] = []
+        self._ac_mode = "file"            # "file" | "cmd"
+        self._ac_options: list[str] = []  # 选中后插入的值（文件路径 / 命令名）
+        self._ac_labels: list[str] = []   # 下拉显示文本（命令模式带描述）
         self._ac_index = 0
-        self._ac_at_pos = 0               # 当前 @ 在输入文本中的起始位置
+        self._ac_at_pos = 0               # 文件模式：当前 @ 在输入文本中的起始位置
         self._ac_files_cache: list[str] | None = None
     # ── 布局 ──
     def compose(self) -> ComposeResult:
@@ -786,8 +788,12 @@ class ChatScreen(Screen):
         return self._ac_files_cache
 
     def _ac_update(self, text: str) -> None:
-        """根据输入末尾的 @<partial> 刷新补全下拉；无则隐藏。"""
+        """刷新补全下拉：整条以 / 开头且无空格 → 命令补全；末尾 @<partial> → 文件补全；否则隐藏。"""
         import re
+        mcmd = re.match(r'^/(\S*)$', text)
+        if mcmd is not None:
+            self._ac_show_commands(mcmd.group(1))
+            return
         m = re.search(r'(?:^|\s)@([^\s@]*)$', text)
         if m is None:
             if self._ac_active:
@@ -803,10 +809,31 @@ class ChatScreen(Screen):
             matches.sort(key=lambda f: (pl not in Path(f).name.lower(), len(f)))
         else:
             matches = files
-        self._ac_options = matches[:50]   # 存全部匹配（上限 50），渲染时窗口化
-        if not self._ac_options:
+        opts = matches[:50]               # 存全部匹配（上限 50），渲染时窗口化
+        if not opts:
             self._ac_hide()
             return
+        self._ac_mode = "file"
+        self._ac_options = opts
+        self._ac_labels = opts
+        self._ac_index = 0
+        self._ac_active = True
+        self._render_ac()
+
+    def _ac_show_commands(self, partial: str) -> None:
+        """命令补全：按前缀匹配（去别名）的命令名 + 描述。"""
+        from .commands import command_completions
+        pl = partial.lower()
+        matches = [(name, desc) for name, desc in command_completions()
+                   if name.lstrip("/").lower().startswith(pl)]
+        matches.sort(key=lambda nd: nd[0])
+        if not matches:
+            self._ac_hide()
+            return
+        self._ac_mode = "cmd"
+        self._ac_at_pos = 0
+        self._ac_options = [name for name, _ in matches[:50]]
+        self._ac_labels = [f"{name}  {desc}" if desc else name for name, desc in matches[:50]]
         self._ac_index = 0
         self._ac_active = True
         self._render_ac()
@@ -815,7 +842,7 @@ class ChatScreen(Screen):
         with contextlib.suppress(Exception):
             from rich.text import Text
             popup = self.query_one("#ac_popup", Static)
-            opts = self._ac_options
+            opts = self._ac_labels
             n = len(opts)
             win = self._AC_WINDOW
             # 滑动窗口：让选中项尽量居中，到头/到尾贴边
@@ -838,6 +865,7 @@ class ChatScreen(Screen):
     def _ac_hide(self) -> None:
         self._ac_active = False
         self._ac_options = []
+        self._ac_labels = []
         with contextlib.suppress(Exception):
             popup = self.query_one("#ac_popup", Static)
             popup.add_class("hidden")
@@ -862,13 +890,16 @@ class ChatScreen(Screen):
         return True
 
     def _ac_accept(self) -> None:
-        """把选中的文件路径插回输入框：替换末尾的 @<partial> 为 @<path> + 空格。"""
+        """把选中项插回输入框：命令模式整条换成 /命令 ；文件模式替换末尾 @<partial> 为 @<path>。"""
         if not self._ac_options:
             return
         chosen = self._ac_options[self._ac_index]
         with contextlib.suppress(Exception):
             ta = self.query_one("#prompt", TextArea)
-            ta.text = ta.text[:self._ac_at_pos] + f"@{chosen} "
+            if self._ac_mode == "cmd":
+                ta.text = chosen + " "
+            else:
+                ta.text = ta.text[:self._ac_at_pos] + f"@{chosen} "
             ta.move_cursor(ta.document.end)
         self._ac_hide()
 
@@ -899,9 +930,13 @@ class ChatScreen(Screen):
             return
         if not ta.has_focus:
             return
-        if self._ac_active:           # @ 补全激活：Enter = 接受选中项，不提交本轮
-            self._ac_accept()
-            return
+        if self._ac_active:
+            # 命令模式下已是完整命令名 → Enter 直接运行；否则（部分输入/文件模式）补全
+            if self._ac_mode == "cmd" and ta.text.strip() in self._ac_options:
+                self._ac_hide()
+            else:
+                self._ac_accept()
+                return
         text = ta.text.strip()
         # 中断态：回车 = 继续被打断的事（不管带不带指示都算"继续"，统一走 resume）。
         # 带指示 → 接着做并按指示调整；不带 → 纯暂停再续。两者都不开新话题、不读任务状态。

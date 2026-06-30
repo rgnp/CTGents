@@ -393,6 +393,30 @@ class TestChatScreen:
 
         asyncio.run(go())
 
+    def test_slash_command_autocomplete(self, monkeypatch):
+        """打 / → 命令补全下拉(带描述)；接受 → 回填 /命令 ；完整命令名时 Enter 直接运行。"""
+        async def go():
+            app = self._fresh_chat_app()
+            async with app.run_test() as pilot:
+                await self._enter_chat(app, pilot)
+                s = app.screen
+                prompt = s.query_one("#prompt")
+                prompt.text = "/he"
+                s._ac_update(prompt.text)
+                await pilot.pause()
+                assert s._ac_active and s._ac_mode == "cmd"
+                assert "/help" in s._ac_options                       # 前缀匹配
+                assert any(lbl.startswith("/help ") for lbl in s._ac_labels)  # 标签带描述
+                s._ac_index = s._ac_options.index("/help")
+                s._ac_accept()
+                assert prompt.text == "/help " and not s._ac_active   # 回填 + 关闭
+                # 纯 / → 列全部命令
+                prompt.text = "/"
+                s._ac_update(prompt.text)
+                assert s._ac_active and len(s._ac_options) > 3
+
+        asyncio.run(go())
+
     def test_at_file_autocomplete_windows_many(self, monkeypatch):
         """匹配数 > 一屏 → 窗口化，↓ 滑动，显示『还有 N 个』。"""
         async def go():
