@@ -364,6 +364,35 @@ class TestChatScreen:
 
         asyncio.run(go())
 
+    def test_at_file_autocomplete(self, monkeypatch):
+        """输入 @partial → 弹出匹配文件下拉；接受 → 回填 @path；无 @ → 隐藏。"""
+        async def go():
+            app = self._fresh_chat_app()
+            async with app.run_test() as pilot:
+                await self._enter_chat(app, pilot)
+                s = app.screen
+                s._ac_files_cache = ["src/tui.py", "src/tasks.py", "README.md"]  # 受控列表
+                popup = s.query_one("#ac_popup")
+                prompt = s.query_one("#prompt")
+                prompt.text = "看 @t"
+                s._ac_update(prompt.text)
+                await pilot.pause()
+                assert s._ac_active and not popup.has_class("hidden")
+                assert s._ac_options == ["src/tui.py", "src/tasks.py"]  # README 无 t、被排除
+                # ↓ 切换选中
+                assert s._ac_consume_key("down") and s._ac_index == 1
+                # 接受 → 回填 @选中路径 + 空格，关闭下拉
+                s._ac_index = 0
+                s._ac_accept()
+                assert prompt.text.startswith("看 @src/tui.py ")
+                assert not s._ac_active and popup.has_class("hidden")
+                # 无 @ → 隐藏
+                prompt.text = "没有引用"
+                s._ac_update(prompt.text)
+                assert not s._ac_active and popup.has_class("hidden")
+
+        asyncio.run(go())
+
     def test_interrupt_soft_then_terminate(self, monkeypatch):
         """Esc(运行中)=软中断置 pending → 本轮 done 进中断态(断点线+状态栏) → 再 Esc=终止。"""
         async def go():

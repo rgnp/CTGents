@@ -596,6 +596,22 @@ class SaveSelectScreen(Screen):
 # ═══════════════════════════════════════════════════════
 # 聊天
 # ═══════════════════════════════════════════════════════
+class PromptArea(TextArea):
+    """输入框：@ 文件补全激活时，把 ↑↓/Tab/Esc 交给 ChatScreen（拦在光标移动之前）。
+
+    Enter 是 ChatScreen 的 priority 绑定、在本控件按键之前触发，故由 action_submit_prompt
+    自查补全态处理；这里只拦非 priority 的导航键。
+    """
+
+    def on_key(self, event) -> None:
+        screen = self.screen
+        if (getattr(screen, "_ac_active", False)
+                and event.key in ("up", "down", "tab", "escape")
+                and screen._ac_consume_key(event.key)):
+            event.prevent_default()
+            event.stop()
+
+
 class ChatScreen(Screen):
     CSS = """
     ChatScreen { background: $background; }
@@ -625,6 +641,12 @@ class ChatScreen(Screen):
         border-bottom: solid $primary-darken-2;
     }
     #taskpanel.hidden { display: none; }
+    /* ── @ 文件补全下拉（输入框上方）── */
+    #ac_popup {
+        height: auto; max-height: 10; padding: 0 1;
+        background: $panel; border: round $primary-darken-1;
+    }
+    #ac_popup.hidden { display: none; }
     /* ── 轮次分隔 ── */
     .turn-sep { color: $primary-darken-3; height: 1; margin: 1 0; }
     /* ── 元消息 ── */
@@ -699,14 +721,21 @@ class ChatScreen(Screen):
         self._last_md_render: float = 0.0       # 流式 markdown 上次重渲时刻（节流）
         self._last_reason_render: float = 0.0   # 思考流上次重渲时刻（节流）
         self._pending_marker: Static | None = None  # 首 token 前的"思考中…"占位
+        # @ 文件补全状态
+        self._ac_active = False
+        self._ac_options: list[str] = []
+        self._ac_index = 0
+        self._ac_at_pos = 0               # 当前 @ 在输入文本中的起始位置
+        self._ac_files_cache: list[str] | None = None
     # ── 布局 ──
     def compose(self) -> ComposeResult:
         yield Static("", id="taskpanel", classes="hidden")   # 长任务 live TODO 清单
         yield VerticalScroll(id="transcript")
         with Vertical(id="bottombar"):
-            yield TextArea(
+            yield Static("", id="ac_popup", classes="hidden")   # @ 文件补全下拉
+            yield PromptArea(
                 "",
-                placeholder="> 输入消息（/help 查看指令）",
+                placeholder="> 输入消息（/help 查看指令；@ 引用文件）",
                 id="prompt",
                 soft_wrap=True,
                 show_line_numbers=False,
@@ -725,7 +754,7 @@ class ChatScreen(Screen):
         self.set_interval(0.5, self._drain_jobs)
 
     def on_text_area_changed(self, event: TextArea.Changed) -> None:
-        """内容非空时给输入框加 has-text 样式类。"""
+        """内容非空时给输入框加 has-text 样式类 + 刷新 @ 文件补全。"""
         if event.text_area.id != "prompt":
             return
         p = self.query_one("#prompt", TextArea)
@@ -733,6 +762,104 @@ class ChatScreen(Screen):
             p.add_class("has-text")
         else:
             p.remove_class("has-text")
+        self._ac_update(p.text)
+
+    # ── @ 文件补全 ──
+    def _ac_file_list(self) -> list[str]:
+        """项目内文件相对路径列表（首次扫描后缓存）。排除 .git/__pycache__ 等噪声。"""
+        if self._ac_files_cache is None:
+            from pathlib import Path
+            root = Path.cwd()
+            ignore = {".git", "__pycache__", ".venv", "venv", "node_modules",
+                      ".pytest_cache", ".mypy_cache", ".ruff_cache"}
+            out: list[str] = []
+            with contextlib.suppress(Exception):
+                for pth in root.rglob("*"):
+                    if any(part in ignore for part in pth.parts):
+                        continue
+                    if pth.is_file():
+                        out.append(str(pth.relative_to(root)).replace("\\", "/"))
+                    if len(out) >= 4000:
+                        break
+            self._ac_files_cache = sorted(out)
+        return self._ac_files_cache
+
+    def _ac_update(self, text: str) -> None:
+        """根据输入末尾的 @<partial> 刷新补全下拉；无则隐藏。"""
+        import re
+        m = re.search(r'(?:^|\s)@([^\s@]*)$', text)
+        if m is None:
+            if self._ac_active:
+                self._ac_hide()
+            return
+        partial = m.group(1)
+        self._ac_at_pos = m.start() + (0 if text[m.start()] == "@" else 1)
+        files = self._ac_file_list()
+        pl = partial.lower()
+        if pl:
+            from pathlib import Path
+            matches = [f for f in files if pl in f.lower()]
+            matches.sort(key=lambda f: (pl not in Path(f).name.lower(), len(f)))
+        else:
+            matches = files
+        self._ac_options = matches[:10]
+        if not self._ac_options:
+            self._ac_hide()
+            return
+        self._ac_index = 0
+        self._ac_active = True
+        self._render_ac()
+
+    def _render_ac(self) -> None:
+        with contextlib.suppress(Exception):
+            from rich.text import Text
+            popup = self.query_one("#ac_popup", Static)
+            t = Text()
+            for i, path in enumerate(self._ac_options):
+                sel = i == self._ac_index
+                line = ("▶ " if sel else "  ") + path
+                if i:
+                    t.append("\n")
+                t.append(line, style="bold #d4875e" if sel else "dim")
+            popup.update(t)
+            popup.remove_class("hidden")
+
+    def _ac_hide(self) -> None:
+        self._ac_active = False
+        self._ac_options = []
+        with contextlib.suppress(Exception):
+            popup = self.query_one("#ac_popup", Static)
+            popup.add_class("hidden")
+            popup.update("")
+
+    def _ac_consume_key(self, key: str) -> bool:
+        """补全激活时处理导航键（PromptArea.on_key 调用）。返回 True=已消费。"""
+        if not self._ac_active:
+            return False
+        if key == "down":
+            self._ac_index = (self._ac_index + 1) % len(self._ac_options)
+            self._render_ac()
+        elif key == "up":
+            self._ac_index = (self._ac_index - 1) % len(self._ac_options)
+            self._render_ac()
+        elif key == "tab":
+            self._ac_accept()
+        elif key == "escape":
+            self._ac_hide()
+        else:
+            return False
+        return True
+
+    def _ac_accept(self) -> None:
+        """把选中的文件路径插回输入框：替换末尾的 @<partial> 为 @<path> + 空格。"""
+        if not self._ac_options:
+            return
+        chosen = self._ac_options[self._ac_index]
+        with contextlib.suppress(Exception):
+            ta = self.query_one("#prompt", TextArea)
+            ta.text = ta.text[:self._ac_at_pos] + f"@{chosen} "
+            ta.move_cursor(ta.document.end)
+        self._ac_hide()
 
     def _load_pending(self) -> None:
         """进聊天屏时按存档选择结果加载会话（NEW=不加载，沿用 splash 初始化的空会话）。"""
@@ -760,6 +887,9 @@ class ChatScreen(Screen):
         except Exception:
             return
         if not ta.has_focus:
+            return
+        if self._ac_active:           # @ 补全激活：Enter = 接受选中项，不提交本轮
+            self._ac_accept()
             return
         text = ta.text.strip()
         # 中断态：回车 = 继续被打断的事（不管带不带指示都算"继续"，统一走 resume）。
@@ -1319,6 +1449,9 @@ class ChatScreen(Screen):
 
     # ── 动作 ──
     def action_interrupt(self) -> None:
+        if self._ac_active:           # @ 补全激活：Esc = 关下拉，不中断本轮
+            self._ac_hide()
+            return
         # 截停中再按 Esc → 升级为强制终止：不等 LLM yield，done 时直接终止。
         if self._interrupt_pending and self._busy:
             self._hard_kill = True
