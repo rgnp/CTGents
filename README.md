@@ -86,7 +86,6 @@ python src/main.py                # 启动（自动检测 TUI/行式 REPL）
 ```
 用户输入 → _drive_turn（LLM 调用 + 工具循环）
          → 若推进了任务则 run_task_continuation（自主续跑后续步骤）
-         → _run_post_turn_audits（④可信审计：谎报完成/绕提交门/质量缺失）
          → 落盘会话 + 冻结前缀
 ```
 
@@ -185,7 +184,7 @@ src/
 ├── tui.py                # Textual 全屏 TUI（默认界面）
 ├── status_bar.py         # 底部状态条
 ├── psyche_bridge.py      # Psyche 注入/卸载
-├── session_pins.py       # 会话关键约束持久化
+├── session.py            # 会话 JSON 持久化 + 冻结前缀存盘
 ├── organs.py             # 器官生命体征
 ├── params.py             # 所有可调行为旋钮
 └── config.py             # 密钥/模型/路径 + MultiKeyTavilyClient

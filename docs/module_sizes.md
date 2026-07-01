@@ -1,6 +1,8 @@
 # src/ 模块规模盘点
 
 > 生成时间: 2026-06-13 | 总文件: 48 | 总行数: 16,180
+> ⚠️ 手工快照，非自动生成，可能已过时——已删除的模块行已摘除（2026-07-01），
+> 行数/总计未重新统计，仅供大致参考，精确状态以代码本身为准。
 
 ## Top 5 最大文件
 
@@ -43,19 +45,16 @@
 | `src/tools/_tool_meta.py` | 163 | 工具元数据派生（唯一真相源） |
 | `src/tools/tool_guard.py` | 162 | 工具调用边界防护 |
 | `src/tools/storm.py` | 157 | 工具调用去重 + 结果缓存 |
-| `src/citation_audit.py` | 128 | 引用取证审计 |
+| `src/citation_audit.py` | 128 | 引用取证审计（⚠️ 无调用点，死代码，待定删除/重新接线） |
 | `src/tools/paper.py` | 120 | 论文分析/卡片生成 |
-| `src/session_pins.py` | 119 | 会话钉板 |
 | `src/config.py` | 108 | 配置中心：密钥/模型/路径 |
 | `src/tools/learn.py` | 100 | learn 工具 |
 | `src/task_loop.py` | 88 | 长任务自主续跑驱动 |
-| `src/completion_audit.py` | 86 | 收尾取证自检 |
 | `src/session.py` | 85 | 会话持久化存储 |
 | `src/tools/tokens.py` | 81 | Token 计数工具 |
 | `src/guard.py` | 69 | 自我修改分级表（三层安全模型） |
 | `src/tools/code.py` | 68 | 代码分析工具 |
 | `src/gate_audit.py` | 62 | 覆盖率门禁审计 |
-| `src/tools/pin.py` | 58 | pin/unpin 工具实现 |
 | `src/tools/analyzer_tool.py` | 50 | analyze_code 工具 |
 | `src/tools/think.py` | 34 | think 工具 |
 | `src/__init__.py` | 0 | 包标记（空文件） |

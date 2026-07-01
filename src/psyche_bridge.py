@@ -1,7 +1,13 @@
 """Psyche 上下文注入桥。
 
-把 psyche 核心认知框架注入到对话上下文的 log 中（position 0，紧接 prefix 之后），
-作为固定系统消息发送给 API。卸载时移除。
+把 psyche 核心认知框架注入到对话上下文的 log 末尾（append，不插队），作为系统消息
+发送给 API。卸载时移除。
+
+⚠️ 必须 append 到 log 末尾，不能 insert(0)：insert(0) 会让此前所有 log 消息的字节
+偏移，等同 docs/cache-design.md 记录的历史"缓存毒药"问题（当年 insert(0, env_message)
+致 DeepSeek 前缀缓存 100% 失效，三段式重构才修好）。mid-conversation 加载 psyche 时
+若插到最前面，会让此前积累的整段对话瞬间失去缓存命中——append 到尾部才是唯一的
+cache-safe 写法（也更符合"尾部靠 recency 影响行为"的经验）。
 
 用法（通过 commands.py 的 /psyche 指令触发，不在子进程跑）：
     inject_psyche(ctx, "software-development")   # 读核心 + 注入
@@ -31,8 +37,25 @@ def loaded_psyches_in_log(ctx: CacheContext) -> list[dict]:
     return result
 
 
+def resync_system_context(ctx: CacheContext) -> None:
+    """切会话（/load）后重新同步 system_context 注册表，使其匹配 ctx.log 里实际的 psyche。
+
+    system_context._registry 是模块级全局、不属于某个会话。/load 直接用 ctx.log.extend()
+    灌入磁盘消息，不经过 inject_psyche，注册表不会自动更新——不重置会残留上一个会话的
+    psyche key（self 工具的自知状态读 loaded_keys()，因此报出假数据）；只 reset() 不重新
+    登记，又会丢失新加载会话里本来就有的 psyche。两步都要做。
+    """
+    from . import system_context
+    system_context.reset()
+    for meta in loaded_psyches_in_log(ctx):
+        system_context.register(system_context.Source(
+            key=f"psyche/{meta.get('name')}",
+            snapshot=meta.get("version", "?"),
+        ))
+
+
 def inject_psyche(ctx: CacheContext, name: str) -> str:
-    """读取 psyche 核心文件，注入 ctx.log position 0。
+    """读取 psyche 核心文件，append 到 ctx.log 末尾。
 
     Args:
         ctx: CacheContext 实例
@@ -87,48 +110,13 @@ def inject_psyche(ctx: CacheContext, name: str) -> str:
     ))
 
 
-    ctx.log.insert(0, system_msg)
-
-    # ── 自动加载子 Psyche（父加载时自动带上常用的子） ──
-    _auto_load_subs(ctx, name)
+    ctx.log.append(system_msg)
 
     return (
         f"✅ 已注入 psyche「{name}」v{version or '?'}"
         f"（{coverage or '覆盖精度未知'}）。"
-        f"位置固定，不影响前缀缓存。"
+        f"追加在对话末尾，不破坏 append-only 缓存。"
     )
-
-
-
-# ── 自动加载映射：父 Psyche → [子 Psyche 列表]
-_AUTO_LOAD_SUBS: dict[str, list[str]] = {
-    "psyche-building": ["learning-method"],
-}
-
-
-def _auto_load_subs(ctx: CacheContext, name: str) -> None:
-    """父 Psyche 加载后自动注入其常用子 Psyche。
-
-    只在子 Psyche 尚未加载时注入，不重复加载。
-    """
-    subs = _AUTO_LOAD_SUBS.get(name)
-    if not subs:
-        return
-    for sub_name in subs:
-        existing = loaded_psyches_in_log(ctx)
-        if any(meta.get("name") == sub_name for meta in existing):
-            continue
-        inject_psyche(ctx, sub_name)
-
-
-
-def _auto_remove_subs(ctx: CacheContext, name: str) -> None:
-    """父 Psyche 卸载时自动移除其自动加载的子 Psyche。"""
-    subs = _AUTO_LOAD_SUBS.get(name)
-    if not subs:
-        return
-    for sub_name in subs:
-        remove_psyche(ctx, sub_name)
 
 
 def remove_psyche(ctx: CacheContext, name: str) -> str:
@@ -150,8 +138,6 @@ def remove_psyche(ctx: CacheContext, name: str) -> str:
                 "_system_context": f"psyche/{name}",
             },
         )
-        # ── 自动移除子 Psyche ──
-        _auto_remove_subs(ctx, name)
         return f"✅ 已卸载 psyche「{name}」（移除了 {removed} 条系统消息，自律检查已更新）。"
     return f"⚠️ 未找到已加载的 psyche「{name}」。可用 /psyche list 查看。"
 
@@ -237,45 +223,7 @@ def _top_level_psyche_names() -> list[str]:
     return names
 
 
-def _trigger_keywords(name: str) -> list[str]:
-    """读 psyche 核心 meta 块的「触发词」行 → 关键词列表。未声明则返回空（不参与自动加载）。"""
-    core = _find_core_file(name)
-    if not core:
-        return []
-    try:
-        with open(core, encoding="utf-8") as f:
-            raw = _extract_meta(f.read(), "触发词")
-    except Exception:
-        return []
-    return [k.strip() for k in re.split(r"[,，、]", raw) if k.strip()]
-
-
-def detect_psyches_for(text: str) -> list[str]:
-    """按触发词匹配 → 返回所有命中的顶层 psyche，按命中数降序（无命中=空 list）。
-
-    多选（2026-06-25）：方法论 psyche（research）与领域 psyche（autonomous-driving）该**叠加**——
-    "这个自动驾驶方向值不值得投顶会" 需要领域知识 + 怎么找方向两层，单选会丢一层（旧版只取
-    命中最多的一个）。关键词来源是各 psyche 自己核心的「触发词」（psyche 进化随之演进），
-    大小写不敏感、子串命中。
-
-    ⚠️ 临时硬关键词 v1：换种说法（"占用栅格"vs occupancy）或领域词入别的语境会漏/误载。
-    research 触发词特意只收**学术强信号**（选题/投稿/顶会/CVPR…），不收 "方向/调研/gap" 这类
-    通用词——否则写代码说"方向"会误载科研 psyche。计划换语义路由（embedding 相似度、复用 RAG
-    向量、零额外调用）；换时整体替掉本函数即可，调用点 maybe_autoload 不动。
-    """
-    if not text:
-        return []
-    low = text.lower()
-    scored: list[tuple[int, str]] = []
-    for name in _top_level_psyche_names():
-        hits = sum(1 for kw in _trigger_keywords(name) if kw.lower() in low)
-        if hits > 0:
-            scored.append((hits, name))
-    scored.sort(key=lambda x: (-x[0], x[1]))
-    return [name for _, name in scored]
-
-
-# 通用人格：不分领域、每会话常驻注入（log-0），领域 psyche 在其上叠加。
+# 通用人格：不分领域、每会话常驻注入（会话首轮 log 为空时 append，等效于最前面），领域 psyche 在其上叠加。
 # 实验（2026-06-24）：AGENTS.md 的 <bias>+<tone> 改写成第一人称人格搬到这里，从前缀删除——
 # 测"通用姿态写成人格 vs 写成前缀规则"哪个真改行为（领域 psyche 起效是形式还是内容的隔离实验）。
 _BASE_PSYCHE = "general"
@@ -294,21 +242,6 @@ def ensure_base_psyche(ctx: CacheContext) -> str | None:
     if any(meta.get("name") == _BASE_PSYCHE for meta in loaded_psyches_in_log(ctx)):
         return None
     return inject_psyche(ctx, _BASE_PSYCHE)
-
-
-def maybe_autoload_psyche(ctx: CacheContext, text: str) -> str | None:
-    """开局钩子：用户输入命中 psyche 触发词且未加载 → 自动注入（命中几个加载几个）。
-
-    返回合并提示或 None。把"该不该加载 psyche"从 AGENTS.md 那条 inert 的前缀散文（实测从不
-    触发）挪到这条会真触发的开局检测通道。多选：方法论 + 领域可同时叠加（见 detect_psyches_for）。
-    CTG_PSYCHE_AUTOLOAD=0 可关闭（测试/排查用）。
-    """
-    if os.environ.get("CTG_PSYCHE_AUTOLOAD", "1") == "0":
-        return None
-    loaded = {meta.get("name") for meta in loaded_psyches_in_log(ctx)}
-    notes = [inject_psyche(ctx, name)
-             for name in detect_psyches_for(text) if name not in loaded]
-    return "\n".join(notes) if notes else None
 
 
 def _list_available() -> str:

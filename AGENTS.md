@@ -41,5 +41,6 @@ CTGents——自进化的编程 + 科研助手。
   tool_guard: 改文件限工作目录、读后才能写、禁 git add -A、禁 force-push main/master
   不可变安全核: guard.py / tool_guard / gate_audit / pre-commit 拒写
   pre-commit: 密钥扫描 + ruff 强制，pytest 不进提交门
-  轮末审计: completion / gate / quality 给事实提示，判断仍归我
+  轮末审计: 已整体移除(2026-06-25)，现在轮末不跑任何审计
+  gate_audit: 仅会话首轮核对一次 HEAD 树是否绕过质量门，非轮末
 </guards>

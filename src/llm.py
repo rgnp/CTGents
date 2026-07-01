@@ -878,11 +878,16 @@ def _invoke_llm_eager(
 
     pre_results: dict[int, str] = {}
     pending: list[tuple[int, Future[str], str, dict]] = []
+    # 跨重试持久（不在 except 分支清空）：流式中途失败会重试，若模型对同一个 (name, args)
+    # 重新吐出 tool_calls，靠这张表复用上次已经真实提交的 future，不重复调用副作用工具
+    # （之前 pending/submit 每次重试都清空重来，orphaned future 仍在后台跑、结果被静默丢弃，
+    # 随后正常执行路径又把同一个调用再打一次——外部 API 被打两次）。
+    submitted: dict[tuple[str, str], Future[str]] = {}
     lock = threading.Lock()
     executor = _get_eager_executor()
 
     def on_tool_ready(idx: int, name: str, args_json: str) -> None:
-        """流式线程回调：参数完整 → 若是 SAFE 工具，立即提交执行。"""
+        """流式线程回调：参数完整 → 若是 SAFE 工具，立即提交执行（同一调用跨重试只提交一次）。"""
         # poll 是阻塞的时变读：预跑它占线程 + 刷屏、且省不了延迟（后台作业已改为完成
         # 自动通知、不靠 poll）。其余 parallel-safe 读照常 eager。
         if name not in _PARALLEL_SAFE or name == "poll":
@@ -891,11 +896,15 @@ def _invoke_llm_eager(
             args = json.loads(args_json)
         except json.JSONDecodeError:
             return
-        tc = SimpleNamespace(function=SimpleNamespace(name=name, arguments=args_json))
-        fut = executor.submit(_tracked_execute_tool, tc)
+        key = (name, args_json)
         with lock:
+            fut = submitted.get(key)
+            if fut is None:
+                tc = SimpleNamespace(function=SimpleNamespace(name=name, arguments=args_json))
+                fut = executor.submit(_tracked_execute_tool, tc)
+                submitted[key] = fut
+                print(f"  ⚡ [Eager] {name}({args_json[:60]}...) 已提交（流未结束）")
             pending.append((idx, fut, name, args))
-        print(f"  ⚡ [Eager] {name}({args_json[:60]}...) 已提交（流未结束）")
 
     for attempt in range(1, MAX_RETRIES + 1):
         try:
@@ -906,6 +915,17 @@ def _invoke_llm_eager(
 
             # ── 收集 eager 结果 ──
             _collect_eager_results(pending, pre_results, lock)
+
+            # 重试后最终拿到的 tool_calls（可能来自非流式降级，不再走 on_tool_ready）里，
+            # 若某条命中此前已提交的 orphaned future，复用其结果，不留给正常执行路径重打一次。
+            if tool_calls:
+                for i, tc_data in enumerate(tool_calls):
+                    if i in pre_results:
+                        continue
+                    fn = tc_data.get("function", {})
+                    fut = submitted.get((fn.get("name"), fn.get("arguments")))
+                    if fut is not None:
+                        pre_results[i] = fut.result(timeout=30)
 
             if track_stats:
                 _update_cache_stats(model_key, messages, session_id)
@@ -1060,9 +1080,19 @@ def _compress_tool_result(tool_name: str, result: str) -> str:
 _COMPACT_KEEP_RATIO = CONTEXT.compact_keep_ratio        # 压缩后保留最近 N% 消息
 _COMPACT_REARM_GROWTH = CONTEXT.compact_rearm_growth    # 防抖后用量再涨 MAX 此比例 → 重新武装
 # ── 压缩防抖状态 ──
+# 模块级而非挂在 CacheContext 上：/new /load 切会话必须重置，否则旧会话攒的防抖锁
+# 会原样带进新会话，导致新会话的压缩被静默跳过。见 reset_compaction_state。
 _previous_summary: str | None = None          # 上次压缩的摘要，供迭代更新
 _ineffective_compression_count: int = 0       # 连续低效压缩计数
 _compact_skip_floor: int = 0                  # 防抖触发时的 used 水位；超它 _COMPACT_REARM_GROWTH 即重试
+
+
+def reset_compaction_state() -> None:
+    """切会话（/new /load）时调用：清空压缩防抖状态，避免旧会话的锁带进新会话。"""
+    global _previous_summary, _ineffective_compression_count, _compact_skip_floor
+    _previous_summary = None
+    _ineffective_compression_count = 0
+    _compact_skip_floor = 0
 
 
 
@@ -1123,7 +1153,7 @@ def _compact_cache_context(ctx, user_input: str, force: bool = False) -> None:
 
     evicted = log[:keep_start]
     kept = log[keep_start:]
-    # 抢救被驱逐区里已加载的 psyche：它由 load_psyche 插在 log[0]（最旧），落在驱逐区，
+    # 抢救被驱逐区里已加载的 psyche：加载时 append 在尾部，但会话足够长后仍可能滚进驱逐区，
     # 若被摘要掉 = 悄悄卸载 agent 主动加载的认知框架。原样搬到新 log 顶部、不进摘要。
     rescued = [m for m in evicted if m.get("_psyche_meta")]
     to_summarize = [m for m in evicted if not m.get("_psyche_meta")]
@@ -1554,14 +1584,17 @@ def _check_storm_breaker(
 
 
 def _build_failure_signature(approved: list[tuple]) -> str | None:
-    """如果所有工具结果都包含 error，返回签名；否则返回 None。"""
+    """从本批失败的工具调用构建签名（忽略同批里成功的调用）；批内没有失败则返回 None。
+
+    之前要求整批全部失败才返回签名——SAFE 工具常被并行打包，一个必错调用只要跟任意
+    一个成功调用同批，签名就整体判 None，storm_count 被清零，死循环检测形同虚设。
+    """
     sig_parts: list[str] = []
     for _item in approved:
         tool_name = _item[1]
         err_line = _extract_error_line(_item[4])
-        if err_line is None:
-            return None
-        sig_parts.append(f"{tool_name}:{err_line}")
+        if err_line is not None:
+            sig_parts.append(f"{tool_name}:{err_line}")
     return "|".join(sig_parts) if sig_parts else None
 
 
@@ -1584,17 +1617,25 @@ def _track_storm(cur_sig: str, storm_sig: str | None, storm_count: int) -> tuple
 
 
 def _inject_loop_guard(approved: list[tuple], storm_count: int) -> None:
-    """在最后一条 approved 结果中注入 loop guard 警告。"""
-    last = approved[-1]
+    """在批内最后一条**真正失败**的结果上注入 loop guard 警告。
+
+    不能无脑用 approved[-1]：signature 现在允许成功/失败混批（见 _build_failure_signature），
+    批里最后一条完全可能是刚成功的调用——警告挂在它身上会误报"这个工具连续失败"。
+    """
+    fail_idx = next((i for i in range(len(approved) - 1, -1, -1)
+                      if _extract_error_line(approved[i][4]) is not None), None)
+    if fail_idx is None:
+        return
+    target = approved[fail_idx]
     warn = (
-        f"\n\n[loop guard] '{last[1]}' 已连续失败 {storm_count} 次"
+        f"\n\n[loop guard] '{target[1]}' 已连续失败 {storm_count} 次"
         f"且错误相同。重复发送——即使换了措辞——也不会有帮助。换方法："
         f"如果参数被截断，拆成多个小调用；"
         f"否则修正参数、换工具、或在最终回复中说明障碍。"
     )
-    last_result = last[4] + warn
-    approved[-1] = (last[0], last[1], last[2], last[3], last_result)
-    logger.warning("stormBreaker: %s 连续失败 %d 次，已注入 loop guard", last[1], storm_count)
+    new_result = target[4] + warn
+    approved[fail_idx] = (target[0], target[1], target[2], target[3], new_result)
+    logger.warning("stormBreaker: %s 连续失败 %d 次，已注入 loop guard", target[1], storm_count)
 
 
 def _detect_control_signal(tool_calls: list[dict]) -> tuple[str, str] | None:
@@ -1856,11 +1897,12 @@ def run_conversation(
         })
 
 
-    # ── System Context reconcile：自律检查 + 生命周期管理 ──
-    _reconcile_system_context(ctx)
-
-
     while True:
+        # ── System Context reconcile：自律检查 + 生命周期管理 ──
+        # 挂在循环内而非只在入口跑一次：工具循环中途若 load_psyche（_handle_psyche_tools
+        # 在 _handle_tool_results 里随时可能触发），新登记的自律检查本轮内就能推送，不用
+        # 等到下一次外部调用 run_conversation（下一用户回合/续跑下一步）才刷新。
+        _reconcile_system_context(ctx)
         if requests_made >= _MAX_REQUESTS_PER_TURN:
             # 经 on_token 显式吐出停因——否则这条 return 被 _drive_turn 忽略、用户只看到
             # 回复戛然而止、不知为何停。长任务里这是"本步到顶、续跑下一步新预算接力"，非失败。

@@ -1013,8 +1013,12 @@ class ChatScreen(Screen):
         self.app.session_id = target
         self.app.final_session_id = target
         from . import status_bar
+        from .llm import reset_compaction_state
         from .main import _session_state
+        from .psyche_bridge import resync_system_context
         status_bar.reset()
+        reset_compaction_state()  # 切会话重置压缩防抖锁，不带进新会话
+        resync_system_context(self.app.ctx)  # 重置 system_context 注册表，按新会话 log 里实际的 psyche 重新登记
         _session_state["task_reminded"] = False  # 切会话→新会话首轮重提醒未完成任务
         self.query_one("#transcript").remove_children()
         self._turn_count = 0
@@ -1026,9 +1030,13 @@ class ChatScreen(Screen):
         self._refresh_status()
 
     def _apply_clear(self, r) -> None:
+        from . import system_context
+        from .llm import reset_compaction_state
         from .main import _make_prefix_msgs, _session_state
         self.app.ctx.clear_log()
         self.app.ctx.rebuild_prefix(_make_prefix_msgs())
+        reset_compaction_state()  # 清空会话重置压缩防抖锁
+        system_context.reset()  # 清空会话 → log 里没有 psyche 了，注册表也清空
         _session_state["task_reminded"] = False  # 清空后允许再次提醒
         if r.save:
             self.app.session_id = None

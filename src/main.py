@@ -251,13 +251,6 @@ def run_agent_turn(ctx: CacheContext, user_input: str,
         if base_note:
             disp.on_status(base_note)
 
-    # Psyche 自动加载：用户输入命中某领域 psyche 触发词且未加载 → 注入领域人格/经验/规范。
-    # 替代 AGENTS.md 那条从不触发的"记得先加载"前缀散文（见 psyche_bridge.maybe_autoload_psyche）。
-    from .psyche_bridge import maybe_autoload_psyche
-    note = maybe_autoload_psyche(ctx, user_input)
-    if note:
-        disp.on_status(note)
-
     before_task = read_current()
     _drive_turn(ctx, user_input, disp, sid)
 
@@ -445,6 +438,12 @@ def _finalize_session(ctx: CacheContext, session_id: str | None) -> list[str]:
                 lines.append("已写入会话反思。")
         except Exception as e:
             logger.warning("会话反思失败: %s", e)
+        try:
+            from .session_summary import summarize_session
+            if _timed("摘要", lambda: summarize_session(ctx.all, session_id)):
+                lines.append("已写入会话摘要。")
+        except Exception as e:
+            logger.warning("会话摘要失败: %s", e)
     if timings:
         slow = sorted(timings, key=lambda kv: kv[1], reverse=True)
         brief = " ".join(f"{k}{v:.1f}s" for k, v in slow if v >= 0.05)
@@ -580,6 +579,10 @@ def _run_line_repl(ctx: CacheContext, session_id: str | None) -> str | None:
                 session_id = r.load
                 from . import status_bar
                 status_bar.reset()  # 切会话复位 Δmiss 基线
+                from .llm import reset_compaction_state
+                reset_compaction_state()  # 切会话重置压缩防抖锁，不带进新会话
+                from .psyche_bridge import resync_system_context
+                resync_system_context(ctx)  # 重置 system_context 注册表，按新会话 log 里实际的 psyche 重新登记
                 _session_state["turn_ran"] = False  # 加载未改动则退出不收割
                 _session_state["task_reminded"] = False  # 切会话→新会话首轮重提醒未完成任务
                 _session_state["base_psyche_ensured"] = False  # 新会话首轮重新确保基础人格
@@ -591,6 +594,10 @@ def _run_line_repl(ctx: CacheContext, session_id: str | None) -> str | None:
                 ctx.rebuild_prefix(_make_prefix_msgs())
                 _session_state["base_psyche_ensured"] = False  # 清空 log → 基础人格没了，下轮重注入
                 _session_state["gate_checked"] = False  # 清空 log → 门审计提醒没了，下轮重核对
+                from .llm import reset_compaction_state
+                reset_compaction_state()  # 清空会话重置压缩防抖锁
+                from . import system_context
+                system_context.reset()  # 清空会话 → log 里没有 psyche 了，注册表也清空
                 if r.save:
                     session_id = None
                     from . import status_bar
