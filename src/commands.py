@@ -96,14 +96,41 @@ def _cmd_help(r: CmdResult, _ctx, _args, _sid) -> None:
         hid = id(cmd.handler)
         seen.setdefault(hid, []).append(cmd)
 
+    # 核心命令（优先展示）vs 进阶命令
+    _core = {"/exit", "/help", "/clear", "/sessions", "/load", "/new", "/model"}
+
+    def _make_cmd_block(groups):
+        lines = []
+        for group in sorted(groups, key=lambda g: g[0].name):
+            primary = group[0]
+            aliases = [c.name for c in group[1:]]
+            name_display = f"{primary.name}（{'、'.join(aliases)}）" if aliases else primary.name
+            lines.append(f"  {name_display:<20} {primary.description}")
+            if primary.usage:
+                lines.append(f"  {'':<20} 用法: {primary.usage}")
+        return lines
+
+    all_groups = list(seen.values())
+    core = [g for g in all_groups if g[0].name in _core]
+    advanced = [g for g in all_groups if g[0].name not in _core]
+
     lines = ["指令列表：\n"]
-    for group in sorted(seen.values(), key=lambda g: g[0].name):
-        primary = group[0]
-        aliases = [c.name for c in group[1:]]
-        name_display = f"{primary.name}（{'、'.join(aliases)}）" if aliases else primary.name
-        lines.append(f"  {name_display:<20} {primary.description}")
-        if primary.usage:
-            lines.append(f"  {'':<20} 用法: {primary.usage}")
+    lines.append("── 常用 ──")
+    lines.extend(_make_cmd_block(core))
+
+    lines.append("")
+    lines.append("── 进阶 — 上下文管理 · 工具 · 诊断 ──")
+    lines.extend(_make_cmd_block(advanced))
+
+    lines.append("")
+    lines.append("── 快捷键（聊天界面）──")
+    lines.append("  Esc      中断/取消")
+    lines.append("  Ctrl+Q   退出程序")
+    lines.append("  Ctrl+↑/↓ 翻历史消息")
+    lines.append("  Ctrl+L   滚到底部")
+    lines.append("  Enter    发送消息")
+    lines.append("")
+    lines.append("提示：输入 / 开头的消息被视为指令，否则直接与 agent 对话。")
     r.message = "\n".join(lines)
 
 

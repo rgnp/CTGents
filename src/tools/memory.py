@@ -199,6 +199,32 @@ TOOLS_MEMORY = [
             },
         },
     },
+    {
+        "_meta": {"label": "搜索会话", "parallel_safe": True},
+        "type": "function",
+        "function": {
+            "name": "search_sessions",
+            "description": (
+                "搜索历史会话摘要，按话题匹配。"
+                "当你需要了解之前聊过某个话题的进度、结论、产出文件时调用。"
+                "返回 top_n 条匹配会话的摘要（含话题、关键决策、产出文件）。"
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {
+                        "type": "string",
+                        "description": "搜索关键词，如 '世界模型'、'记忆系统'、'TUI重构'",
+                    },
+                    "top_n": {
+                        "type": "integer",
+                        "description": "返回条数，默认 3",
+                    },
+                },
+                "required": ["query"],
+            },
+        },
+    },
 ]
 
 
@@ -443,6 +469,26 @@ def _forget(name: str) -> str:
     return f"已忘记: {name}"
 
 
+def _search_sessions(query: str, top_n: int = 3) -> str:
+    """搜索历史会话摘要。延迟导入避免循环依赖。"""
+    from ..session_summary import search_sessions as _ss
+    results = _ss(query, top_n=top_n)
+    if not results:
+        return f"未找到与「{query}」相关的历史会话。"
+    lines = [f"找到 {len(results)} 条与「{query}」相关的历史会话：\n"]
+    for i, r in enumerate(results, 1):
+        sid = r["session_id"]
+        topics = r.get("topics", "（未识别）")
+        text = r.get("text", "")
+        if len(text) > 300:
+            text = text[:300] + "..."
+        lines.append(f"## [{i}] {sid}")
+        lines.append(f"  话题: {topics}")
+        lines.append(f"  摘要: {text}")
+        lines.append("")
+    return "\n".join(lines)
+
+
 def execute(name: str, args: dict) -> str | None:
     if name == "remember":
         return _remember(args["name"], args["content"], args["type"],
@@ -451,4 +497,6 @@ def execute(name: str, args: dict) -> str | None:
         return _recall(args["query"])
     if name == "forget":
         return _forget(args["name"])
+    if name == "search_sessions":
+        return _search_sessions(args["query"], int(args.get("top_n", 3)))
     return None
