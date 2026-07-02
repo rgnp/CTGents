@@ -20,6 +20,17 @@ def _isolate_task_state(tmp_path, monkeypatch):
     monkeypatch.setattr(_tasks, "AMBITIONS_FILE", tmp_path / "_no_ambitions.md")
 
 
+@pytest.fixture(autouse=True)
+def _no_llm_session_summary(monkeypatch):
+    """掐断会话摘要的真 LLM 调用（extract_summary 默认 use_llm 读 CTG_SUMMARY_LLM=开），
+    否则任何触发会话收尾/摘要的测试都会打真 API。测试默认全走规则层兜底。
+    要测 LLM 层的测试：在测试模块顶部 `from src.session_summary import _llm_summarize`
+    拿原函数（import 发生在收集期、早于本 fixture 打补丁），再自行 mock backend。
+    """
+    import src.session_summary as _ss
+    monkeypatch.setattr(_ss, "_llm_summarize", lambda _m: None)
+
+
 @pytest.fixture
 def tmp_project(tmp_path: Path) -> Path:
     """创建一个模拟项目目录，包含基本文件结构。"""

@@ -485,6 +485,9 @@ def _search_sessions(query: str, top_n: int = 3) -> str:
         lines.append(f"## [{i}] {sid}")
         lines.append(f"  话题: {topics}")
         lines.append(f"  摘要: {text}")
+        if r.get("unfinished"):
+            lines.append(f"  未竟事项: {r['unfinished']}")
+        lines.append(f"  （完整摘要含产出文件: read_file {r['path']}）")
         lines.append("")
     return "\n".join(lines)
 

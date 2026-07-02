@@ -1,21 +1,30 @@
-"""会话摘要生成 — 规则提取，不调 LLM。
+"""会话摘要生成 — LLM 语义摘要（话题/脉络/未竟事项）+ 规则提取兜底。
 
-在 _finalize_session 中被调用。扫描 ctx.all（消息列表），提取：
-  - 话题关键词（用户消息中的高频术语）
-  - 关键决策（remember / task_done / need_user 调用）
-  - 产出文件（write_file / replace_in_file 目标）
-  - 自然语言摘要段落
+在 _finalize_session 中被调用。两层：
+  - LLM 层（Flash 一发 chat_non_stream）：干净话题（中英文按对话原文说法）、
+    对话脉络、未竟事项——"接着做"的钩子，规则提取抓不到。失败自动退回规则层。
+  - 规则层（零成本、离线可用）：决策（remember/task_done/need_user）与产出文件
+    永远走规则提取——它们是客观可机械提取的事实，不该交给 LLM 复述（事实给牙）。
 
-写入 knowledge/sessions/{session_id}.md，供新会话搜索匹配后注入上下文。
+与已删除的「LLM 收割」的边界：收割是自信重写用户画像/记忆断言（churn + 越写越歪），
+本模块只 append-only 写导航索引文件、不改旧内容，错了顶多索引质量差一档。
+
+写入 knowledge/sessions/{session_id}.md；新会话经 build_sessions_index() 把
+「日期·话题」存在性索引放进前缀（按名认得 → search_sessions 取详情）。
 """
 
 from __future__ import annotations
 
 import json
+import logging
 import re
 from collections import Counter
 from datetime import datetime
 from pathlib import Path
+
+from .params import SUMMARY
+
+logger = logging.getLogger(__name__)
 
 _KNOWLEDGE_SESSIONS_DIR = Path(__file__).resolve().parent.parent / "knowledge" / "sessions"
 
@@ -198,21 +207,122 @@ def _make_summary_text(
     return "\n".join(parts)
 
 
-def extract_summary(messages: list[dict]) -> dict:
-    """从消息列表中提取摘要数据。返回 dict，含 topics/decisions/files/text。"""
+# ═══════════════════════════════════════════════════════════════
+# LLM 语义摘要层（Flash 一发调用；失败 → 规则层兜底）
+# ═══════════════════════════════════════════════════════════════
+
+_LLM_SUMMARY_PROMPT = """你是会话归档员。根据对话文字稿输出 JSON（只输出 JSON，不要别的）：
+{"topics": [...], "narrative": "...", "unfinished": "..."}
+
+- topics: 3~6 个话题词，用对话里的原文说法（论文名/系统名/中文短语都行），\
+要具体可检索，禁止 "讨论"/"代码"/"LLM" 这类泛词。
+- narrative: 2~3 句话讲清这场对话干了什么、结论是什么。
+- unfinished: 聊到一半没做完/说好下次继续的事，一句话；没有就空字符串。\
+只写对话里真实出现的，不要推测。"""
+
+
+def _build_digest(messages: list[dict]) -> str:
+    """把消息列表浓缩成喂给摘要 LLM 的文字稿。
+
+    用户消息基本保全（话题主要在这），助手正文截头，工具调用只留名字+关键参数，
+    工具结果不进稿（体积大、话题密度低）。超长保头尾、中间标记省略——摘要要的是
+    "这场聊了什么/最后停在哪"，恰好在两端。
+    """
+    lines: list[str] = []
+    for m in messages:
+        role = m.get("role")
+        content = m.get("content") or ""
+        if role == "user":
+            lines.append(f"用户: {content[:500]}")
+        elif role == "assistant":
+            if content.strip():
+                lines.append(f"助手: {content[:300]}")
+            for tc in m.get("tool_calls") or []:
+                fn = tc.get("function", {})
+                try:
+                    args = json.loads(fn.get("arguments", "{}"))
+                except (json.JSONDecodeError, TypeError):
+                    args = {}
+                hint = args.get("path") or args.get("query") or args.get("name") or ""
+                lines.append(f"[工具 {fn.get('name', '?')} {str(hint)[:60]}]")
+    digest = "\n".join(lines)
+    cap = SUMMARY.digest_max_chars
+    if len(digest) > cap:
+        head, tail = int(cap * 0.6), int(cap * 0.35)
+        digest = digest[:head] + "\n…（中间省略）…\n" + digest[-tail:]
+    return digest
+
+
+def _llm_summarize(messages: list[dict]) -> dict | None:
+    """Flash 一发生成 {topics, narrative, unfinished}。任何失败返回 None（规则层兜底）。"""
+    digest = _build_digest(messages)
+    if len(digest) < 80:  # 太短的会话不值一次调用，规则层足够
+        return None
+    try:
+        from .llm import AVAILABLE_MODELS
+        backend = AVAILABLE_MODELS["flash"]
+        content, _ = backend.chat_non_stream(
+            [{"role": "system", "content": _LLM_SUMMARY_PROMPT},
+             {"role": "user", "content": digest}],
+            on_token=lambda _t: None,
+            # Flash 思考常开，reasoning 也占 completion 额度——给足空间别把 JSON 截了
+            max_tokens=2000,
+        )
+        if not content:
+            return None
+        start, end = content.find("{"), content.rfind("}")
+        if start < 0 or end <= start:
+            return None
+        data = json.loads(content[start:end + 1])
+        topics = [str(t).strip() for t in data.get("topics", []) if str(t).strip()]
+        if not topics:
+            return None
+        return {
+            "topics": topics[:8],
+            "narrative": str(data.get("narrative", "")).strip(),
+            "unfinished": str(data.get("unfinished", "")).strip(),
+        }
+    except Exception as e:
+        logger.warning("LLM 会话摘要失败，退回规则提取: %s", e)
+        return None
+
+
+def extract_summary(messages: list[dict], use_llm: bool | None = None) -> dict:
+    """从消息列表中提取摘要数据。返回 dict，含 topics/decisions/files/text/unfinished。
+
+    决策/产出文件永远走规则提取（客观事实）；话题/脉络/未竟事项优先 LLM，
+    失败或 use_llm=False（None=读 CTG_SUMMARY_LLM）时退回规则版。
+    """
     user_messages = [
         m.get("content", "") for m in messages if m["role"] == "user"
     ]
-    topics = _extract_topics(messages)
     decisions = _extract_decisions(messages)
     files = _extract_files(messages)
-    text = _make_summary_text(topics, decisions, files, user_messages)
+
+    if use_llm is None:
+        use_llm = SUMMARY.use_llm
+    llm = _llm_summarize(messages) if use_llm else None
+
+    if llm:
+        topics = llm["topics"]
+        # 脉络 = LLM 叙述 + 用户原话引用（后者保住中文原词，供 search_sessions 命中）
+        rule_text = _make_summary_text([], [], [], user_messages)
+        text = llm["narrative"] + ("\n" + rule_text if rule_text else "")
+        unfinished = llm["unfinished"]
+    else:
+        topics = _extract_topics(messages)
+        text = _make_summary_text(topics, decisions, files, user_messages)
+        # 规则层的未竟信号：最后一次 need_user 的提问（问了没答完 = 挂起的决策）
+        unfinished = next(
+            (d["detail"] for d in reversed(decisions) if d["type"] == "待决策"), "")
 
     return {
         "topics": topics,
         "decisions": decisions,
         "files": files,
         "text": text,
+        "unfinished": unfinished,
+        "source": "llm" if llm else "rules",
     }
 
 
@@ -241,6 +351,9 @@ def write_summary(session_id: str, summary: dict) -> str | None:
 
 ## 对话脉络
 {summary.get('text', '')}
+
+## 未竟事项
+{summary.get('unfinished') or '（无）'}
 
 ## 关键决策
 {decisions_str or '（未检出）'}
@@ -284,11 +397,20 @@ def _load_summary(path: Path) -> dict | None:
     if m:
         text = m.group(1).strip()
 
+    # 提取未竟事项（占位「（无）」视为空；旧格式没有此栏 → 空）
+    unfinished = ""
+    m = re.search(r'## 未竟事项\n(.+?)(?=\n## |\Z)', content, re.DOTALL)
+    if m:
+        unfinished = m.group(1).strip()
+        if unfinished == "（无）":
+            unfinished = ""
+
     session_id = path.stem
     return {
         "session_id": session_id,
         "topics": topics_str,
         "text": text,
+        "unfinished": unfinished,
         "path": str(path),
     }
 
@@ -353,3 +475,37 @@ def search_sessions(query: str, top_n: int = 3) -> list[dict]:
 
     scored.sort(key=lambda x: x[0], reverse=True)
     return [s for _, s in scored[:top_n]]
+
+
+# ═══════════════════════════════════════════════════════════════
+# 前缀情景索引（跨会话记忆的触发环）
+# ═══════════════════════════════════════════════════════════════
+
+def build_sessions_index() -> str | None:
+    """最近 N 场会话的存在性索引，进前缀（会话开始建一次，缓存安全）。
+
+    一行一场「日期 · 话题」，近期几场附未竟事项。哲学同记忆索引的两级结构：
+    索引只解决"认得聊过"（识别，模型擅长），详情靠 search_sessions（回忆，模型不擅长
+    ——所以不能指望它无提示地想起去调工具）。见 [[rule-placement-three-layers]]。
+    """
+    if not _KNOWLEDGE_SESSIONS_DIR.exists():
+        return None
+    files = sorted(_KNOWLEDGE_SESSIONS_DIR.glob("*.md"), reverse=True)
+    lines: list[str] = []
+    for i, f in enumerate(files[:SUMMARY.index_sessions]):
+        s = _load_summary(f)
+        if not s:
+            continue
+        topics = s.get("topics", "")
+        if not topics or topics == "（未识别）":
+            continue
+        date = s["session_id"][:10]
+        line = f"  {date} · {topics[:110]}"
+        if i < SUMMARY.index_unfinished and s.get("unfinished"):
+            line += f"｜未竟: {s['unfinished'][:80]}"
+        lines.append(line)
+    if not lines:
+        return None
+    header = ("最近会话（跨会话记忆）——用户提到其中话题时，先用 search_sessions "
+              "搜详情（含产出文件，可 read_file 接续），别凭印象重来：")
+    return header + "\n" + "\n".join(lines)

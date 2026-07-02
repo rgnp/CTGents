@@ -194,3 +194,21 @@ class TaskParams:
 
 
 TASK = TaskParams()
+
+
+@dataclass(frozen=True)
+class SummaryParams:
+    """会话摘要（跨会话记忆的生产侧）+ 前缀情景索引旋钮。"""
+
+    # 会话结束用 LLM(Flash) 生成语义摘要（话题/脉络/未竟事项），失败自动退回规则提取。
+    # 与被删的「LLM 收割」不同：这是 append-only 导航索引，不重写既有记忆断言。
+    use_llm: bool = _env_bool("CTG_SUMMARY_LLM", True)
+    # 喂给摘要 LLM 的对话文字稿字符上限（超出保头尾、中间标记省略）
+    digest_max_chars: int = _env_int("CTG_SUMMARY_DIGEST_MAX_CHARS", 12000)
+    # 前缀会话索引：最多列最近多少场
+    index_sessions: int = _env_int("CTG_SUMMARY_INDEX_SESSIONS", 25)
+    # 前缀会话索引：最近多少场附带未竟事项（"接着做"的钩子，全带太占前缀）
+    index_unfinished: int = _env_int("CTG_SUMMARY_INDEX_UNFINISHED", 8)
+
+
+SUMMARY = SummaryParams()

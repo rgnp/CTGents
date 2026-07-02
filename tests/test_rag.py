@@ -305,6 +305,79 @@ def test_search_doc_index_empty_query():
     results = rag._search_doc_index(idx, "   ")
     assert results == []
 
+# ═══ knowledge_toc / lazy 自动索引 ═══
+
+def _make_knowledge(tmp_path: Path) -> Path:
+    kd = tmp_path / "knowledge"
+    (kd / "autonomous-driving").mkdir(parents=True)
+    (kd / "autonomous-driving" / "occworld-notes.md").write_text(
+        "OccWorld uses occupancy prediction as world model, evaluation protocol in section 4." * 3,
+        encoding="utf-8")
+    (kd / "sessions").mkdir()
+    (kd / "sessions" / "2026-01-01-000000.md").write_text(
+        "# 会话\n- 话题: 会话摘要不该进研究索引\n" * 5, encoding="utf-8")
+    (kd / "_filtered.json").write_text("{}", encoding="utf-8")
+    (kd / "problem-map.md").write_text(
+        "问题地图 problem map: evaluation gap, closed-loop counterfactual." * 3, encoding="utf-8")
+    # 嵌套 paper 结构：通用文件名 analysis.md 的锚在父目录名上
+    (kd / "paper" / "cascadeocc").mkdir(parents=True)
+    (kd / "paper" / "cascadeocc" / "analysis.md").write_text("CascadeOcc 分析" * 10, encoding="utf-8")
+    (kd / "paper" / "act-bench").mkdir()
+    (kd / "paper" / "act-bench" / "analysis.md").write_text("ACT-Bench 分析" * 10, encoding="utf-8")
+    return kd
+
+
+def test_knowledge_toc(tmp_path, monkeypatch):
+    kd = _make_knowledge(tmp_path)
+    monkeypatch.setattr(rag, "_KNOWLEDGE_DIR", kd)
+    toc = rag.knowledge_toc()
+    assert toc is not None
+    assert "autonomous-driving" in toc
+    assert "occworld-notes" in toc
+    assert "problem-map" in toc
+    assert "sessions" not in toc  # 会话摘要归 search_sessions，不进知识库索引
+    assert "rag_search" in toc    # 索引自带取详情的路标
+    # 通用文件名换成父目录锚：paper/cascadeocc/analysis.md → cascadeocc
+    assert "cascadeocc" in toc
+    assert "act-bench" in toc
+    assert "analysis" not in toc
+
+
+def test_knowledge_toc_missing_dir(tmp_path, monkeypatch):
+    monkeypatch.setattr(rag, "_KNOWLEDGE_DIR", tmp_path / "nope")
+    assert rag.knowledge_toc() is None
+
+
+def test_iter_knowledge_files_excludes_sessions(tmp_path, monkeypatch):
+    kd = _make_knowledge(tmp_path)
+    monkeypatch.setattr(rag, "_KNOWLEDGE_DIR", kd)
+    names = [f.name for f in rag._iter_knowledge_files()]
+    assert "occworld-notes.md" in names
+    assert "2026-01-01-000000.md" not in names
+
+
+def test_query_research_lazy_autoindex(tmp_path, monkeypatch):
+    """索引不存在 → rag_search 自动先建再搜；知识库更新 → 自动重建、搜得到新内容。"""
+    import os
+    import time
+
+    kd = _make_knowledge(tmp_path)
+    monkeypatch.setattr(rag, "_KNOWLEDGE_DIR", kd)
+    monkeypatch.chdir(tmp_path)  # .rag-index 落在临时目录，不污染真项目
+
+    out = rag.query_research("OccWorld occupancy")
+    assert "occworld-notes" in out  # 没建过索引也直接可搜
+
+    new_file = kd / "autonomous-driving" / "gaia-notes.md"
+    new_file.write_text(
+        "GAIA is a generative driving video world model, focus on controllability." * 3,
+        encoding="utf-8")
+    future = time.time() + 10
+    os.utime(new_file, (future, future))
+    out2 = rag.query_research("GAIA controllability")
+    assert "gaia-notes" in out2
+
+
 # ═══ execute ═══
 
 def test_execute_unknown_tool():

@@ -1245,6 +1245,30 @@ def _search_doc_index(index_data: dict, query: str, top_k: int = 5) -> list[dict
     return results
 
 
+_KNOWLEDGE_DIR = Path(__file__).parent.parent.parent / "knowledge"
+
+
+def _iter_knowledge_files() -> list[Path]:
+    """研究知识库的 .md 文件（排除 sessions/——会话摘要归 search_sessions 专管，
+    双重索引只会让两个检索口互相污染结果）。
+    """
+    if not _KNOWLEDGE_DIR.exists():
+        return []
+    return [f for f in _KNOWLEDGE_DIR.rglob("*.md")
+            if f.relative_to(_KNOWLEDGE_DIR).parts[0] != "sessions"]
+
+
+def _knowledge_mtime() -> float:
+    """知识库最新修改时间（过期判定用）。"""
+    times = []
+    for f in _iter_knowledge_files():
+        try:
+            times.append(f.stat().st_mtime)
+        except OSError:
+            continue
+    return max(times, default=0.0)
+
+
 def index_research_content() -> str:
     """索引研究知识库：扫描 knowledge/ 目录中的 .md 文件建立语义索引。
 
@@ -1253,11 +1277,11 @@ def index_research_content() -> str:
     """
     chunks: list[DocChunk] = []
 
-    knowledge_dir = Path(__file__).parent.parent.parent / "knowledge"
+    knowledge_dir = _KNOWLEDGE_DIR
     if not knowledge_dir.exists():
         return "knowledge/ 目录不存在。先用 write_file 创建研究笔记，再用此工具索引。"
 
-    for md_file in knowledge_dir.rglob("*.md"):
+    for md_file in _iter_knowledge_files():
         try:
             content = md_file.read_text(encoding="utf-8")
             if len(content) < 50:
@@ -1292,10 +1316,17 @@ def index_research_content() -> str:
 
 
 def query_research(query: str, top_k: int = 5) -> str:
-    """搜索研究知识库（语义搜索，摘要级）。"""
+    """搜索研究知识库（语义搜索，摘要级）。
+
+    lazy 自动索引：索引缺失或落后于 knowledge/ 最新改动时，先自动重建再搜——
+    "先调 rag_index_research 再搜"的两步摩擦本身就是知识库不被读的原因之一。
+    """
     idx = _load_doc_index("research")
+    if idx is None or idx.get("created", 0.0) < _knowledge_mtime():
+        index_research_content()
+        idx = _load_doc_index("research")
     if not idx:
-        return "研究索引未建立。先运行 rag_index_research。"
+        return "知识库为空（knowledge/ 下无可索引的 .md 文件）。"
 
     results = _search_doc_index(idx, query, top_k)
     if not results:
@@ -1310,6 +1341,53 @@ def query_research(query: str, top_k: int = 5) -> str:
         lines.append(f"   {r['content'][:150]}")
         lines.append("用 read_file 查看详细内容")
     return "\n".join(lines)
+
+
+# ═══════════════════════════════════════════════════════════════
+# 知识库存在性索引（进前缀）
+# ═══════════════════════════════════════════════════════════════
+
+
+def knowledge_toc() -> str | None:
+    """knowledge/ 的主题目录（进前缀，会话开始建一次）。
+
+    只列"有什么"（目录名 + 篇名），详情靠 rag_search / read_file——同记忆索引的
+    「按名搜→认得」两级结构。不放内容：前缀散文不驱动行为，存在性指针才驱动检索。
+    """
+    if not _KNOWLEDGE_DIR.exists():
+        return None
+    lines: list[str] = []
+    top_files: list[str] = []
+    for entry in sorted(_KNOWLEDGE_DIR.iterdir()):
+        if entry.name.startswith(("_", ".")) or entry.name == "sessions":
+            continue
+        if entry.is_file() and entry.suffix == ".md":
+            top_files.append(entry.stem)
+        elif entry.is_dir():
+            # 通用文件名（README/analysis…）不是锚，真正的主题在它的目录名上
+            # （knowledge/paper/<论文名>/analysis.md → 锚是 <论文名>）。去重保序。
+            generic = {"readme", "analysis", "index", "notes", "progress", "main"}
+            stems: list[str] = []
+            for f in sorted(entry.rglob("*.md")):
+                if f.name.startswith("_"):
+                    continue
+                stem = f.stem
+                if stem.lower() in generic and f.parent != entry:
+                    stem = f.parent.name
+                if stem not in stems:
+                    stems.append(stem)
+            if not stems:
+                continue
+            shown = "、".join(stems[:6])
+            more = f" …共{len(stems)}个主题" if len(stems) > 6 else ""
+            lines.append(f"  {entry.name}: {shown}{more}")
+    if top_files:
+        lines.append("  （根目录）: " + "、".join(top_files))
+    if not lines:
+        return None
+    header = ("知识库 knowledge/ 主题目录——回答涉及以下主题时，先 rag_search 检索、"
+              "read_file 读原文再作答，不要凭参数记忆硬答：")
+    return header + "\n" + "\n".join(lines)
 
 
 # ═══════════════════════════════════════════════════════════════

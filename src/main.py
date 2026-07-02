@@ -82,6 +82,24 @@ def _make_memory_context() -> dict | None:
     return {"role": "system", "content": ctx_str, "_volatile": True, "_label": "记忆索引"}
 
 
+def _make_sessions_index() -> dict | None:
+    """最近会话的存在性索引（跨会话情景记忆的触发环：认得聊过 → search_sessions 取详情）。"""
+    from .session_summary import build_sessions_index
+    txt = build_sessions_index()
+    if not txt:
+        return None
+    return {"role": "system", "content": txt, "_volatile": True, "_label": "会话索引"}
+
+
+def _make_knowledge_index() -> dict | None:
+    """知识库主题目录（存在性索引：知道有货才会去读，rag_search/read_file 取详情）。"""
+    from .tools.rag import knowledge_toc
+    txt = knowledge_toc()
+    if not txt:
+        return None
+    return {"role": "system", "content": txt, "_volatile": True, "_label": "知识库索引"}
+
+
 logger = logging.getLogger(__name__)
 
 
@@ -99,7 +117,9 @@ def _make_prefix_msgs() -> list[dict]:
     """缓存前缀的不可变系统消息（会话开始构建一次，会话内哈希锁死、不变）。
 
     缓存命中已判定为 DeepSeek 服务端问题、不再是约束（见 [[ctgents-context-cache]]），
-    故把 session 稳定的器官接回前缀：AGENTS.md + 记忆索引(轴①越用越懂你)。
+    故把 session 稳定的器官接回前缀：AGENTS.md + 记忆索引(轴①越用越懂你)
+    + 会话索引/知识库索引（存在性指针：触发点从"回忆"降为"识别"，详情靠
+    search_sessions / rag_search 工具取——同 4891865 派生索引验证过的两级结构）。
     这些都在会话边界产生/会话内不变，放冻结前缀里既送达模型、又不破坏纯追加（per-turn
     动态的任务上下文/审计不在这里，走 append-only）。
     每个 _make_* 缺数据时返回 None，按序过滤——空记忆的会话前缀自动退回只剩 AGENTS.md。
@@ -115,6 +135,8 @@ def _make_prefix_msgs() -> list[dict]:
     makers = (
         _make_agents_message,
         _make_memory_context,
+        _make_sessions_index,
+        _make_knowledge_index,
     )
     return [m for m in (make() for make in makers) if m]
 
