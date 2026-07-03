@@ -163,6 +163,146 @@ class TestToolPairingRepair:
         assert [m["role"] for m in api] == ["system", "user", "assistant", "tool", "assistant"]
 
 
+class TestToolPairingAdjacency:
+    """邻接性强制：tool 结果必须**紧邻** assistant(tool_calls) 之后（DeepSeek 实测协议）。"""
+
+    def test_system_between_assistant_and_tool_reordered(self):
+        """失败类钉死（2026-07-03 线上 400 复现）：load_psyche 注入的 system 消息
+        插在 assistant(tool_calls) 与 tool 结果中间 → send() 必须把结果挪回紧邻位。
+        """
+        ctx = CacheContext(
+            prefix_msgs=[{"role": "system", "content": "sys"}],
+            log_msgs=[
+                {"role": "user", "content": "加载psyche"},
+                {"role": "assistant", "content": None,
+                 "tool_calls": [{"id": "p1", "function": {"name": "load_psyche"}}]},
+                {"role": "system", "content": "【Psyche: x】核心内容"},   # 插队者
+                {"role": "tool", "tool_call_id": "p1", "content": "已加载"},
+            ],
+        )
+        api = ctx.send()
+        roles = [m["role"] for m in api]
+        ai = roles.index("assistant")
+        assert api[ai + 1]["role"] == "tool", f"tool 结果必须紧邻 assistant，实际: {roles}"
+        assert api[ai + 1]["tool_call_id"] == "p1"
+        # 插队 system 不丢，被挪到结果之后
+        assert any("Psyche" in (m.get("content") or "") for m in api[ai + 2:])
+
+    def test_result_before_assistant_relocated(self):
+        """Tool 结果出现在 assistant 之前（压缩/加载旧会话乱序）→ 挪到紧邻位，不重复。"""
+        ctx = CacheContext(
+            prefix_msgs=[{"role": "system", "content": "sys"}],
+            log_msgs=[
+                {"role": "tool", "tool_call_id": "x", "content": "result"},
+                {"role": "assistant", "content": None,
+                 "tool_calls": [{"id": "x", "function": {"name": "run"}}]},
+            ],
+        )
+        api = ctx.send()
+        tools = [m for m in api if m["role"] == "tool"]
+        assert len(tools) == 1, "搬运不得产生重复 tool 消息"
+        ai = next(i for i, m in enumerate(api) if m["role"] == "assistant")
+        assert api[ai + 1]["role"] == "tool" and api[ai + 1]["tool_call_id"] == "x"
+
+    def test_healthy_log_byte_identical(self):
+        """健康 log（紧邻配对）→ 输出同对象同顺序，零缓存影响。"""
+        log = [
+            {"role": "user", "content": "Q"},
+            {"role": "assistant", "content": None,
+             "tool_calls": [{"id": "a", "function": {"name": "f"}},
+                            {"id": "b", "function": {"name": "g"}}]},
+            {"role": "tool", "tool_call_id": "a", "content": "r1"},
+            {"role": "tool", "tool_call_id": "b", "content": "r2"},
+            {"role": "assistant", "content": "答案"},
+        ]
+        ctx = CacheContext(prefix_msgs=[{"role": "system", "content": "sys"}], log_msgs=log)
+        assert ctx.send() == ctx.send()
+        roles = [m["role"] for m in ctx.send()]
+        assert roles == ["system", "user", "assistant", "tool", "tool", "assistant"]
+
+    def test_result_after_assistant_is_fine(self):
+        """正常顺序：tool 结果在 assistant 之后 → 不补占位，健康 log 不变。"""
+        ctx = CacheContext(
+            prefix_msgs=[{"role": "system", "content": "sys"}],
+            log_msgs=[
+                {"role": "assistant", "content": None,
+                 "tool_calls": [{"id": "y", "function": {"name": "run"}}]},
+                {"role": "tool", "tool_call_id": "y", "content": "ok"},
+            ],
+        )
+        api = ctx.send()
+        # 应为 prefix(1) + assistant(1) + tool(1) = 3，无额外占位
+        assert len(api) == 3
+        roles = [m["role"] for m in api]
+        assert roles == ["system", "assistant", "tool"]
+
+    def test_multi_assistant_each_has_own_results(self):
+        """多个 assistant，各有 tool 结果在后方 → 全部 OK。"""
+        ctx = CacheContext(
+            prefix_msgs=[{"role": "system", "content": "sys"}],
+            log_msgs=[
+                {"role": "assistant", "content": None,
+                 "tool_calls": [{"id": "a", "function": {"name": "f"}}]},
+                {"role": "tool", "tool_call_id": "a", "content": "r1"},
+                {"role": "assistant", "content": None,
+                 "tool_calls": [{"id": "b", "function": {"name": "g"}}]},
+                {"role": "tool", "tool_call_id": "b", "content": "r2"},
+            ],
+        )
+        api = ctx.send()
+        assert len(api) == 5  # system + 4
+        # 确保没有占位消息
+        tool_contents = [m["content"] for m in api if m["role"] == "tool"]
+        assert all("已占位" not in c for c in tool_contents)
+
+    def test_crossed_results_relocated_adjacent(self):
+        """A、B 两个 assistant 的结果堆在后面 → 各自挪到紧邻位：A,ra,B,rb。"""
+        ctx = CacheContext(
+            prefix_msgs=[{"role": "system", "content": "sys"}],
+            log_msgs=[
+                {"role": "assistant", "content": None,
+                 "tool_calls": [{"id": "a", "function": {"name": "f"}}]},
+                {"role": "assistant", "content": None,
+                 "tool_calls": [{"id": "b", "function": {"name": "g"}}]},
+                {"role": "tool", "tool_call_id": "a", "content": "ra"},
+                {"role": "tool", "tool_call_id": "b", "content": "rb"},
+            ],
+        )
+        api = ctx.send()
+        pairs = [(m["role"], m.get("tool_call_id") or "".join(
+            tc["id"] for tc in (m.get("tool_calls") or []))) for m in api[1:]]
+        assert pairs == [("assistant", "a"), ("tool", "a"),
+                         ("assistant", "b"), ("tool", "b")]
+        tool_contents = [m["content"] for m in api if m["role"] == "tool"]
+        assert all("已占位" not in c for c in tool_contents)
+
+    def test_live_repro_psyche_mid_loop_then_more_tools(self):
+        """完整线上场景：工具循环中 load_psyche 注入 + 后续还有一轮工具调用。"""
+        ctx = CacheContext(
+            prefix_msgs=[{"role": "system", "content": "sys"}],
+            log_msgs=[
+                {"role": "user", "content": "干活"},
+                {"role": "assistant", "content": None,
+                 "tool_calls": [{"id": "t1", "function": {"name": "load_psyche"}},
+                                {"id": "t2", "function": {"name": "read_file"}}]},
+                {"role": "system", "content": "【Psyche: ad】…8KB 核心…"},
+                {"role": "tool", "tool_call_id": "t1", "content": "[加载 psyche: ad]"},
+                {"role": "tool", "tool_call_id": "t2", "content": "文件内容"},
+                {"role": "assistant", "content": "继续",
+                 "tool_calls": [{"id": "t3", "function": {"name": "grep_code"}}]},
+                {"role": "tool", "tool_call_id": "t3", "content": "命中"},
+            ],
+        )
+        api = ctx.send()
+        # 逐个 assistant 校验：其 tool_calls 的结果必须紧跟其后、连续、按声明顺序
+        for i, m in enumerate(api):
+            if m.get("role") == "assistant" and m.get("tool_calls"):
+                ids = [tc["id"] for tc in m["tool_calls"]]
+                following = [x.get("tool_call_id") for x in api[i + 1:i + 1 + len(ids)]]
+                assert following == ids, (
+                    f"assistant@{i} 的结果未紧邻: 期望 {ids}, 实际 {following}")
+
+
 def _turn(uq: str, tcid: str, tool_content: str) -> list[dict]:
     """造一轮：user 提问 + assistant 工具调用 + tool 结果。"""
     return [

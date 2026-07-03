@@ -162,7 +162,7 @@ class CacheContext:
         cleaned = [self._clean_log_msg(m) for m in kept]
         # 中段视图变换：折叠陈旧大工具结果（不动 self.log，原文照常落盘/可 recall）
         cleaned = self._collapse_stale_tool_results(cleaned)
-        api.extend(self._repair_tool_pairing(cleaned))
+        api.extend(cleaned)
 
         # ── 游离态挂尾注入（阅后即焚，不进 self.log）──
         try:
@@ -184,7 +184,11 @@ class CacheContext:
         except Exception:
             pass
 
-        return api
+        # ── 协议不变式终强制（唯一一层）：tool 结果必须**紧邻**其 assistant 之后 ──
+        # DeepSeek 的校验是紧邻性不是存在性：assistant(tool_calls) 与 tool 结果之间
+        # 插任何消息（实测 system 也算）都 400"insufficient tool messages"。此前的
+        # 存在性补占位/位置校验都拦不住这类，已合并为这一层邻接强制。
+        return self._enforce_tool_pairing(api)
 
     def _validate_prefix(self) -> None:
         """校验前缀完整性。不匹配则抛 PrefixIntegrityError。"""
@@ -261,33 +265,59 @@ class CacheContext:
         return out
 
     @staticmethod
-    def _repair_tool_pairing(msgs: list[dict]) -> list[dict]:
-        """焊死 OpenAI/DeepSeek 协议不变量，防 400 卡死整个会话。
+    def _enforce_tool_pairing(msgs: list[dict]) -> list[dict]:
+        """焊死 OpenAI/DeepSeek 协议不变量：tool 结果必须**紧邻**其 assistant 之后。
 
-        协议要求：带 tool_calls 的 assistant 消息后必须紧跟每个 tool_call_id
-        对应的 tool 结果消息。工具执行中途被中断（KeyboardInterrupt 不被 llm.py
-        的 except Exception 捕获）、异常、或进程崩溃，都可能在 log 里留下"光杆
-        tool_calls"（缺结果），落盘后每轮重发都 400、重启加载也照炸——会话彻底卡死。
+        协议校验是紧邻性不是存在性（实测 2026-07-03）：assistant(tool_calls) 与
+        tool 结果之间插任何消息（system 也算）→ 400 "insufficient tool messages
+        following tool_calls message"。会破坏紧邻性的真实来源：
+          - 工具循环内往 log append 非 tool 消息（如 load_psyche 注入，根因已修
+            ——挪到结果写完后；此处是防同类回归的咽喉兜底）；
+          - 中断/异常/崩溃留下光杆 tool_calls（缺结果）；
+          - 压缩/摘要/加载旧会话导致的乱序（结果跑到 assistant 之前）。
 
-        这里在唯一咽喉 send() 处兜底：缺失的 tool 结果补占位消息（紧跟 assistant
-        之后）。健康 log 不增不删、字节不变（零缓存影响），只有坏 log 被修复。
-        （只补缺失结果，不动孤儿 tool 消息——后者是另一类、非中断所致，不在此处臆测处理。）
+        算法：每个 assistant(tool_calls) 之后按声明顺序紧邻放置其 tool 结果
+        （从原位前移/后移），缺失的补占位；被搬走的结果在原位跳过。健康 log
+        输出与输入完全一致（同对象同顺序，零缓存影响）。孤儿 tool 消息
+        （没有任何 assistant 声明它）不动——另一类问题，不在此臆测处理。
         """
-        has_result = {m.get("tool_call_id") for m in msgs if m.get("role") == "tool"}
+        claimed: set[str] = {
+            tc.get("id")
+            for m in msgs if m.get("role") == "assistant"
+            for tc in (m.get("tool_calls") or []) if tc.get("id")
+        }
+        if not claimed:
+            return msgs
+        # tool_call_id → 首个结果消息（重复 id 的后续出现留在原位，不参与搬运）
+        result_by_id: dict[str, dict] = {}
+        for m in msgs:
+            if m.get("role") == "tool":
+                tcid = m.get("tool_call_id")
+                if tcid and tcid not in result_by_id:
+                    result_by_id[tcid] = m
+
+        emitted: set[str] = set()
         out: list[dict] = []
         for m in msgs:
+            if m.get("role") == "tool":
+                tcid = m.get("tool_call_id")
+                if tcid in claimed and result_by_id.get(tcid) is m:
+                    continue  # 在其 assistant 之后的紧邻位发出（见下）
             out.append(m)
             if m.get("role") == "assistant" and m.get("tool_calls"):
                 for tc in m["tool_calls"]:
                     tcid = tc.get("id")
-                    if tcid and tcid not in has_result:
-                        out.append({
-                            "role": "tool",
-                            "tool_call_id": tcid,
-                            "content": json.dumps(
-                                {"error": "工具结果缺失（中断/异常/崩溃），已占位"},
-                                ensure_ascii=False),
-                        })
+                    if not tcid or tcid in emitted:
+                        continue
+                    emitted.add(tcid)
+                    result = result_by_id.get(tcid)
+                    out.append(result if result is not None else {
+                        "role": "tool",
+                        "tool_call_id": tcid,
+                        "content": json.dumps(
+                            {"error": "工具结果缺失（中断/异常/崩溃），已占位"},
+                            ensure_ascii=False),
+                    })
         return out
 
     def clear_log(self) -> None:

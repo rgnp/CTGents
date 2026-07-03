@@ -1660,7 +1660,8 @@ def _detect_control_signal(tool_calls: list[dict]) -> tuple[str, str] | None:
 def _handle_psyche_tools(ctx: CacheContext, approved: list[tuple]) -> None:
     """处理 load_psyche / unload_psyche 工具调用结果。
 
-    在工具执行后、结果写 log 前执行，实际调用 psyche_bridge 注入/移除。
+    在工具结果写 log **之后**执行（调用点顺序是协议不变量的一部分）：inject_psyche
+    append 的 system 消息若落在 assistant(tool_calls) 与 tool 结果之间，API 400。
     """
     from .psyche_bridge import inject_psyche, remove_psyche
     for _tc_data, tool_name, args, _tc, _result in approved:
@@ -1755,9 +1756,6 @@ def _handle_tool_results(
     # stormBreaker
     storm_sig, storm_count = _check_storm_breaker(approved, storm_sig, storm_count)
 
-    # ── 处理 psyche 加载/卸载（agent 自主调用） ──
-    _handle_psyche_tools(ctx, approved)
-
     # 写 tool 结果到 log
     for tc_data, tool_name, _args, _tc, result in approved:
         result = truncate_to_budget(result, ctx.all)
@@ -1765,6 +1763,12 @@ def _handle_tool_results(
         ctx.log.append({"role": "tool", "tool_call_id": tc_data["id"], "content": result, "_tool_name": tool_name})
         if on_tool_result is not None:
             on_tool_result(tool_name, result)
+
+    # ── 处理 psyche 加载/卸载（agent 自主调用） ──
+    # 必须在 tool 结果写完之后：inject_psyche 会 append 非 volatile 的 system 消息，
+    # 若插在 assistant(tool_calls) 与 tool 结果之间，DeepSeek 按紧邻性校验直接 400
+    # "insufficient tool messages following tool_calls message"（2026-07-03 实测复现）。
+    _handle_psyche_tools(ctx, approved)
 
     return storm_sig, storm_count
 
@@ -1958,7 +1962,7 @@ def run_conversation(
             # 解析→执行→stormBreaker→压缩→写 log 全部走 _handle_tool_results（单一实现）。
             # 此处曾内联同一套 ~130 行（与 helper 漂移出 content=None 等差异，违反 C9 DRY）——
             # 已删，改为调 helper。中途崩溃留下的光杆 tool_calls 由 send() 的
-            # _repair_tool_pairing 在唯一咽喉兜底补占位（旧内联的 except 回填已冗余，一并删）。
+            # _enforce_tool_pairing 在唯一咽喉兜底补占位（旧内联的 except 回填已冗余，一并删）。
             _storm_sig, _storm_count = _handle_tool_results(
                 ctx, tool_calls, eager_results, on_tool,
                 _storm_sig, _storm_count, content,
