@@ -74,6 +74,10 @@ class CacheContext:
         # "不调工具=结束"的隐式判断）。续跑/主干据此决定停或继续。见 tools/control.py。
         self.control_signal: str | None = None
         self.control_payload: str | None = None
+        # send() 是否把 tasks/current.md 活动步骤挂尾进 payload。主会话 True；
+        # delegate worker 等隔离 ctx 置 False——否则主 agent 的任务切片会以
+        # "系统最高指令"泄进 worker 请求，直接误导 worker。
+        self.inject_task_tail: bool = True
 
     # ── 属性 ──────────────────────────────────────────────
 
@@ -163,7 +167,7 @@ class CacheContext:
         # ── 游离态挂尾注入（阅后即焚，不进 self.log）──
         try:
             from .tasks import read_current_active_step
-            _active = read_current_active_step()
+            _active = read_current_active_step() if self.inject_task_tail else ""
             if _active:
                 api.append({
                     "role": "system",

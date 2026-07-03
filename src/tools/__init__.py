@@ -141,6 +141,29 @@ def get_tools() -> list[dict]:
 
     _tools_cache = tools
     return tools
+
+
+_tools_subset_cache: dict[frozenset[str], list[dict]] = {}
+
+
+def get_tools_subset(names: frozenset[str]) -> list[dict]:
+    """按名取工具 schema 子集（剥 _meta）——供 delegate worker 等隔离调用方拼自己的工具单。
+
+    刻意绕过 _enabled_groups 过滤：组机制只决定"挂不挂进主会话 prefix"（省 token），
+    execute_tool 派发不看组——worker 拿到 schema 就能用（如默认关闭的 research 组里的
+    rag_search）。结果按 names 缓存，保证同一子集每次返回同一 list 对象、字节稳定。
+    """
+    cached = _tools_subset_cache.get(names)
+    if cached is not None:
+        return cached
+    subset = [
+        {k: v for k, v in t.items() if k != "_meta"}
+        for src in _TOOL_SOURCES
+        for t in src
+        if t["function"]["name"] in names
+    ]
+    _tools_subset_cache[names] = subset
+    return subset
 # ── 工具执行 ──
 # ── 会话级工具调用缓存 ──
 #

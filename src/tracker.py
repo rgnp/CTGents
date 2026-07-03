@@ -35,6 +35,11 @@ def set_session(session_id: str | None) -> None:
     _current_session_id = session_id or ""
 
 
+def current_session() -> str:
+    """当前追踪会话 id（delegate 等嵌套调用后用于恢复）。"""
+    return _current_session_id
+
+
 def record_tool_call(
     name: str,
     duration_ms: float,

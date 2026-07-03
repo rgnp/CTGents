@@ -212,3 +212,26 @@ class SummaryParams:
 
 
 SUMMARY = SummaryParams()
+
+
+@dataclass(frozen=True)
+class DelegateParams:
+    """delegate 调研子代理旋钮（worker 隔离上下文 + 机械出处闸，见 tools/delegate.py）。"""
+
+    enabled: bool = _env_bool("CTG_DELEGATE_ENABLED", True)
+    # worker 单次任务的 API 请求预算（钱闸：不继承主轮 180 的全局熔断）
+    worker_max_requests: int = _env_int("CTG_DELEGATE_WORKER_MAX_REQUESTS", 40)
+    # 出处闸打回后，每轮重试的请求预算（补 read_page/重写产出，用不了多少步）
+    retry_max_requests: int = _env_int("CTG_DELEGATE_RETRY_MAX_REQUESTS", 15)
+    # 出处闸不过时最多打回 worker 重试几次（之后 fail-closed 标记未通过返回）
+    gate_retries: int = _env_int("CTG_DELEGATE_GATE_RETRIES", 1)
+    # 产出文件最少字符数（低于视为未交付）
+    min_output_chars: int = _env_int("CTG_DELEGATE_MIN_OUTPUT_CHARS", 200)
+    # worker 可用工具子集（逗号分隔工具名；不含 delegate 自身防递归，不含 control 工具）
+    worker_tools: str = os.getenv(
+        "CTG_DELEGATE_WORKER_TOOLS",
+        "search_web,read_page,read_file,list_files,write_file,rag_search,think",
+    )
+
+
+DELEGATE = DelegateParams()

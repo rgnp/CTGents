@@ -77,7 +77,8 @@ def test_reasoning_persisted_on_assistant_but_stripped_from_api(monkeypatch):
     这里跑 thinking-only 一轮（on_reasoning 收到思考），断言 log 里 assistant 带
     _reasoning、而 ctx.send() 产出的消息一律不含该字段。
     """
-    def _final_with_reasoning(backend, messages, on_token, session_id, on_reasoning=None):
+    def _final_with_reasoning(backend, messages, on_token, session_id,
+                              on_reasoning=None, **_kwargs):
         if on_reasoning:
             on_reasoning("我在想")
             on_reasoning("继续想")

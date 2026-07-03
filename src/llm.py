@@ -1818,14 +1818,20 @@ def run_conversation(
     session_id: str = "",
     on_reasoning: Callable[[str], None] | None = None,
     on_tool_result: Callable[[str, str], None] | None = None,
+    tools: list[dict] | None = None,
+    track_stats: bool = True,
+    max_requests: int | None = None,
 ) -> str:
     """处理一轮对话：自动路由 + 工具调用循环。
 
     循环终止条件：
       1. LLM 返回无 tool_calls（自然完成）
       2. 上下文 token 超限
-      3. 单轮请求数达 _MAX_REQUESTS_PER_TURN（成本熔断）
+      3. 单轮请求数达熔断上限（max_requests，None=全局 _MAX_REQUESTS_PER_TURN）
       4. 用户 Esc 中断
+
+    tools / track_stats / max_requests 三参供隔离嵌套调用（delegate worker）收窄：
+    自定义工具子集、不污染主会话缓存统计、独立请求预算。默认值=主会话现行为。
     """
     # ── 运行时守卫：防止误传 list[dict] 等错误类型 ──
     if not hasattr(ctx, "log") or not hasattr(ctx, "all"):
@@ -1903,13 +1909,13 @@ def run_conversation(
         # 在 _handle_tool_results 里随时可能触发），新登记的自律检查本轮内就能推送，不用
         # 等到下一次外部调用 run_conversation（下一用户回合/续跑下一步）才刷新。
         _reconcile_system_context(ctx)
-        if requests_made >= _MAX_REQUESTS_PER_TURN:
+        request_budget = max_requests if max_requests is not None else _MAX_REQUESTS_PER_TURN
+        if requests_made >= request_budget:
             # 经 on_token 显式吐出停因——否则这条 return 被 _drive_turn 忽略、用户只看到
             # 回复戛然而止、不知为何停。长任务里这是"本步到顶、续跑下一步新预算接力"，非失败。
             msg = (
-                f"本轮已发出 {requests_made} 次 API 请求，达到单轮熔断上限"
-                f"（CTG_MAX_REQUESTS_PER_TURN={_MAX_REQUESTS_PER_TURN}）。本步已停；"
-                "若在长任务里、续跑会带新预算接着做下一步，否则请拆小后继续。"
+                f"本轮已发出 {requests_made} 次 API 请求，达到熔断上限（{request_budget}）。"
+                "本步已停；若在长任务里、续跑会带新预算接着做下一步，否则请拆小后继续。"
             )
             on_token("\n" + msg + "\n")
             return msg
@@ -1932,7 +1938,8 @@ def run_conversation(
         try:
             _reasoning_accum.clear()
             content, tool_calls, eager_results = _invoke_llm_eager(
-                backend, ctx.send(), on_token, session_id, on_reasoning=_capture_reasoning,
+                backend, ctx.send(), on_token, session_id,
+                track_stats=track_stats, tools=tools, on_reasoning=_capture_reasoning,
             )
             requests_made += 1
         except UserInterruptError:
