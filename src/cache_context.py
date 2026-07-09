@@ -14,6 +14,8 @@
     session.save(ctx.all)               # prefix + log 用于持久化
 """
 
+from __future__ import annotations
+
 import hashlib as _hashlib
 import json
 import logging
@@ -50,6 +52,25 @@ class PrefixIntegrityError(RuntimeError):
     """前缀哈希校验失败 — 不可变前缀被意外修改。"""
 
     pass
+
+
+# ── 行为牙：思考牙 + 证据牙 ──
+# 历史：5a96363（思考牙）/ b1316f5（证据牙）曾以 strip-then-append 挂 ctx.log 尾实现，
+# 6-16 一度搬进前缀（对根深蒂固默认≈零效果，此前已实验验证过），随后连前缀那份也在
+# AGENTS.md 精简过程中一并丢失——两颗牙实际已经消失。现在改走 send() 里已有的游离态
+# 挂尾（同「当前任务步骤」提醒同款写法）：从不进 self.log，没有可剔除的旧消息，不会
+# 重蹈 2026-06-18 那次"strip 打乱字节偏移"的缓存崩溃（prefix + log 逐字节不变）。
+_THINKING_NUDGE = (
+    "[提醒] 检索 / recall / 读到的内容是线索，不是答案。"
+    "问方向 / 取舍 / \"怎么看\"时，先想清楚，给出你的判断 + 理由 + 你会怎么做，"
+    "别把搜到的摆出来让用户挑；问事实就直接答、不必长。"
+)
+
+_EVIDENCE_NUDGE = (
+    "[提醒] 下结论前先核证据够不够：这个判断依赖哪些条件？我这一轮真读/grep/搜过，"
+    "还是凭印象？条件不全就先补（read/grep/search）；补不全就把信心收住、明说还差什么——"
+    "别拿不全的输入给满分结论。"
+)
 
 
 class CacheContext:
@@ -136,7 +157,8 @@ class CacheContext:
 
         prefix 段：不可变系统消息（会话级冻结、哈希锁死）。
         log 段：只追加对话（user/assistant/tool），丢弃 volatile system。
-        尾段：游离态挂尾——阅后即焚，不进 self.log，利用近因效应聚焦当前任务步骤。
+        尾段：游离态挂尾——阅后即焚，不进 self.log，利用近因效应聚焦当前任务步骤 +
+        思考牙/证据牙（防复读、防证据不全就下结论）。
         前缀缓存不受影响（prefix + log 序列不变，尾段是临时追加的易失消息）。
 
         Args:
@@ -183,6 +205,10 @@ class CacheContext:
                 })
         except Exception:
             pass
+
+        # ── 行为牙：思考牙 + 证据牙（阅后即焚，不进 self.log）──
+        api.append({"role": "system", "content": _THINKING_NUDGE})
+        api.append({"role": "system", "content": _EVIDENCE_NUDGE})
 
         # ── 协议不变式终强制（唯一一层）：tool 结果必须**紧邻**其 assistant 之后 ──
         # DeepSeek 的校验是紧邻性不是存在性：assistant(tool_calls) 与 tool 结果之间

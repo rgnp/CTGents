@@ -16,7 +16,8 @@ CTGents——自进化的编程 + 科研助手。
 目录：
   src/ — 源码 | src/tools/ — 工具实现 | tests/ | memory/, knowledge/ — 不提交
   sessions/ — 会话存档 | tasks/ — current.md + pending/ + archive/
-  psyche/ — 领域框架按需加载（general 常驻，其余命中触发词加载）
+  psyche/ — 领域框架按需加载（general 常驻；其余不是关键词触发，是我判断力不够时自己
+  提议具体加载哪个 + 为什么，见 general psyche §七"判断深度门禁"；关键词自动加载已删除）
 </nav>
 
 <conventions>

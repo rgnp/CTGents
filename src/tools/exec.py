@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import atexit
 import contextlib
 import os
@@ -30,10 +32,14 @@ SHELL_META_CHARS = frozenset("&|;<>\n\r")
 
 # ── 异步 Job 管理 ──
 
-_JOB_TTL_SECONDS = 600
+_JOB_TTL_SECONDS = RUNTIME.job_ttl_seconds
 _JOB_MAX_COUNT = 50
+_JOB_LOG_DIR = Path(os.environ.get("CTG_JOB_LOG_DIR", "/tmp/ctg-jobs"))
 _jobs: dict[str, dict] = {}
 _jobs_lock = threading.Lock()
+
+with contextlib.suppress(OSError):
+    _JOB_LOG_DIR.mkdir(parents=True, exist_ok=True)
 
 
 def _kill_job(job: dict | None) -> None:
@@ -44,6 +50,7 @@ def _kill_job(job: dict | None) -> None:
     """
     if not job:
         return
+    _close_job_log(job)
     proc = job.get("proc")
     if proc is not None and proc.poll() is None:  # 仍在运行
         with contextlib.suppress(OSError):
@@ -78,6 +85,25 @@ def _kill_all_jobs() -> None:
 atexit.register(_kill_all_jobs)
 
 
+def _read_log_tail(log_path: str, n_lines: int = 20) -> str:
+    try:
+        with open(log_path) as f:
+            lines = f.readlines()
+            return "".join(lines[-n_lines:]).rstrip() or "(日志为空)"
+    except FileNotFoundError:
+        return "(日志文件尚未创建)"
+    except OSError:
+        return "(无法读取日志)"
+
+
+def _close_job_log(job: dict) -> None:
+    """关闭 job 的日志文件句柄。"""
+    fh = job.pop("log_fh", None)
+    if fh is not None:
+        with contextlib.suppress(OSError):
+            fh.close()
+
+
 def _start_job(command: str, timeout: int, workdir: str | None) -> str:
     cwd = Path(workdir).expanduser().resolve() if workdir else Path.cwd()
     if not cwd.exists() or not cwd.is_dir():
@@ -86,10 +112,12 @@ def _start_job(command: str, timeout: int, workdir: str | None) -> str:
     if isinstance(cmd_parts, str):
         raise ValueError(cmd_parts)
     job_id = f"job-{uuid.uuid4().hex[:8]}"
+    log_path = _JOB_LOG_DIR / f"{job_id}.log"
+    log_fh = open(log_path, "w")  # noqa: SIM115 — 句柄跨函数存活，由 _close_job_log 统一关闭
     proc = subprocess.Popen(
         cmd_parts,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
+        stdout=log_fh,
+        stderr=subprocess.STDOUT,
         cwd=cwd,
     )
     _job_cleanup()
@@ -100,6 +128,8 @@ def _start_job(command: str, timeout: int, workdir: str | None) -> str:
             "timeout": timeout,
             "workdir": str(cwd),
             "created_at": time.time(),
+            "log_path": str(log_path),
+            "log_fh": log_fh,
         }
     return job_id
 
@@ -114,10 +144,12 @@ def _poll_job(job_id: str) -> str:
     proc: subprocess.Popen = job["proc"]
     timeout = job["timeout"]
     elapsed = time.time() - job["created_at"]
+    log_path = job.get("log_path", "")
 
     def _expire() -> str:
         with contextlib.suppress(OSError):
             proc.kill()
+        _close_job_log(job)
         with _jobs_lock:
             _jobs.pop(job_id, None)
         return f"⏱️ job {job_id} 超时（>{timeout}s）: {job['command']}"
@@ -125,28 +157,21 @@ def _poll_job(job_id: str) -> str:
     if elapsed > timeout:
         return _expire()
 
-    # long-poll：内部阻塞等到作业完成或等够预算才返回，避免 agent ~1s 一次忙等长任务
-    # （每次 poll = 一整个 LLM 往返）。等待不超过作业剩余超时；锁已释放，长阻塞不占锁。
-    wait = min(RUNTIME.poll_wait_seconds, max(timeout - elapsed, 0))
-    try:
-        proc.wait(timeout=wait)
-    except subprocess.TimeoutExpired:
+    if proc.poll() is None:
         elapsed = time.time() - job["created_at"]
         if elapsed > timeout:
             return _expire()
-        return f"🔄 job {job_id}: 仍在运行（{elapsed:.0f}s / {timeout}s）: {job['command']}"
+        tail = _read_log_tail(log_path) if log_path else ""
+        info = f"🔄 job {job_id}: 仍在运行（{elapsed:.0f}s / {timeout}s）: {job['command']}"
+        if tail:
+            info += f"\n\n--- 最后 20 行 ---\n{tail}"
+        return info
 
-    stdout_bytes, stderr_bytes = proc.communicate()
-    stdout = stdout_bytes.decode("utf-8", errors="replace") if stdout_bytes else ""
-    stderr = stderr_bytes.decode("utf-8", errors="replace") if stderr_bytes else ""
+    # 进程已结束
+    _close_job_log(job)
     rc = proc.returncode
-
-    parts: list[str] = []
-    if stdout.strip():
-        parts.append(stdout.rstrip())
-    if stderr.strip():
-        parts.append(f"[stderr]\n{stderr.rstrip()}")
-    output = "\n".join(parts) if parts else "(无输出)"
+    tail = _read_log_tail(log_path) if log_path else "(无输出)"
+    output = _truncate_output(tail)
 
     prefix = f"✅ job {job_id}: 完成（exit={rc}, {elapsed:.0f}s）: {job['command']}\n"
     if rc != 0:
@@ -154,7 +179,7 @@ def _poll_job(job_id: str) -> str:
 
     with _jobs_lock:
         _jobs.pop(job_id, None)
-    return prefix + _truncate_output(output)
+    return prefix + output
 
 
 # ── 工具定义 ──
@@ -424,27 +449,61 @@ def run_command(command: str, timeout: int = 30, workdir: str | None = None) -> 
         timeout = max(timeout, RUNTIME.test_timeout_floor)
 
     try:
-        result = subprocess.run(
+        proc = subprocess.Popen(
             cmd_parts,
-            capture_output=True,
-            encoding="utf-8",
-            errors="replace",
-            timeout=timeout,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
             cwd=cwd,
         )
+        stdout_bytes, stderr_bytes = proc.communicate(timeout=timeout)
     except subprocess.TimeoutExpired:
-        return f"命令执行超时（{timeout} 秒）: {command}"
+        # 令超时进程无缝转入后台 async job 系统，不杀进程
+        _job_cleanup()
+        job_id = f"job-{uuid.uuid4().hex[:8]}"
+        log_path = _JOB_LOG_DIR / f"{job_id}.log"
+
+        # 将 proc 的 PIPE 输出 drain 到日志文件（后台线程），方便 tail -f
+        def _drain_to_log() -> None:
+            with open(log_path, "ab") as lf:
+                out, err = proc.communicate()
+                if out:
+                    lf.write(out)
+                if err:
+                    lf.write(b"\n[stderr]\n")
+                    lf.write(err)
+
+        drain_thread = threading.Thread(target=_drain_to_log, daemon=True)
+        drain_thread.start()
+
+        with _jobs_lock:
+            _jobs[job_id] = {
+                "proc": proc,
+                "command": command,
+                "timeout": timeout,
+                "workdir": str(cwd),
+                "created_at": time.time(),
+                "log_path": str(log_path),
+                "drain_thread": drain_thread,
+            }
+        return (
+            f"⏳ 命令在前台 {timeout}s 内未完成，已转后台: job {job_id}\n"
+            f"命令: {command}\n"
+            f"监控: tail -f {log_path}\n"
+            f"完成后自动通知，去干别的事。"
+        )
     except OSError as e:
         return f"执行失败: {e}"
 
+    stdout = stdout_bytes.decode("utf-8", errors="replace")
+    stderr = stderr_bytes.decode("utf-8", errors="replace")
     parts: list[str] = []
-    if result.stdout.strip():
-        parts.append(result.stdout.rstrip())
-    if result.stderr.strip():
-        parts.append(f"[stderr]\n{result.stderr.rstrip()}")
+    if stdout.strip():
+        parts.append(stdout.rstrip())
+    if stderr.strip():
+        parts.append(f"[stderr]\n{stderr.rstrip()}")
     output = "\n".join(parts) if parts else "(无输出)"
-    if result.returncode != 0:
-        output = f"退出码: {result.returncode}\n\n" + output
+    if proc.returncode != 0:
+        output = f"退出码: {proc.returncode}\n\n" + output
     return _truncate_output(output)
 
 
@@ -467,9 +526,11 @@ def run_async(command: str, timeout: int = 120, workdir: str | None = None) -> s
         job_id = _start_job(command, timeout, workdir)
     except ValueError as e:
         return str(e)
+    log_path = _JOB_LOG_DIR / f"{job_id}.log"
     return (
-        f"🚀 已后台启动 job {job_id}: {command}（超时 {timeout}s）。"
-        f"完成后会自动通知你——不要 poll 轮询，本轮可直接结束或去做别的事。"
+        f"🚀 已后台启动 job {job_id}（超时 {timeout}s）: {command}\n"
+        f"监控: tail -f {log_path}\n"
+        f"完成后自动通知，去干别的事。"
     )
 
 
@@ -486,7 +547,7 @@ def running_job_count() -> int:
 def drain_finished_jobs() -> list[str]:
     """收割所有已结束的后台作业，返回完成通知（每条一段）。
 
-    非阻塞：只 communicate 已结束的进程，未结束的留着下次收。REPL 在回合间调用
+    非阻塞：只处理已结束的进程，未结束的留着下次收。REPL 在回合间调用
     → 「派发即停 + 完成自动通知」模型，取代 agent 反复 poll 忙等（那是刷屏 + 把
     216s 的活 babysit 成 10 分钟体感的根，见 [[ctgents-test-gate-speed]]）。
     """
@@ -498,25 +559,22 @@ def drain_finished_jobs() -> list[str]:
         if proc.poll() is None:
             continue  # 仍在运行，下次再收
         elapsed = time.time() - job["created_at"]
-        try:
-            stdout_bytes, stderr_bytes = proc.communicate(timeout=5)
-        except Exception:
-            continue
+        _close_job_log(job)
+        # 等待 drain_thread（如果有）完成
+        drain_t = job.pop("drain_thread", None)
+        if drain_t is not None:
+            drain_t.join(timeout=5)
+        rc = proc.returncode
+        log_path = job.get("log_path", "")
+        tail = _read_log_tail(log_path) if log_path else "(无输出)"
         with _jobs_lock:
             _jobs.pop(job_id, None)
-        stdout = stdout_bytes.decode("utf-8", errors="replace") if stdout_bytes else ""
-        stderr = stderr_bytes.decode("utf-8", errors="replace") if stderr_bytes else ""
-        rc = proc.returncode
-        parts: list[str] = []
-        if stdout.strip():
-            parts.append(stdout.rstrip())
-        if stderr.strip():
-            parts.append(f"[stderr]\n{stderr.rstrip()}")
-        output = "\n".join(parts) if parts else "(无输出)"
         mark = "✅" if rc == 0 else "❌"
+        output = _truncate_output(tail)
+        log_hint = f"\n日志: {log_path}" if log_path else ""
         notices.append(
-            f"{mark} 后台 job {job_id} 完成（exit={rc}, {elapsed:.0f}s）: {job['command']}\n"
-            + _truncate_output(output)
+            f"{mark} 后台 job {job_id} 完成（exit={rc}, {elapsed:.0f}s）: {job['command']}"
+            + log_hint + "\n" + output
         )
     return notices
 
