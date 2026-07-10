@@ -1,5 +1,9 @@
 """Verifier 模块测试。"""
 
+from types import SimpleNamespace
+
+import src.llm as llm
+from src.cache_context import CacheContext
 from src.verifier import (
     GateResult,
     TerminationGate,
@@ -121,6 +125,40 @@ class TestCheckClaimEvidence:
             dummy_ctx,
         )
         assert result.severity == "pass"
+
+    # ── 弱信号（仅反引号引用、无动作动词）只 warn，绝不 fail 卡 loop ──
+    # 失败类：评审/讲解轮反引号引用已有文件 → 曾被硬 fail 困住（实测复现）。
+
+    def test_backtick_only_missing_file_warns_not_fails(self, dummy_ctx, monkeypatch):
+        """无动词、仅反引号引用一个不存在的文件 → warn（不是 fail）。"""
+        monkeypatch.setattr("src.verifier._get_git_changes", lambda: (set(), set(), True))
+        result = check_claim_evidence(
+            "建议参考 `src/tools/nonexistent_abc_xyz.py` 的做法。",
+            dummy_ctx,
+        )
+        assert result.severity == "warn"
+
+    def test_backtick_only_unchanged_file_warns_not_fails(self, dummy_ctx, monkeypatch):
+        """无动词、反引号引用一个存在但本轮没改的文件（工作区别处脏）→ warn。"""
+        monkeypatch.setattr(
+            "src.verifier._get_git_changes",
+            lambda: ({"other.py"}, set(), True),
+        )
+        result = check_claim_evidence(
+            "它依赖 `AGENTS.md` 里的约定。",  # 引用，非完成声明
+            dummy_ctx,
+        )
+        assert result.severity == "warn"
+
+    def test_verb_bound_still_fails_even_with_backtick_ref(self, dummy_ctx, monkeypatch):
+        """强信号（动词绑定）缺证据仍判 fail，不被弱信号规则放水。"""
+        monkeypatch.setattr("src.verifier._get_git_changes", lambda: (set(), set(), True))
+        result = check_claim_evidence(
+            "我创建了 `nonexistent_abc_xyz.py`，可参考 `AGENTS.md`。",
+            dummy_ctx,
+        )
+        assert result.severity == "fail"
+        assert "nonexistent_abc_xyz.py" in result.message
 
 
 # ── check_task_consistency ──
@@ -262,6 +300,45 @@ class TestRunTerminationGate:
         )
         result = run_termination_gate("test", dummy_ctx)
         assert result.startswith("fail:")
+
+
+class TestTerminationGateLoopIntegration:
+    """producer/consumer 接缝：fail 必须带反馈重跑，不能静默放行。"""
+
+    def test_fail_feedback_reaches_retry_request(self, monkeypatch):
+        backend = SimpleNamespace(info=SimpleNamespace(name="Fake", supports_tools=True))
+        responses = iter([
+            ("我创建了 missing.py", [], {}),
+            ("更正：没有创建该文件。", [], {}),
+        ])
+        payloads: list[list[dict]] = []
+        gate_actions = iter(["fail:missing.py 不存在", "pass"])
+
+        def fake_eager(_backend, messages, *_args, **_kwargs):
+            payloads.append(messages)
+            return next(responses)
+
+        monkeypatch.setattr(llm, "auto_select_model", lambda _q: backend)
+        monkeypatch.setattr(llm, "_reconcile_system_context", lambda _ctx: None)
+        monkeypatch.setattr(llm, "_invoke_llm_eager", fake_eager)
+        monkeypatch.setattr(llm, "_run_termination_gate", lambda *_a: next(gate_actions))
+
+        ctx = CacheContext(prefix_msgs=[{"role": "system", "content": "p"}])
+        result = llm.run_conversation(
+            ctx,
+            "完成任务",
+            on_token=lambda _t: None,
+            on_tool=lambda *_a: None,
+            max_requests=3,
+        )
+
+        assert result == "更正：没有创建该文件。"
+        assert len(payloads) == 2
+        assert any(
+            m.get("role") == "system"
+            and "missing.py 不存在" in (m.get("content") or "")
+            for m in payloads[1]
+        ), "终止门失败原因必须进入重试请求"
 
 
 # ── _fold_stale_tool_results_in_log ──

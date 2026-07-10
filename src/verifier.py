@@ -90,20 +90,27 @@ _CLAIM_RE = re.compile(
 )
 
 
-def _extract_claimed_files(text: str) -> dict[str, str]:
-    """从 agent 回复中提取声称创建/修改的文件路径。返回 {路径: 动作动词}。"""
-    claimed: dict[str, str] = {}
+def _extract_claimed_files(text: str) -> dict[str, tuple[str, str]]:
+    """从 agent 回复中提取声称创建/修改的文件路径。
+
+    返回 {路径: (动作动词, 来源)}，来源 ∈ {"verb", "backtick"}：
+      - "verb":     动作动词紧邻路径（"我创建了 `x.py`"）——**强信号**，缺证据判 fail。
+      - "backtick": 仅靠反引号文件名模式命中、无显式动作动词——**弱信号**。评审/讨论
+                    轮里引用一个已有文件（"看下 `x.py`"）也会命中，缺证据只降 warn、
+                    不拦 loop；否则纯讲解轮会被硬 fail 卡住（实测会误伤）。
+    """
+    claimed: dict[str, tuple[str, str]] = {}
     for m in _CLAIM_RE.finditer(text):
         action = m.group(1)
         for group_idx in (2, 3):
             maybe_path = m.group(group_idx)
             if maybe_path and _looks_like_filepath(maybe_path):
-                claimed[maybe_path] = action
-    # 额外：反引号内的任何文件名模式（无显式动词时默认 "修改"）
+                claimed[maybe_path] = (action, "verb")
+    # 额外：反引号内的任何文件名模式（无显式动词——弱信号，仅提醒不拦截）
     for m in re.finditer(r'`([a-zA-Z0-9_/.-]+\.[a-z]{1,6})`', text):
         path = m.group(1)
         if _looks_like_filepath(path) and path not in claimed:
-            claimed[path] = "修改"
+            claimed[path] = ("修改", "backtick")
     return claimed
 
 
@@ -136,37 +143,49 @@ def check_claim_evidence(assistant_content: str, _ctx) -> GateResult:
     cwd = Path.cwd()
     modified, untracked, is_git_repo = _get_git_changes()
 
-    missing: list[str] = []       # 文件不存在
-    no_evidence: list[str] = []   # 文件存在但 git 里没有改动证据
+    # 按来源分强/弱：动词绑定=强信号缺证据判 fail；仅反引号=弱信号只 warn。
+    strong_missing: list[str] = []
+    strong_no_evidence: list[str] = []
+    weak: list[str] = []          # 弱信号的缺证据（不存在/无改动都归这，只提醒）
 
-    for path_str in claimed:
+    for path_str, (_action, source) in claimed.items():
         p = cwd / path_str
-        if not p.exists():
-            missing.append(path_str)
-        elif (is_git_repo and (modified or untracked)
-                and path_str not in modified and path_str not in untracked):
-            # 有 git 数据——做交叉验证
-            no_evidence.append(path_str)
-        # else: 非 git 仓库 / git 仓库但 diff 全空 → 仅靠存在性判定
+        exists = p.exists()
+        has_evidence = not (is_git_repo and (modified or untracked)
+                            and path_str not in modified and path_str not in untracked)
+        if exists and has_evidence:
+            continue  # 存在且有改动证据（或无 git 数据可交叉验证）→ 无问题
+        if source == "verb":
+            (strong_missing if not exists else strong_no_evidence).append(path_str)
+        else:
+            weak.append(path_str)
 
-    msgs: list[str] = []
-    if missing:
-        files_list = "、".join(missing[:5])
-        suffix = f" 等 {len(missing)} 个" if len(missing) > 5 else ""
-        msgs.append(
-            f"你的回复中提到创建/修改了以下文件但它们不存在: {files_list}{suffix}。"
+    def _fmt(paths: list[str]) -> str:
+        head = "、".join(paths[:5])
+        return head + (f" 等 {len(paths)} 个" if len(paths) > 5 else "")
+
+    # 强信号缺证据 → fail（拦 loop，逼补齐或改正）
+    fail_msgs: list[str] = []
+    if strong_missing:
+        fail_msgs.append(
+            f"你的回复中声称创建/修改了以下文件但它们不存在: {_fmt(strong_missing)}。"
             f"请实际创建/修改这些文件，或修正回复中不准确的描述。"
         )
-    if no_evidence:
-        files_list = "、".join(no_evidence[:5])
-        suffix = f" 等 {len(no_evidence)} 个" if len(no_evidence) > 5 else ""
-        msgs.append(
-            f"你的回复中提到修改了以下文件但 git diff 显示没有实际改动: {files_list}{suffix}。"
+    if strong_no_evidence:
+        fail_msgs.append(
+            f"你的回复中声称修改了以下文件但 git diff 显示没有实际改动: {_fmt(strong_no_evidence)}。"
             f"请实际修改这些文件，或修正回复中不准确的描述。"
         )
+    if fail_msgs:
+        return GateResult("声称-证据一致性", False, "fail", " ".join(fail_msgs))
 
-    if msgs:
-        return GateResult("声称-证据一致性", False, "fail", " ".join(msgs))
+    # 仅弱信号（反引号引用）缺证据 → warn，追加提醒后正常终止，不拦 loop
+    if weak:
+        return GateResult(
+            "声称-证据一致性", False, "warn",
+            f"💡 你的回复里以反引号提到了这些文件，但未检测到对应改动 / 文件不存在: "
+            f"{_fmt(weak)}。若只是引用讨论可忽略；若确实是完成声明，请补齐证据。",
+        )
     return GateResult("声称-证据一致性", True, "pass")
 
 
