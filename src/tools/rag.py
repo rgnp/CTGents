@@ -9,13 +9,19 @@
   AI 在对话中自主判断是否需要检索代码，主动调用 rag_query() 进行搜索。
   不自动注入到 system prompt，避免破坏 DeepSeek 前缀缓存。
 
-设计原则：
+设计原则（代码索引 rag_index/rag_query）：
   - 零额外依赖（纯 Python + 标准库）
   - TF-IDF + 代码语义关键词加权，无需 embedding API
   - BM25 评分 + 驼峰/蛇形自动拆词
   - 按文件类型智能分块（函数/类/行数）
   - 增量更新：只重新索引变更的文件
+
+研究知识库索引（index_research_content/query_research）额外叠了一层可选的本地
+embedding 语义检索（见 embeddings.py），词面零重合但语义相关的笔记也能被召回；
+未装 sentence-transformers 或加载失败时自动退回纯 TF-IDF，行为和不加这层时一致。
 """
+
+from __future__ import annotations
 
 import fnmatch
 import json
@@ -27,13 +33,15 @@ from collections import Counter
 from pathlib import Path
 
 from ..params import RAG
+from . import embeddings
 
 # ═══════════════════════════════════════════════════════════════
 # 配置
 # ═══════════════════════════════════════════════════════════════
 
-# 索引目录（存放在项目根目录）
-RAG_INDEX_DIR = ".rag-index"
+# 索引目录（存放在项目根目录）。单一真相源在 params.RAG.index_dir——embeddings.py 的
+# 向量索引共用此目录，别在别处再硬编码字面量（改一处会静默分裂）。
+RAG_INDEX_DIR = RAG.index_dir
 
 # 索引文件名
 RAG_INDEX_FILE = "index.json"
@@ -515,7 +523,7 @@ class CodeChunk:
         }
 
     @classmethod
-    def from_dict(cls, d: dict) -> "CodeChunk":
+    def from_dict(cls, d: dict) -> CodeChunk:
         return cls(**d)
 
 
@@ -803,7 +811,7 @@ class TfIdfIndex:
         }
 
     @classmethod
-    def from_dict(cls, d: dict) -> "TfIdfIndex":
+    def from_dict(cls, d: dict) -> TfIdfIndex:
         idx = cls()
         idx.documents = [CodeChunk.from_dict(doc) for doc in d["documents"]]
         idx.inverted_index = d["inverted_index"]
@@ -822,7 +830,7 @@ def _build_index(files: list[Path], project_root: Path) -> TfIdfIndex:
     index = TfIdfIndex()
     for file_path in files:
         try:
-            rel_path = str(file_path.relative_to(project_root))
+            rel_path = file_path.relative_to(project_root).as_posix()
         except ValueError:
             rel_path = str(file_path)
 
@@ -914,7 +922,7 @@ def index_project(path: str | None = None, force: bool = False) -> str:
         hash_cache: dict[str, str] = {}
         for f in files:
             try:
-                rel = str(f.relative_to(project_root))
+                rel = f.relative_to(project_root).as_posix()
             except ValueError:
                 rel = str(f)
             hash_cache[rel] = _get_file_hash(f)
@@ -951,7 +959,7 @@ def index_project(path: str | None = None, force: bool = False) -> str:
 
     for f in files:
         try:
-            rel = str(f.relative_to(project_root))
+            rel = f.relative_to(project_root).as_posix()
         except ValueError:
             rel = str(f)
         h = _get_file_hash(f)
@@ -985,7 +993,7 @@ def index_project(path: str | None = None, force: bool = False) -> str:
     new_chunks: list[CodeChunk] = []
     for f in changed_files:
         try:
-            rel = str(f.relative_to(project_root))
+            rel = f.relative_to(project_root).as_posix()
         except ValueError:
             rel = str(f)
         lang = SOURCE_EXTENSIONS.get(f.suffix.lower(), "unknown")
@@ -997,7 +1005,7 @@ def index_project(path: str | None = None, force: bool = False) -> str:
     drop_paths = set(deleted_files)
     for f in changed_files:
         try:
-            drop_paths.add(str(f.relative_to(project_root)))
+            drop_paths.add(f.relative_to(project_root).as_posix())
         except ValueError:
             drop_paths.add(str(f))
 
@@ -1106,7 +1114,8 @@ def get_index_status(path: str | None = None) -> str:
         parts = ["📭 RAG 索引状态：代码索引未建立\n\n请运行 `rag_index()` 建立索引。"]
         if research_idx:
             n_docs = len(research_idx.get("documents", []))
-            parts.append(f"研究索引已存在 ({n_docs} 个文档块)。用 rag_search 搜索。")
+            embed_note = "语义+词面混合" if embeddings.available() else "仅词面（语义层未启用）"
+            parts.append(f"研究索引已存在 ({n_docs} 个文档块，{embed_note})。用 rag_search 搜索。")
         return "\n".join(parts)
 
     updated = meta.get("updated_at", 0)
@@ -1115,7 +1124,8 @@ def get_index_status(path: str | None = None) -> str:
     research_status = ""
     if research_idx:
         n_docs = len(research_idx.get("documents", []))
-        research_status = f"\n   📚 研究索引: {n_docs} 个文档块 (用 rag_search 搜索)"
+        embed_note = "语义+词面混合" if embeddings.available() else "仅词面（语义层未启用）"
+        research_status = f"\n   📚 研究索引: {n_docs} 个文档块，{embed_note} (用 rag_search 搜索)"
 
     return (
         f"📊 RAG 索引状态\n"
@@ -1148,7 +1158,7 @@ class DocChunk:
                 "content": self.content, "doc_type": self.doc_type}
 
     @classmethod
-    def from_dict(cls, d: dict) -> "DocChunk":
+    def from_dict(cls, d: dict) -> DocChunk:
         return cls(d["source"], d["title"], d["content"], d["doc_type"])
 
 
@@ -1194,6 +1204,11 @@ def _index_doc_chunks(chunks: list[DocChunk], index_name: str) -> int:
     }
     idx_path = index_dir / f"{index_name}.json"
     idx_path.write_text(json.dumps(index_data, ensure_ascii=False), encoding="utf-8")
+
+    # 语义层：词面索引永远优先落盘成功；embedding 只加分，失败不影响上面已经写好的 TF-IDF 索引。
+    texts = [f"{chunk.title} {chunk.content}" for chunk in chunks]
+    embeddings.try_build_index(index_name, texts)
+
     return doc_count
 
 
@@ -1207,8 +1222,12 @@ def _load_doc_index(index_name: str) -> dict | None:
         return None
 
 
-def _search_doc_index(index_data: dict, query: str, top_k: int = 5) -> list[dict]:
-    """在文档索引中搜索。"""
+def _search_doc_index(index_data: dict, query: str, top_k: int = 5, index_name: str = "research") -> list[dict]:
+    """在文档索引中搜索：词面 TF-IDF + 本地 embedding 语义混合。
+
+    embedding 层不可用（未装 sentence-transformers / 索引过期 / 加载失败）时，
+    自动退回纯词面检索——行为和加这层之前完全一致，不会因为语义层挂了就搜不到东西。
+    """
     query_lower = query.lower()
     query_words = [w for w in re.findall(r'\b\w+\b', query_lower) if len(w) >= 2]
     if not query_words:
@@ -1228,12 +1247,19 @@ def _search_doc_index(index_data: dict, query: str, top_k: int = 5) -> list[dict
     if q_norm > 0:
         q_vec = {w: v / q_norm for w, v in q_vec.items()}
 
-    # 余弦相似度
-    scores: list[tuple[int, float]] = []
-    for i, doc_vec in enumerate(vectors):
-        dot = sum(q_vec.get(t, 0) * doc_vec.get(t, 0) for t in q_vec)
-        if dot > 0:
-            scores.append((i, dot))
+    # 词面余弦相似度（每个 chunk 一个分数，含 0 分——混合评分需要对齐全部行）
+    lexical = [sum(q_vec.get(t, 0) * doc_vec.get(t, 0) for t in q_vec) for doc_vec in vectors]
+
+    embed_scores = embeddings.query_scores(index_name, query, len(vectors))
+
+    scores: list[tuple[int, float]]
+    if embed_scores is None:
+        scores = [(i, s) for i, s in enumerate(lexical) if s > 0]
+    else:
+        alpha = RAG.lexical_weight
+        combined = [alpha * lexical[i] + (1 - alpha) * max(float(embed_scores[i]), 0.0)
+                    for i in range(len(vectors))]
+        scores = [(i, s) for i, s in enumerate(combined) if s > 0]
 
     scores.sort(key=lambda x: -x[1])
     results = []
@@ -1295,14 +1321,14 @@ def index_research_content() -> str:
                     continue
                 if len(buf) + len(para) > 800 and buf:
                     chunks.append(DocChunk(
-                        f"knowledge:{md_file.relative_to(knowledge_dir)}",
+                        f"knowledge:{md_file.relative_to(knowledge_dir).as_posix()}",
                         title, buf.strip(), "knowledge"))
                     buf = para
                 else:
                     buf += ("\n\n" if buf else "") + para
             if buf.strip():
                 chunks.append(DocChunk(
-                    f"knowledge:{md_file.relative_to(knowledge_dir)}",
+                    f"knowledge:{md_file.relative_to(knowledge_dir).as_posix()}",
                     title, buf.strip(), "knowledge"))
         except Exception:
             continue

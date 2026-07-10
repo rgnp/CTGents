@@ -1,5 +1,7 @@
 """LLM 后端抽象：多模型支持、自动路由、流式调用。"""
 
+from __future__ import annotations
+
 import contextlib
 import hashlib
 import json
@@ -813,7 +815,7 @@ def _invoke_llm(
 
 
 def _collect_eager_results(
-    pending: list[tuple[int, "Future[str]", str, dict]],
+    pending: list[tuple[int, Future[str], str, dict]],
     pre_results: dict[int, str],
     lock: threading.Lock,
 ) -> None:
@@ -830,7 +832,7 @@ def _collect_eager_results(
 
 
 def _try_llm_call(
-    backend: "LLMBackend",
+    backend: LLMBackend,
     messages: list[dict],
     on_token: TokenCallback,
     tools: list[dict] | None,
@@ -1770,6 +1772,10 @@ def _handle_tool_results(
     # "insufficient tool messages following tool_calls message"（2026-07-03 实测复现）。
     _handle_psyche_tools(ctx, approved)
 
+    # 工具结果的陈旧折叠只在 send() 时对发送副本做（_collapse_stale_tool_results，可逆、
+    # 压力自适应、fetch 可捞回）——不在写入时改 ctx.log 本身：那会销毁原文、破坏可逆性，
+    # 且无视舒适区无条件折叠（2026-07-10 移除写时折叠，回到单一可逆机制）。
+
     return storm_sig, storm_count
 
 
@@ -1779,8 +1785,24 @@ def _reconcile_system_context(ctx: CacheContext) -> None:
 
     自律检查 source 的 snapshot = 当前已加载的所有 psyche name 列表。
     reconcile() 根据 snapshot 变化自动推送 baseline/update/removed。
+
+    修复 (2026-07-09): 补从 ctx.log 回填 registry 的兜底——psyche 内容
+    可能已注入 log 但 register 丢失（如 ensure_base_psyche 跳过或
+    resync 未覆盖的场景）。每轮调用前用 loaded_psyches_in_log 扫一次，
+    把漏注册的补上。
     """
+    from .psyche_bridge import loaded_psyches_in_log
     from .system_context import Source, loaded_keys, reconcile, register
+
+    # ── 兜底：从 ctx.log 回填 registry ──
+    log_psyche_names = {meta["name"] for meta in loaded_psyches_in_log(ctx)}
+    reg_psyche_names = {k.split("/", 1)[1] for k in loaded_keys() if k.startswith("psyche/")}
+    missing = log_psyche_names - reg_psyche_names
+    for name in missing:
+        register(Source(
+            key=f"psyche/{name}",
+            snapshot="?",  # 版本未知，来自回填
+        ))
 
     # 获取当前已加载的 psyche 列表
     psyche_keys = sorted(k for k in loaded_keys() if k.startswith("psyche/"))
@@ -1811,6 +1833,15 @@ def _reconcile_system_context(ctx: CacheContext) -> None:
 
     # reconcile 会处理所有 source 的 baseline/update/removed
     reconcile(ctx)
+
+
+def _run_termination_gate(assistant_content: str, ctx: CacheContext) -> str:
+    """终止门：证据驱动的 loop 终止验证。返回 "pass" | "warn:msg" | "fail:msg"。
+
+    导入在函数体内（延迟加载，不拖慢 llm 模块首导）。
+    """
+    from .verifier import run_termination_gate
+    return run_termination_gate(assistant_content, ctx)
 
 
 def run_conversation(
@@ -1985,10 +2016,41 @@ def run_conversation(
             if _reasoning_accum:
                 _msg["_reasoning"] = "".join(_reasoning_accum)  # 重启回放折叠区用，不进 API
             ctx.log.append(_msg)
-            # 模型这轮没调任何工具 = 本轮自然结束（纯文本回复）。长任务的"接着做"不在这里
-            # 硬续——由 main.run_agent_turn 在 agent 参与了任务时自主驱动（run_task_continuation，
-            # "有未完成就继续"），停靠 agent 显式调 task_done/need_user（见 tools/control.py）
-            # 或卡死保险，不再靠"在回复里说停"或"注入不要停"那套自问自答补丁。
+            # ── 终止门（Termination Gate）：证据驱动的 loop 终止验证 ──
+            # 模型这轮没调工具 ≠ 真的做完了。Verifier 检查 agent 声称做的事是否
+            # 真的发生（文件存在、任务步骤更新、测试覆盖），证据不对 → loop 继续。
+            gate_action = _run_termination_gate(content or "", ctx)
+            gate_status, _, gate_message = gate_action.partition(":")
+            if gate_status == "fail":
+                # 失败原因必须进入下一次请求；只 continue 会让模型在没有新指令的
+                # assistant 尾部继续生成，既不知道哪里错了，也可能重复原答案。
+                ctx.log.append({
+                    "role": "system",
+                    "content": (
+                        "【终止验证未通过】\n"
+                        f"{gate_message or '验证器未提供具体原因。请重新核对完成证据。'}\n"
+                        "请先补齐证据或修正不准确的完成声明，再给出最终答复。"
+                    ),
+                    "_termination_gate": "fail",
+                })
+                continue
+            if gate_status == "warn":
+                # 只提醒不拦截：追加到 log 后正常终止。去重——同一条 warn 不重复堆：
+                # check_task_consistency 之类的检查每轮都可能复现同一提醒（任务挂着未做完），
+                # 无去重会每轮 append 一条一模一样的 system 消息、越滚越多（cf. check_modified_tests
+                # 内部的 already_warned）。这里在 append 层统一挡掉，覆盖所有 warn 来源。
+                already = any(
+                    m.get("_termination_gate") == "warn" and m.get("content") == gate_message
+                    for m in ctx.log
+                )
+                if not already:
+                    ctx.log.append({
+                        "role": "system",
+                        "content": gate_message,
+                        "_termination_gate": "warn",
+                    })
+            # 长任务的"接着做"不在这里硬续——由 main.run_agent_turn 在 agent 参与了
+            # 任务时自主驱动（run_task_continuation），停靠 agent 显式调 task_done/need_user。
             if on_progress:
                 on_progress()
             from .tasks import get_task_progress_line

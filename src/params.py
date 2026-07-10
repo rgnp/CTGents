@@ -38,6 +38,11 @@ def _env_bool(key: str, default: bool) -> bool:
     return raw == "1" if raw is not None else default
 
 
+def _env_str(key: str, default: str) -> str:
+    raw = os.getenv(key)
+    return raw if raw is not None else default
+
+
 @dataclass(frozen=True)
 class ContextParams:
     """上下文窗口与压缩/清理相关旋钮。"""
@@ -99,6 +104,14 @@ class RagParams:
     weight_identifier: float = _env_float("CTG_RAG_WEIGHT_IDENTIFIER", 1.5)
     # 超过此大小（字节）的文件跳过索引
     max_file_size: int = _env_int("CTG_RAG_MAX_FILE_SIZE", 512 * 1024)
+    # 索引落盘目录（cwd 相对）。rag.py 的词面索引与 embeddings.py 的向量索引共用此目录——
+    # 单一真相源，两处曾各自硬编码 ".rag-index"，改一处会静默分裂到两个位置。
+    index_dir: str = _env_str("CTG_RAG_INDEX_DIR", ".rag-index")
+    # 本地 embedding 语义检索（knowledge/ 研究文档索引专用，代码索引不受影响）
+    embed_enabled: bool = _env_bool("CTG_RAG_EMBED_ENABLED", True)
+    embed_model: str = _env_str("CTG_RAG_EMBED_MODEL", "paraphrase-multilingual-MiniLM-L12-v2")
+    embed_max_chars: int = _env_int("CTG_RAG_EMBED_MAX_CHARS", 2000)
+    lexical_weight: float = _env_float("CTG_RAG_LEXICAL_WEIGHT", 0.4)  # 向量权重 = 1 - 此值
 
 
 RAG = RagParams()
@@ -150,6 +163,9 @@ class RuntimeParams:
     # 去重后，poll 立即返回"运行中"会让 agent ~1s 一次忙等长任务——每次 poll = 一整个
     # LLM 往返、重发上下文烧前缀缓存。内部阻塞把上百次往返塌成十来次；不超过作业剩余超时。
     poll_wait_seconds: int = _env_int("CTG_POLL_WAIT_SECONDS", 15)
+    # 后台作业 TTL（秒）：超时后自动杀进程回收。默认 3600（1 小时），CTG_JOB_TTL_SECONDS 覆盖。
+    # 原来 600s 对一些长任务（pip install / 模型推理）太短。
+    job_ttl_seconds: int = _env_int("CTG_JOB_TTL_SECONDS", 3600)
 
 
 RUNTIME = RuntimeParams()
