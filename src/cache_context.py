@@ -36,41 +36,19 @@ def _compute_msg_hash(msgs: list[dict]) -> str:
 
 
 def _stub_tool_content(content: str, tool_call_id: str = "") -> str:
-    """把陈旧大工具结果折成一行：保留首行信号 + 原长度 + 真实取回指引。
+    """把陈旧大工具结果折成一行：保留首行信号 + 原长度。
 
     首行常含关键信号（"已写入: path" / "退出码:..." / read 的文件头），留它让
-    模型知道这步干了啥；原文不丢（在 self.log 里、随会话落盘）。需要原文时调
-    fetch_tool_result(tool_call_id) 取回——folding 只动发送副本、原文一直在 log。
+    模型知道这步干了啥；折叠只动发送副本，原文不丢（在 self.log 里、随会话落盘）。
     """
     head = content.split("\n", 1)[0].strip()[:160]
-    hint = (f'需要原文调 fetch_tool_result("{tool_call_id}")'
-            if tool_call_id else "原文在会话存档")
-    return f"{head} … 〔旧工具结果已折叠·原 {len(content)} 字·{hint}〕"
+    return f"{head} … 〔旧工具结果已折叠·原 {len(content)} 字·原文在会话存档〕"
 
 
 class PrefixIntegrityError(RuntimeError):
     """前缀哈希校验失败 — 不可变前缀被意外修改。"""
 
     pass
-
-
-# ── 行为牙：思考牙 + 证据牙 ──
-# 历史：5a96363（思考牙）/ b1316f5（证据牙）曾以 strip-then-append 挂 ctx.log 尾实现，
-# 6-16 一度搬进前缀（对根深蒂固默认≈零效果，此前已实验验证过），随后连前缀那份也在
-# AGENTS.md 精简过程中一并丢失——两颗牙实际已经消失。现在改走 send() 里已有的游离态
-# 挂尾（同「当前任务步骤」提醒同款写法）：从不进 self.log，没有可剔除的旧消息，不会
-# 重蹈 2026-06-18 那次"strip 打乱字节偏移"的缓存崩溃（prefix + log 逐字节不变）。
-_THINKING_NUDGE = (
-    "[提醒] 检索 / recall / 读到的内容是线索，不是答案。"
-    "问方向 / 取舍 / \"怎么看\"时，先想清楚，给出你的判断 + 理由 + 你会怎么做，"
-    "别把搜到的摆出来让用户挑；问事实就直接答、不必长。"
-)
-
-_EVIDENCE_NUDGE = (
-    "[提醒] 下结论前先核证据够不够：这个判断依赖哪些条件？我这一轮真读/grep/搜过，"
-    "还是凭印象？条件不全就先补（read/grep/search）；补不全就把信心收住、明说还差什么——"
-    "别拿不全的输入给满分结论。"
-)
 
 
 class CacheContext:
@@ -95,10 +73,6 @@ class CacheContext:
         # "不调工具=结束"的隐式判断）。续跑/主干据此决定停或继续。见 tools/control.py。
         self.control_signal: str | None = None
         self.control_payload: str | None = None
-        # send() 是否把 tasks/current.md 活动步骤挂尾进 payload。主会话 True；
-        # delegate worker 等隔离 ctx 置 False——否则主 agent 的任务切片会以
-        # "系统最高指令"泄进 worker 请求，直接误导 worker。
-        self.inject_task_tail: bool = True
 
     # ── 属性 ──────────────────────────────────────────────
 
@@ -157,9 +131,8 @@ class CacheContext:
 
         prefix 段：不可变系统消息（会话级冻结、哈希锁死）。
         log 段：只追加对话（user/assistant/tool），丢弃 volatile system。
-        尾段：游离态挂尾——阅后即焚，不进 self.log，利用近因效应聚焦当前任务步骤 +
-        思考牙/证据牙（防复读、防证据不全就下结论）。
-        前缀缓存不受影响（prefix + log 序列不变，尾段是临时追加的易失消息）。
+        不存在游离态挂尾；任何需要模型看到的新上下文都必须先 append 到 log。
+        因而一次请求的完整 payload 可以成为下一次请求的字节前缀。
 
         Args:
             validate: 是否校验 prefix 完整性，默认 True。
@@ -185,30 +158,6 @@ class CacheContext:
         # 中段视图变换：折叠陈旧大工具结果（不动 self.log，原文照常落盘/可 recall）
         cleaned = self._collapse_stale_tool_results(cleaned)
         api.extend(cleaned)
-
-        # ── 游离态挂尾注入（阅后即焚，不进 self.log）──
-        try:
-            from .tasks import read_current_active_step
-            _active = read_current_active_step() if self.inject_task_tail else ""
-            if _active:
-                api.append({
-                    "role": "system",
-                    "content": (
-                        "【系统最高指令 / 当前操作台】\n"
-                        "无论上方的历史对话多么冗长，你当前必须且只能聚焦于以下任务切片：\n"
-                        f"👉 当前执行步骤：\n{_active}\n\n"
-                        "🛡️ 核心纪律强制刷新：\n"
-                        "1. 你无权修改 IMMUTABLE_FILES（不可变安全核）。\n"
-                        "2. 写代码（edit_file_lines）之前必须确保你已重新阅读了该文件获取最新行号。\n"
-                        "3. 请立即执行当前步骤，若遇到任何审计拦截（Audit），优先自我纠正！"
-                    ),
-                })
-        except Exception:
-            pass
-
-        # ── 行为牙：思考牙 + 证据牙（阅后即焚，不进 self.log）──
-        api.append({"role": "system", "content": _THINKING_NUDGE})
-        api.append({"role": "system", "content": _EVIDENCE_NUDGE})
 
         # ── 协议不变式终强制（唯一一层）：tool 结果必须**紧邻**其 assistant 之后 ──
         # DeepSeek 的校验是紧邻性不是存在性：assistant(tool_calls) 与 tool 结果之间
@@ -253,11 +202,11 @@ class CacheContext:
         """中段视图变换：把陈旧大工具结果折成一行 stub。压力自适应——离上限越近折得越狠。
 
         log→document（缓存命中不再约束、文字稿洁净优先）：只折 role==tool 的大结果、
-        只动发出去的副本（msgs 已是 _clean_log_msg 产物），self.log 原文不动 → 照常落盘 +
-        fetch_tool_result 可取回（"驱逐到磁盘不销毁"）。配对完整、一个开关全关、完全可逆。
+        只动发出去的副本（msgs 已是 _clean_log_msg 产物），self.log 原文不动 → 照常落盘（"驱逐
+        到磁盘不销毁"）。配对完整、一个开关全关、完全可逆。
 
         三档舒适区（pre-fold 体积，//4 估，自含、不调 _live_context_tokens 防递归）：
-          < comfort_zone_low      宽松：不折，全保真（在舒适区下方、有空间，零 fetch 摩擦）；
+          < comfort_zone_low      宽松：不折，全保真（在舒适区下方、有空间，无需折叠）；
           [low, high)             正常：keep_turns / threshold（routinely 折过气信息，稳住）；
           ≥ comfort_zone_high     紧逼：squeeze_keep_turns / squeeze_threshold（更狠），把 live
                                    拉回舒适区。spike 那轮大读在热区不折、下一轮过气即折 → 1-2 轮归位。

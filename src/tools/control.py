@@ -109,35 +109,15 @@ TOOLS_CONTROL = [
             },
         },
     },
-    {
-        "_meta": {"label": "取回折叠结果", "no_dedup": True},
-        # 不标 parallel_safe：取回要读 ctx.log，走带 ctx 的拦截路径，不能被无 ctx 的 eager 执行器预跑。
-        "type": "function",
-        "function": {
-            "name": "fetch_tool_result",
-            "description": (
-                "取回被折叠移出上下文的旧工具结果原文。看到 stub「…已折叠·调 "
-                "fetch_tool_result(id)」时用，传入其 tool_call_id 即可拿回原文。"
-            ),
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "tool_call_id": {
-                        "type": "string",
-                        "description": "折叠 stub 里给出的 tool_call_id",
-                    },
-                },
-                "required": ["tool_call_id"],
-            },
-        },
-    },
 ]
 
 
 def execute(name: str, args: dict) -> str | None:
     if name == "task_done":
-        # 质量自检硬拦：current.md 中有 [ ] 质量自检 步骤但未标 [x] → 拒
+        summary = (args.get("summary") or "").strip()
         try:
+            from ..tasks import _BLOCKED_MARKERS, _UNFINISHED_MARKERS
+            from ..tasks import archive_current as _archive_current
             from ..tasks import read_current as _read_current
             current = _read_current()
             if "[ ] 质量自检" in current and "[x] 质量自检" not in current:
@@ -147,9 +127,13 @@ def execute(name: str, args: dict) -> str | None:
                     "完成后把该步标为 `[x] 质量自检`。"
                     "（如果这是一个不需要自检的小任务，先把该步删掉或标 [x]。）"
                 )
+            # 全 [x] 自动归档——不用等 agent 单独调 archive
+            if current.strip() and not any(m in current for m in _UNFINISHED_MARKERS + _BLOCKED_MARKERS):
+                archive_msg = _archive_current()
+                return f"[任务完成信号] {summary}\n{archive_msg}"
         except Exception:
             pass  # 读不到 current.md 时放行（容错，不阻塞正常 task_done）
-        return f"[任务完成信号] {(args.get('summary') or '').strip()}"
+        return f"[任务完成信号] {summary}"
     if name == "need_user":
         return f"[需要用户拍板] {(args.get('question') or '').strip()}"
     if name == "update_plan":
