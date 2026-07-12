@@ -350,8 +350,8 @@ class TestChatScreen:
 
         asyncio.run(go())
 
-    def test_tool_result_collapsible_when_body(self, monkeypatch):
-        """有展开内容→可折叠 Collapsible(默认收起,点开看全文)；无内容→一行 Static。"""
+    def test_merged_tool_widget_collapsible_carries_call_info(self, monkeypatch):
+        """合并单元：有展开内容→Collapsible(默认收起)，标题带工具+参数；无内容→一行 ⏺ Static。"""
         async def go():
             app = self._fresh_chat_app()
             from textual.widgets import Collapsible, Static
@@ -359,10 +359,12 @@ class TestChatScreen:
                 await self._enter_chat(app, pilot)
                 s = app.screen
                 numbered = "\n".join(f"{i:4d}|x{i}" for i in range(1, 8))
-                w, _ = s._build_tool_result_widget("read_file", numbered)
+                w = s._build_merged_tool_widget("读取", "a.py · L1-7", "read_file", numbered)
                 assert isinstance(w, Collapsible) and w.collapsed is True
-                w2, _ = s._build_tool_result_widget("run_command", "OK")
+                assert "读取" in w.title and "a.py" in w.title   # 调用信息并进折叠标题
+                w2 = s._build_merged_tool_widget("执行命令", "$ ok", "run_command", "OK")
                 assert isinstance(w2, Static)
+                assert "执行命令" in str(w2.render())
 
         asyncio.run(go())
 

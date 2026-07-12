@@ -668,6 +668,7 @@ class ChatScreen(Screen):
     /* ── 工具调用：⏺ 行 + ⎿ 结果，缩进；进行中琥珀、完成蓝 ── */
     .tool-call { color: $primary-lighten-2; margin: 0 0 0 3; }
     .tool-call.running { color: $warning; }
+    .tool-call.done { color: $secondary; }   /* 完成的无展开工具行：弱色退到背景，不抢戏 */
     .tool-result { color: $secondary; margin: 0 0 0 5; text-style: dim; }
     /* ── 可折叠工具结果：标题=结论(弱色可点)，展开=全文 ── */
     .tool-result-box { margin: 0 0 0 3; border: none; background: transparent; }
@@ -1231,20 +1232,23 @@ class ChatScreen(Screen):
                     text = f"⏺ {label}  {detail}".rstrip()
                     line = Label(text, classes="tool-call running", markup=False)
                     await transcript.mount(line)
-                    self._pending_tool_labels.append((line, text))  # 等结果回来标 ✓
+                    self._pending_tool_labels.append((line, label, detail))  # 等结果回来合并
                 elif kind == "tool_result":
                     tool_name = rest[0] if rest else ""
                     result = rest[1] if len(rest) > 1 else ""
-                    widget, stats = self._build_tool_result_widget(tool_name, result)
-                    # FIFO 配对：最早发起的未完成工具行 → 去进行中色（⏺ 由琥珀转常态蓝＝完成，
-                    # 不换字形），带 diff 统计
+                    # FIFO 配对：把最早那条跑动 ⏺ 行 → 替换成「工具+参数+结论」合一的单元
+                    # （可折叠或一行），不再另留蓝色调用行
+                    lbl = None
+                    label, detail = tool_name, ""
                     if self._pending_tool_labels:
-                        lbl, text = self._pending_tool_labels.pop(0)
-                        done_text = text + (f"  {stats}" if stats else "")
-                        with contextlib.suppress(Exception):
-                            lbl.update(done_text)
-                            lbl.remove_class("running")
-                    await transcript.mount(widget)   # 可折叠：默认收起，点开看全文
+                        lbl, label, detail = self._pending_tool_labels.pop(0)
+                    widget = self._build_merged_tool_widget(label, detail, tool_name, result)
+                    with contextlib.suppress(Exception):
+                        if lbl is not None:
+                            await transcript.mount(widget, after=lbl)
+                            lbl.remove()
+                        else:
+                            await transcript.mount(widget)
                     self._current_tool = ""
                 elif kind == "footer":
                     self._mount_footer(rest[0])
@@ -1328,9 +1332,9 @@ class ChatScreen(Screen):
             return
         self._spin_frame = (self._spin_frame + 1) % len(self._SPINNER)
         ch = self._SPINNER[self._spin_frame]
-        for lbl, text in self._pending_tool_labels:
+        for lbl, label, detail in self._pending_tool_labels:
             with contextlib.suppress(Exception):
-                lbl.update(ch + text[1:])
+                lbl.update(f"{ch} {label}  {detail}".rstrip())
 
     @staticmethod
     def _result_block(result: str, max_lines: int = 6, width: int = 100) -> str:
@@ -1418,20 +1422,26 @@ class ChatScreen(Screen):
             return f"{head}  · {len(lines)} 行", body, ""
         return result[:200], None, ""
 
-    def _build_tool_result_widget(self, name: str, result: str):
-        """工具结果 → (可挂载 widget, 增删统计)。有展开内容→可折叠(默认收起,点开看全文)；
-        否则一行 Static。供实时与回放共用，保证两条路径一致。
+    def _build_merged_tool_widget(self, label: str, detail: str, name: str, result: str):
+        """一个完成的工具调用 → 单个 widget（工具+参数+结论合一）。
+
+        有展开内容 → 可折叠：标题=「工具 参数 (+N−M) · 结论」，点开看全文（不再另留蓝色调用行）。
+        无展开内容 → 一行弱色 ⏺ 完成行。供实时(完成后替换跑动行)与回放共用。
         """
         title, body, stats = self._render_tool_result(name, result)
-        if body is None:
-            return Static(f"⎿ {title}", classes="tool-result", markup=False), stats
-        box = Collapsible(
-            Static(body, classes="tool-result", markup=False),
-            title=title, collapsed=True,
-            collapsed_symbol="▸ ", expanded_symbol="▾ ",
-            classes="tool-result-box",
-        )
-        return box, stats
+        header = f"{label}  {detail}".rstrip()
+        if stats:
+            header += f"  {stats}"
+        if body is not None:
+            full = f"{header}  · {title}" if title else header
+            return Collapsible(
+                Static(body, classes="tool-result", markup=False),
+                title=full, collapsed=True,
+                collapsed_symbol="▸ ", expanded_symbol="▾ ",
+                classes="tool-result-box",
+            )
+        done = f"⏺ {header}  · {title}".rstrip() if title else f"⏺ {header}"
+        return Static(done, classes="tool-call done", markup=False)
 
     async def _flush_md(self, transcript, finalize: bool = True) -> None:
         if self._cur_text:
@@ -1534,7 +1544,8 @@ class ChatScreen(Screen):
             t.mount(Static(f"⋯ 省略前 {len(user_indices) - n} 轮（{folded} 条消息）", classes="meta", markup=False))
 
         agent_named = False   # 一个用户轮只挂一次 CTGents 头（多个 assistant 循环归其下）
-        tool_names: deque = deque()   # FIFO：assistant 发起的工具名，按序配 tool 结果（摘要要按工具类型）
+        # FIFO：assistant 发起的工具 (label, detail, name)，按序配后续 tool 结果 → 合并成一个单元
+        pending_tools: deque = deque()
         for i, m in enumerate(all_msgs):
             if i < skip_up_to:
                 continue
@@ -1563,16 +1574,17 @@ class ChatScreen(Screen):
                     except Exception:
                         args = {}
                     label, detail = _fmt_tool(name, args)
-                    t.mount(Label(f"⏺ {label}  {detail}".rstrip(), classes="tool-call", markup=False))
-                    tool_names.append(name)
+                    pending_tools.append((label, detail, name))   # 等结果回来合并渲染
                 if content:
                     t.mount(Markdown(content, classes="msg-body"))
                     t.scroll_end(animate=False)
             elif role == "tool":
                 result = m.get("content", "")
-                name = tool_names.popleft() if tool_names else ""
-                widget, _ = self._build_tool_result_widget(name, result)
-                t.mount(widget)   # 与实时一致：可折叠
+                if pending_tools:
+                    label, detail, name = pending_tools.popleft()
+                else:
+                    label, detail, name = "", "", ""
+                t.mount(self._build_merged_tool_widget(label, detail, name, result))
         t.scroll_end(animate=False)
 
     def _mount_collapsed(self, title: str, body: str) -> None:
