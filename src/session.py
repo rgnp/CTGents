@@ -1,8 +1,33 @@
+from __future__ import annotations
+
+import contextlib
 import json
 import os
+import tempfile
 from datetime import datetime
 
 from .config import SESSION_DIR
+
+
+def _atomic_write_text(path: str, text: str) -> None:
+    """原子写：先写同目录临时文件（flush+fsync 落盘）再 os.replace 换名。
+
+    os.replace 在 Windows / POSIX 都是原子操作——读取方永远看到「旧完整」或
+    「新完整」，绝不会撞上写到一半的截断 JSON。杜绝「autosave 每工具循环高频写盘，
+    某次写到一半崩溃/断电 → messages.json 半截损坏 → 下次打不开」这一失败类。
+    """
+    d = os.path.dirname(path) or "."
+    fd, tmp = tempfile.mkstemp(dir=d, prefix=".tmp-", suffix=".json")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            f.write(text)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp, path)
+    except Exception:
+        with contextlib.suppress(Exception):
+            os.unlink(tmp)
+        raise
 
 
 def list_sessions() -> list[str]:
@@ -134,8 +159,8 @@ def save_session(messages: list[dict], session_id: str | None = None) -> str:
     # 过滤掉运行时注入的易变消息（环境上下文等）
     persist = [m for m in messages if not m.get("_volatile")]
 
-    with open(_messages_path(session_id), "w", encoding="utf-8") as f:
-        json.dump(_sanitize_surrogates(persist), f, ensure_ascii=False, indent=2)
+    text = json.dumps(_sanitize_surrogates(persist), ensure_ascii=False, indent=2)
+    _atomic_write_text(_messages_path(session_id), text)
 
     return session_id
 
@@ -168,8 +193,7 @@ def save_prefix(session_id: str, prefix_msgs: list[dict]) -> None:
                 return  # 未变化，跳过写盘
     except Exception:
         pass
-    with open(path, "w", encoding="utf-8") as f:
-        f.write(data)
+    _atomic_write_text(path, data)
 
 
 def load_prefix(session_id: str) -> list[dict] | None:

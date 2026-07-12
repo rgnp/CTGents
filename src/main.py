@@ -27,12 +27,42 @@ logging.basicConfig(
 )
 
 # ═══════════════════════════════════════════════════════════════
-# Esc 打断监听（Windows msvcrt 后台线程）
+# Esc 打断监听（后台线程，Windows msvcrt / POSIX termios 双实现）
 # ═══════════════════════════════════════════════════════════════
 
 _esc_listener_active = False
-# TUI 模式下 Textual 自己管 stdin / Esc，msvcrt 后台线程会和它抢键 → 由 TUI 置位禁用。
+# TUI 模式下 Textual 自己管 stdin / Esc，后台线程会和它抢键 → 由 TUI 置位禁用。
 _under_tui = False
+
+
+def _listen_esc_windows(request_interrupt: Callable[[], None]) -> None:
+    import msvcrt  # Windows 专用
+
+    while _esc_listener_active:
+        if msvcrt.kbhit():
+            key = msvcrt.getch()
+            if key == b'\x1b':  # Esc 键
+                request_interrupt()
+                return
+        time.sleep(0.05)  # 50ms 轮询，不忙等
+
+
+def _listen_esc_posix(request_interrupt: Callable[[], None]) -> None:
+    import select
+    import termios
+    import tty
+
+    fd = sys.stdin.fileno()
+    old_settings = termios.tcgetattr(fd)
+    try:
+        tty.setcbreak(fd)  # 单字符可读、不等回车（对应 msvcrt.kbhit 的语义）
+        while _esc_listener_active:
+            ready, _, _ = select.select([sys.stdin], [], [], 0.05)  # 50ms 轮询，不忙等
+            if ready and sys.stdin.read(1) == "\x1b":  # Esc 键
+                request_interrupt()
+                return
+    finally:
+        termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
 
 
 def _start_esc_listener() -> None:
@@ -40,24 +70,16 @@ def _start_esc_listener() -> None:
     global _esc_listener_active
     if _under_tui:
         return
-
-    import msvcrt  # Windows 专用
+    if not sys.stdin.isatty():
+        return  # 非交互终端（管道/重定向）无法监听按键
 
     from .llm import clear_interrupt, request_interrupt
 
     _esc_listener_active = True
     clear_interrupt()
 
-    def _listen():
-        while _esc_listener_active:
-            if msvcrt.kbhit():
-                key = msvcrt.getch()
-                if key == b'\x1b':  # Esc 键
-                    request_interrupt()
-                    return
-            time.sleep(0.05)  # 50ms 轮询，不忙等
-
-    t = threading.Thread(target=_listen, daemon=True)
+    listen = _listen_esc_windows if os.name == "nt" else _listen_esc_posix
+    t = threading.Thread(target=listen, args=(request_interrupt,), daemon=True)
     t.start()
 
 
@@ -268,8 +290,9 @@ def run_agent_turn(ctx: CacheContext, user_input: str,
     # 通用人格常驻：会话首轮注入基础工作人格（AGENTS.md 的 <bias>+<tone> 迁来，从前缀删除）。
     if not _session_state["base_psyche_ensured"]:
         _session_state["base_psyche_ensured"] = True
-        from .psyche_bridge import ensure_base_psyche
+        from .psyche_bridge import ensure_base_psyche, resync_system_context
         base_note = ensure_base_psyche(ctx)
+        resync_system_context(ctx)  # 兜底：同步 registry，self 等工具靠它认 psyche
         if base_note:
             disp.on_status(base_note)
 
@@ -486,6 +509,12 @@ def _ensure_git_hooks() -> None:
 
 
 def main() -> None:
+    # 服务器 locale 未必是 UTF-8（精简 Docker 镜像常默认 C/POSIX locale），届时 print()
+    # 中英文/emoji 会 UnicodeEncodeError。显式钉死 stdout/stderr 编码、不依赖系统 locale——
+    # 与文件 I/O 全程显式 encoding="utf-8" 是同一原则。
+    for _stream in (sys.stdin, sys.stdout, sys.stderr):
+        if hasattr(_stream, "reconfigure"):
+            _stream.reconfigure(encoding="utf-8", errors="replace")
     _ensure_git_hooks()
     sessions = list_sessions()
     session_id: str | None = None
@@ -594,8 +623,12 @@ def _run_line_repl(ctx: CacheContext, session_id: str | None) -> str | None:
                 session_id = _save_ctx(ctx, session_id)
                 print(f"会话已保存: [{session_id}]")
             if r.load:
+                try:
+                    loaded_msgs = load_session(r.load)
+                except Exception as e:  # noqa: BLE001  存档损坏/缺失 → 提示并保持当前会话
+                    print(f"⚠️ 存档 [{r.load}] 打不开（{type(e).__name__}），已保持当前会话。")
+                    continue
                 ctx.clear_log()
-                loaded_msgs = load_session(r.load)
                 ctx.log.extend(loaded_msgs)
                 _apply_prefix(ctx, r.load)  # 复用该会话冻结前缀，重载不塌命中
                 session_id = r.load

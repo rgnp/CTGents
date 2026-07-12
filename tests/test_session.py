@@ -1,5 +1,6 @@
 """session.py 测试 — 会话保存/加载/删除。"""
 
+import contextlib
 import json
 import os
 
@@ -92,3 +93,46 @@ class TestSessionIO:
             json.dump({"name": "My Session"}, f)
         name = get_session_name("named")
         assert name == "My Session"
+
+
+class TestAtomicWrite:
+    """save_session 原子写：写盘中途崩溃绝不留下截断的 messages.json。"""
+
+    def test_crash_mid_write_keeps_old_intact(self, tmp_path, monkeypatch):
+        """os.replace 崩溃（模拟换名前进程死）→ 原有完整存档不被破坏。"""
+        import src.session as sess
+        monkeypatch.setattr(sess, "SESSION_DIR", str(tmp_path))
+        save_session([{"role": "user", "content": "good"}], session_id="s")
+
+        def boom(*a, **k):
+            raise RuntimeError("simulated crash before rename")
+
+        monkeypatch.setattr(sess.os, "replace", boom)
+        with contextlib.suppress(RuntimeError):
+            save_session([{"role": "user", "content": "new-but-crashes"}], session_id="s")
+        # 旧存档仍然完整可读，绝无截断
+        msgs = load_session("s")
+        assert msgs == [{"role": "user", "content": "good"}]
+
+    def test_no_tmp_files_left_after_success(self, tmp_path, monkeypatch):
+        import src.session as sess
+        monkeypatch.setattr(sess, "SESSION_DIR", str(tmp_path))
+        save_session([{"role": "user", "content": "x"}], session_id="s")
+        leftovers = [p for p in os.listdir(os.path.join(str(tmp_path), "s"))
+                     if p.startswith(".tmp-")]
+        assert leftovers == []
+
+    def test_crash_leaves_no_tmp_file(self, tmp_path, monkeypatch):
+        import src.session as sess
+        monkeypatch.setattr(sess, "SESSION_DIR", str(tmp_path))
+        save_session([{"role": "user", "content": "good"}], session_id="s")
+
+        def boom(*a, **k):
+            raise RuntimeError("crash before rename")
+
+        monkeypatch.setattr(sess.os, "replace", boom)
+        with contextlib.suppress(RuntimeError):
+            save_session([{"role": "user", "content": "y"}], session_id="s")
+        leftovers = [p for p in os.listdir(os.path.join(str(tmp_path), "s"))
+                     if p.startswith(".tmp-")]
+        assert leftovers == []

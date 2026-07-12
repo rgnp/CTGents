@@ -11,7 +11,8 @@
 - 复用唯一咽喉 run_agent_turn（注入 ui.Display），不另起 agent 循环。
 - agent 一轮跑线程 worker，只往线程安全 deque 推事件；UI 线程 set_interval 排空、
   在主线程改 widget。
-- TUI 下置 main._under_tui=True 禁 msvcrt Esc 监听（Textual 自管 stdin）。
+- TUI 下置 main._under_tui=True 禁后台 Esc 监听线程（Windows msvcrt / POSIX termios 皆同，
+  Textual 自管 stdin）。
 
 启动失败由 main 兜底回退行式 REPL。
 """
@@ -923,8 +924,16 @@ class ChatScreen(Screen):
             return
         from .main import _apply_prefix
         from .session import load_session
+        try:
+            msgs = load_session(sid)
+        except Exception as e:  # noqa: BLE001  存档损坏/缺失 → 降级为新会话，别崩进不去
+            t = self.query_one("#transcript", VerticalScroll)
+            t.mount(Static(f"⚠️ 存档 [{sid}] 打不开（{type(e).__name__}），已作为新会话开始。",
+                           classes="err", markup=False))
+            t.scroll_end(animate=False)
+            return
         self.app.ctx.clear_log()
-        self.app.ctx.log.extend(load_session(sid))
+        self.app.ctx.log.extend(msgs)
         _apply_prefix(self.app.ctx, sid)  # 复用该会话冻结前缀，重载不塌命中
         self.app.session_id = sid
         self.app.final_session_id = sid
@@ -1006,8 +1015,13 @@ class ChatScreen(Screen):
     def _apply_load(self, target: str) -> None:
         from .main import _apply_prefix
         from .session import load_session
+        try:
+            msgs = load_session(target)
+        except Exception as e:  # noqa: BLE001  存档损坏/缺失 → 提示并保持当前会话不变
+            self._mount(f"⚠️ 存档 [{target}] 打不开（{type(e).__name__}），已保持当前会话。", "err")
+            return
         self.app.ctx.clear_log()
-        self.app.ctx.log.extend(load_session(target))
+        self.app.ctx.log.extend(msgs)
         _apply_prefix(self.app.ctx, target)  # 复用该会话冻结前缀，重载不塌命中
         self._status_cache = (None, "")
         self.app.session_id = target
