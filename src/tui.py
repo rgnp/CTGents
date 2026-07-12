@@ -628,12 +628,29 @@ class ChatScreen(Screen):
     ChatScreen { background: $background; }
     #transcript { padding: 0 1; }
     #transcript > * { width: 100%; }
-    /* ── 用户输入：› 前缀，暖色 ── */
+    /* ── 用户输入：❯ 前缀，暖色（冷暖对比里的"暖"）── */
     .user-msg { color: $accent; text-style: bold; margin: 1 0 0 0; padding: 0 0 0 1; }
-    /* ── agent 名：每个用户轮只一次，思考/工具/输出全归其下 ── */
+    /* ── agent 标记：◆ CTGents，冷色；每个用户轮只一次，思考/工具/输出全归其下 ── */
     .agent-name { color: $primary; text-style: bold; margin: 1 0 0 0; padding: 0 0 0 1; }
-    /* ── 输出正文 ── */
-    .msg-body { margin: 0 0 1 0; padding: 0 0 0 3; }
+    /* ── 输出正文：柔化的月光白（不再纯前景平铺）+ 阅读列缩进 ── */
+    .msg-body { margin: 0 0 1 0; padding: 0 0 0 3; color: #cdd6e6; }
+    /* 段落之间留一行呼吸（"字体观感"的核心可调项之一） */
+    .msg-body MarkdownParagraph { margin: 0 0 1 0; }
+    /* 结构冷、强调暖：标题冷色、列表符/加粗暖色点睛 */
+    .msg-body MarkdownH1 { color: $primary-lighten-1; text-style: bold;
+        background: transparent; border: none; margin: 1 0 0 0; padding: 0; }
+    .msg-body MarkdownH2 { color: $primary-lighten-1; text-style: bold;
+        background: transparent; border: none; margin: 1 0 0 0; padding: 0; }
+    .msg-body MarkdownH3 { color: $primary; text-style: bold; margin: 1 0 0 0; }
+    .msg-body MarkdownBullet { color: $accent; }
+    .msg-body MarkdownBlockQuote {
+        border-left: thick $primary-darken-2; background: $surface;
+        color: $secondary; padding: 0 1; margin: 1 0;
+    }
+    /* 行内：加粗=暖强调，斜体=柔白，行内代码=海藻绿 */
+    MarkdownBlock > .strong { color: $accent; text-style: bold; }
+    MarkdownBlock > .em { color: #cdd6e6; text-style: italic; }
+    MarkdownBlock > .code_inline { color: $success; background: $panel; }
     /* ── 代码块：给对比底色 + 左色条，让语法高亮在深海 bg 上跳出来
        （默认 black 10% 叠在 #0a101c 上几乎不可见，高亮等于白做）── */
     MarkdownFence {
@@ -1291,9 +1308,7 @@ class ChatScreen(Screen):
         if self._agent_header_mounted:
             return
         self._clear_pending_marker()
-        now = time.strftime("%H:%M")
-        time_part = f"  ·  {now}" if now != self._last_user_stamp else ""
-        await transcript.mount(Label(f"CTGents{time_part}", classes="agent-name", markup=False))
+        await transcript.mount(Label("◆ CTGents", classes="agent-name", markup=False))
         self._agent_header_mounted = True
 
     def _collapse_active(self) -> None:
@@ -1462,14 +1477,13 @@ class ChatScreen(Screen):
     def _mount_user_msg(self, text: str) -> None:
         """用户输入：› 前缀单行块（极简版式，暖色）。submit/续跑/回放共用。"""
         t = self.query_one("#transcript", VerticalScroll)
-        t.mount(Static(f"› {text}", classes="user-msg", markup=False))
+        t.mount(Static(f"❯ {text}", classes="user-msg", markup=False))
         t.scroll_end(animate=False)
 
     def _mount_agent_name(self) -> None:
-        """回放：挂一个 CTGents 头（与实时同样式，每个用户轮一次）。"""
+        """回放：挂一个 ◆ CTGents 标记（与实时同样式，每个用户轮一次）。"""
         t = self.query_one("#transcript", VerticalScroll)
-        stamp = time.strftime("%H:%M")
-        t.mount(Label(f"CTGents  ·  {stamp}", classes="agent-name", markup=False))
+        t.mount(Label("◆ CTGents", classes="agent-name", markup=False))
         t.scroll_end(animate=False)
 
     def _mount_footer(self, text: str) -> None:

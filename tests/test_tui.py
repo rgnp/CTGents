@@ -349,6 +349,26 @@ class TestChatScreen:
 
         asyncio.run(go())
 
+    def test_speaker_markers_warm_cool(self, monkeypatch):
+        """说话人标记：用户 ❯（暖）、CTGents ◆（冷），无每轮时间戳。"""
+        async def go():
+            app = self._fresh_chat_app()
+            async with app.run_test() as pilot:
+                await self._enter_chat(app, pilot)
+                app.ctx.log = [
+                    {"role": "user", "content": "问题A"},
+                    {"role": "assistant", "content": "回复B"},
+                ]
+                app.screen.query_one("#transcript").remove_children()
+                app.screen._echo_conversation()
+                await pilot.pause()
+                user = str(list(app.screen.query(".user-msg"))[0].render())
+                agent = str(list(app.screen.query(".agent-name"))[0].render())
+                assert user.startswith("❯")
+                assert agent == "◆ CTGents"       # 无 · 时间戳
+
+        asyncio.run(go())
+
     def test_echo_replays_reasoning_and_tools_as_folded(self, monkeypatch):
         """重启回放：持久化的 _reasoning + tool_calls 还原成默认折叠的 Collapsible。"""
         async def go():
