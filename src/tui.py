@@ -678,6 +678,11 @@ class ChatScreen(Screen):
         height: 1; color: $primary; background: $panel; padding: 0 1;
     }
     #status.interrupted { color: $warning; text-style: bold; background: $surface; }
+    /* ── 快捷键提示条（最底一行，弱色，让隐藏操作可被发现）── */
+    #keyhints {
+        height: 1; color: $primary-darken-1; background: $background;
+        padding: 0 1; text-style: dim;
+    }
     """
 
     BINDINGS = [
@@ -755,15 +760,18 @@ class ChatScreen(Screen):
                 show_line_numbers=False,
             )
             yield Static("", id="status")
+            yield Static("", id="keyhints")   # 随状态变的快捷键提示（让交互可被发现）
 
     def on_mount(self) -> None:
         self._load_pending()
         self._refresh_status()
+        self._refresh_hints()
         self.query_one("#prompt", TextArea).focus()
         self._refresh_task_panel()
         self.set_interval(0.03, self._drain_events)
         self.set_interval(0.1, self._tick_spinner)
         self.set_interval(0.5, self._refresh_status)
+        self.set_interval(0.5, self._refresh_hints)
         self.set_interval(0.5, self._refresh_task_panel)
         self.set_interval(0.5, self._drain_jobs)
 
@@ -1559,6 +1567,28 @@ class ChatScreen(Screen):
                 line = f"[green]●[/]  {line}"
                 status.remove_class("interrupted")
             status.update(line)
+
+    def _hint_text(self) -> str:
+        """按当前状态给出该按什么键——让界面里那些看不见的操作被发现。"""
+        if self._ac_active:
+            if self._ac_mode == "cmd":
+                return "↑↓ 选择   ·   Enter/Tab 补全   ·   Esc 关闭"
+            return "↑↓ 选择   ·   Tab 插入   ·   Esc 关闭"
+        if self._busy:
+            if self._interrupt_pending:
+                return "Esc 再按一次 强制终止"
+            return "Esc 中断本轮"
+        if self._interrupted:
+            return "Enter 继续被打断的事   ·   Esc 终止   ·   或直接输入新消息重开"
+        return "@ 引用文件   ·   / 命令   ·   Ctrl+↑↓ 翻历史   ·   /help 全部指令   ·   Ctrl+Q 退出"
+
+    def _refresh_hints(self) -> None:
+        with contextlib.suppress(Exception):
+            hint = self._hint_text()
+            hints = self.query_one("#keyhints", Static)
+            if getattr(self, "_hint_cache", None) != hint:   # 只在变化时更新，省重绘
+                self._hint_cache = hint
+                hints.update(hint)
 
     def _drain_jobs(self) -> None:
         try:

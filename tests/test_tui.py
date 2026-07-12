@@ -245,6 +245,27 @@ class TestChatScreen:
         await pilot.pause()
         assert await _wait_screen(app, pilot, "ChatScreen")
 
+    def test_keyhints_reflect_state(self, monkeypatch):
+        """快捷键提示条随状态变：空闲露 @// help，busy 露 Esc 中断，中断态露 Enter 继续。"""
+        async def go():
+            app = self._fresh_chat_app()
+            async with app.run_test() as pilot:
+                await self._enter_chat(app, pilot)
+                s = app.screen
+                s._refresh_hints()
+                await pilot.pause()
+                idle = s.query_one("#keyhints").render()
+                assert "@" in str(idle) and "/help" in str(idle)
+                s._busy = True
+                s._refresh_hints()
+                assert "Esc" in str(s.query_one("#keyhints").render())
+                s._busy = False
+                s._interrupted = True
+                s._refresh_hints()
+                assert "继续" in str(s.query_one("#keyhints").render())
+
+        asyncio.run(go())
+
     def test_busy_keeps_prompt_typeable_and_preserves_text(self, monkeypatch):
         """跑动时输入框不禁用、busy 下回车不清空也不提交——修"按 Esc 后不能打字"。"""
         async def go():
