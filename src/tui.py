@@ -551,7 +551,8 @@ class SaveSelectScreen(Screen):
             rows: list = [Label(text, markup=False)]
             if preview:
                 rows.append(Label(f"    {preview}", classes="save-preview", markup=False))
-            items.append(ListItem(Vertical(*rows), name=sid))
+            # 直接把行作为 ListItem 子节点堆叠——不套 Vertical（其默认 1fr 会撑出大片空白）
+            items.append(ListItem(*rows, name=sid))
         with Vertical(id="selectwrap"):
             yield Static("◆ SELECT  SAVE ◆", id="savetitle", markup=False)
             with Vertical(id="savebox"):

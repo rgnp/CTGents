@@ -226,6 +226,34 @@ class TestSaveSelect:
 
         asyncio.run(go())
 
+    def test_item_height_bounded_with_preview(self, monkeypatch):
+        """带预览的存档项不撑出大片空白（回归：曾把项套进默认 1fr 的 Vertical）。"""
+        monkeypatch.setattr(
+            "src.session.get_sessions_info",
+            lambda sids: {s: {"name": f"名-{s}", "date": "", "time": "12:00",
+                              "preview": "这次聊了世界模型仿真评测"} for s in sids},
+        )
+
+        async def go():
+            app = CTGentsApp(CacheContext(), None, ["a", "b"])
+            async with app.run_test() as pilot:
+                for _ in range(20):
+                    await pilot.pause(0.1)
+                    if app.screen.query("#load_game"):
+                        break
+                from textual.widgets import Button, ListItem
+                app.screen.query_one("#load_game", Button).press()
+                await pilot.pause()
+                assert await _wait_screen(app, pilot, "SaveSelectScreen")
+                await pilot.pause()
+                items = list(app.screen.query(ListItem))
+                assert items, "应有存档项"
+                for it in items:
+                    assert it.size.height <= 3, f"存档项高度应≤3(预览1行)，实得 {it.size.height}"
+                assert list(app.screen.query(".save-preview")), "预览行应渲染"
+
+        asyncio.run(go())
+
 
 # ── 聊天屏 ──
 class TestChatScreen:
