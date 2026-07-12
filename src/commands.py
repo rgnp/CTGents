@@ -128,6 +128,7 @@ def _cmd_help(r: CmdResult, _ctx, _args, _sid) -> None:
     lines.append("  Ctrl+Q   退出程序")
     lines.append("  Ctrl+↑/↓ 翻历史消息")
     lines.append("  Ctrl+R   回看本会话全部历史")
+    lines.append("  Ctrl+Y   复制最后一个代码块")
     lines.append("  Ctrl+L   滚到底部")
     lines.append("  Enter    发送消息")
     lines.append("")

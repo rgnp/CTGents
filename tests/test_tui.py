@@ -376,6 +376,29 @@ class TestChatScreen:
 
         asyncio.run(go())
 
+    def test_copy_code_grabs_last_block(self, monkeypatch):
+        """Ctrl+Y 复制 agent 最后回复的最后一个代码块到剪贴板。"""
+        async def go():
+            app = self._fresh_chat_app()
+            async with app.run_test() as pilot:
+                await self._enter_chat(app, pilot)
+                s = app.screen
+                copied = []
+                monkeypatch.setattr(app, "copy_to_clipboard", lambda t: copied.append(t))
+                s._last_agent_text = (
+                    "先看这个:\n```python\nprint(1)\n```\n再跑:\n```bash\nls -la\npwd\n```"
+                )
+                s.action_copy_code()
+                await pilot.pause()
+                assert copied == ["ls -la\npwd"]        # 最后一个块，去围栏
+                # 无代码块 → 不复制、给提示
+                copied.clear()
+                s._last_agent_text = "纯文本没有代码"
+                s.action_copy_code()
+                assert copied == []
+
+        asyncio.run(go())
+
     def test_show_history_expands_beyond_prune_cap(self, monkeypatch):
         """Ctrl+R 回看：默认精简只显最近 3 轮，展开后本会话全部轮都渲染。"""
         async def go():

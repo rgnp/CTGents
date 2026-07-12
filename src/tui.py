@@ -664,6 +664,13 @@ class ChatScreen(Screen):
         background: $panel; border: round $primary-darken-1;
     }
     #ac_popup.hidden { display: none; }
+    /* ── 滚上去看历史时，底部来新内容的提示 ── */
+    #newmsg {
+        height: 1; color: $warning; background: $surface;
+        content-align: center middle; text-style: bold;
+        border-top: solid $warning;
+    }
+    #newmsg.hidden { display: none; }
     /* ── 轮次分隔 ── */
     .turn-sep { color: $primary-darken-3; height: 1; margin: 1 0; }
     /* ── 元消息 ── */
@@ -701,6 +708,7 @@ class ChatScreen(Screen):
         Binding("ctrl+up", "arrow_up", "上一条", show=False),
         Binding("ctrl+down", "arrow_down", "下一条", show=False),
         Binding("ctrl+r", "show_history", "回看全部历史", show=False),
+        Binding("ctrl+y", "copy_code", "复制代码块", show=False),
         Binding("enter", "submit_prompt", "发送", show=False, priority=True),
     ]
 
@@ -716,6 +724,7 @@ class ChatScreen(Screen):
         self._events: deque = deque()
         self._cur_md: Markdown | None = None
         self._cur_text = ""
+        self._last_agent_text = ""    # 最近一段 agent 正文，供 Ctrl+Y 复制代码块
         self._dirty = False
         # 思考(reasoning)流：到达即在 CTGents 头下挂折叠 Collapsible（实时展开，下阶段折起）。
         self._cur_reasoning = ""
@@ -759,6 +768,7 @@ class ChatScreen(Screen):
         yield Static("", id="taskpanel", classes="hidden")   # 长任务 live TODO 清单
         yield VerticalScroll(id="transcript")
         with Vertical(id="bottombar"):
+            yield Static("", id="newmsg", classes="hidden")     # 滚上去时的"↓ 新内容"提示
             yield Static("", id="ac_popup", classes="hidden")   # @ 文件补全下拉
             yield PromptArea(
                 "",
@@ -1261,12 +1271,16 @@ class ChatScreen(Screen):
             await self._flush_md(transcript, finalize=False)
             changed = True
         if changed:
-            # 用户手动翻看历史时不抢滚，只在底部时才自动跟随
+            # 用户手动翻看历史时不抢滚，只在底部时才自动跟随；不在底部则亮"↓ 新内容"
             try:
-                if transcript.scroll_y >= transcript.max_scroll_y - 3:
-                    transcript.scroll_end(animate=False)
+                at_bottom = transcript.scroll_y >= transcript.max_scroll_y - 3
             except Exception:
+                at_bottom = True
+            if at_bottom:
                 transcript.scroll_end(animate=False)
+                self._set_newmsg(False)
+            else:
+                self._set_newmsg(True)
 
     async def _ensure_agent_header(self, transcript) -> None:
         """每个用户轮在首个 agent 事件（思考/工具/文字，谁先到）挂一次 CTGents 头。
@@ -1400,6 +1414,8 @@ class ChatScreen(Screen):
                 await self._cur_md.update(self._cur_text)
             self._dirty = False
         if finalize:
+            if self._cur_text.strip():
+                self._last_agent_text = self._cur_text   # 供 Ctrl+Y 复制代码块
             self._cur_md = None
             self._cur_text = ""
 
@@ -1576,6 +1592,11 @@ class ChatScreen(Screen):
                 line = f"[green]●[/]  {line}"
                 status.remove_class("interrupted")
             status.update(line)
+        # 用户滚回底部后（可能无新事件触发 drain）把"↓ 新内容"灭掉
+        with contextlib.suppress(Exception):
+            tr = self.query_one("#transcript", VerticalScroll)
+            if tr.scroll_y >= tr.max_scroll_y - 3:
+                self._set_newmsg(False)
 
     def _hint_text(self) -> str:
         """按当前状态给出该按什么键——让界面里那些看不见的操作被发现。"""
@@ -1719,9 +1740,36 @@ class ChatScreen(Screen):
         with contextlib.suppress(Exception):
             self.query_one("#prompt", TextArea).placeholder = "> 输入消息（/help 查看指令）"
 
+    def _set_newmsg(self, on: bool) -> None:
+        """滚上去看历史时底部来新内容 → 亮提示；回到底部 → 灭。"""
+        with contextlib.suppress(Exception):
+            w = self.query_one("#newmsg", Static)
+            if on:
+                if w.has_class("hidden"):
+                    w.update("↓ 有新内容 · Ctrl+L 回到底部")
+                    w.remove_class("hidden")
+            else:
+                w.add_class("hidden")
+
     def action_clear_screen(self) -> None:
         with contextlib.suppress(Exception):
             self.query_one("#transcript", VerticalScroll).scroll_end(animate=False)
+        self._set_newmsg(False)
+
+    def action_copy_code(self) -> None:
+        """Ctrl+Y：把 agent 最后一条回复里的最后一个代码块复制到剪贴板。
+
+        agent 常吐命令/代码片段，复制去跑很频繁；免去手选。无代码块则提示。
+        """
+        import re
+        blocks = re.findall(r"```[^\n]*\n(.*?)```", self._last_agent_text or "", re.DOTALL)
+        if not blocks:
+            self._mount("最近回复里没有代码块可复制", "meta")
+            return
+        code = blocks[-1].strip("\n")
+        with contextlib.suppress(Exception):
+            self.app.copy_to_clipboard(code)
+        self._mount(f"已复制最后一个代码块（{len(code.splitlines())} 行）到剪贴板", "meta")
 
     def action_show_history(self) -> None:
         """Ctrl+R：展开本会话全部历史（默认只精简显示最近几轮以保流畅）。
