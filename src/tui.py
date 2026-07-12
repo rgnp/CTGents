@@ -37,6 +37,7 @@ from textual.widgets import (
     ListItem,
     ListView,
     Markdown,
+    Rule,
     Static,
     TextArea,
 )
@@ -207,72 +208,73 @@ def _banner_plain(text: str) -> str:
 
 # ── 纯函数辅助 ──
 def _fmt_tool(name: str, args: dict) -> tuple[str, str]:
-    """工具调用 → (标签, 参数摘要)。每个工具只显示关键信息，不 dump 全部参数。"""
+    """工具调用 → (标签, 参数摘要)。每个工具只显示关键信息，不 dump 全部参数。
+
+    版式纪律：不使用装饰性 emoji（🔍📄🐍…）——状态由行首 ⏺ 的颜色承载，参数一律
+    用「 · 」分隔的素文本。命令的 $ 是约定俗成的文本记号（非 emoji），保留。
+    """
     from .tools._tool_meta import TOOL_LABELS
     label = TOOL_LABELS.get(name, name)
 
     if name == "grep_code":
         pat = args.get("pattern", "")
         path = args.get("path", "")
-        detail = f"🔍 {pat}"
-        if path:
-            detail += f"  📁 {path}"
+        detail = f"{pat} · {path}" if path else pat
     elif name == "read_file":
-        detail = f"📄 {args.get('path', '')}"
+        detail = args.get("path", "")
         start = args.get("start_line")
         end = args.get("end_line")
         if start is not None and end is not None:
-            detail += f"  L{start}-L{end}"
+            detail += f" · L{start}-L{end}"
         elif start is not None:
-            detail += f"  L{start}-"
+            detail += f" · L{start}-"
     elif name in ("write_file", "replace_in_file", "delete_file"):
-        detail = f"📄 {args.get('path', '')}"
+        detail = args.get("path", "")
     elif name == "find_files":
-        detail = f"🔍 {args.get('pattern', '')}"
+        detail = args.get("pattern", "")
         p = args.get("path", "")
         if p:
-            detail += f"  📁 {p}"
+            detail += f" · {p}"
     elif name == "list_files":
-        p = args.get("path", "")
-        detail = f"📁 {p}" if p else "📁 ."
+        detail = args.get("path", "") or "."
     elif name in ("move_file", "copy_file"):
-        detail = f"{args.get('src', '')}  →  {args.get('dst', '')}"
+        detail = f"{args.get('src', '')} → {args.get('dst', '')}"
     elif name == "run_command":
         cmd = args.get("command", "").strip().replace("\n", " ")
         detail = f"$ {cmd[:100]}{'…' if len(cmd) > 100 else ''}"
     elif name == "run_python":
         code = args.get("code", "").strip().replace("\n", " ")
-        detail = f"🐍 {code[:80]}{'…' if len(code) > 80 else ''}"
+        detail = f"{code[:80]}{'…' if len(code) > 80 else ''}"
     elif name == "search_web":
-        detail = f"🔍 {args.get('query', '')}"
+        detail = args.get("query", "")
     elif name == "read_page":
-        detail = f"🌐 {args.get('url', '')}"
+        detail = args.get("url", "")
     elif name == "scan_papers":
         q = args.get("queries", "")
-        detail = f"🔬 {q[:100]}" if q else "扫描论文"
+        detail = q[:100] if q else "扫描论文"
     elif name in ("learn",):
-        detail = f"📚 {args.get('topic', '')}"
+        detail = args.get("topic", "")
     elif name in ("remember",):
-        detail = f"💾 {args.get('name', '')}"
+        detail = args.get("name", "")
     elif name in ("recall",):
-        detail = f"🔍 {args.get('query', '')}"
+        detail = args.get("query", "")
     elif name in ("analyze_paper", "cross_validate"):
-        detail = f"📄 {args.get('title', '')[:100]}"
+        detail = args.get("title", "")[:100]
     elif name in ("git_status", "git_diff", "git_log", "git_branch"):
-        detail = f"📊 {name.replace('git_', '')}"
+        detail = name.replace("git_", "")
     elif name == "git_commit":
         msg = args.get("message", "")
-        detail = f"💾 {msg[:80]}" if msg else "提交"
+        detail = msg[:80] if msg else "提交"
     elif name == "git_push":
-        detail = f"⬆ {args.get('branch', '当前分支')}"
+        detail = args.get("branch", "当前分支")
     elif name == "run_async":
         cmd = args.get("command", "")
-        detail = f"⏳ $ {cmd[:120]}{'…' if len(cmd) > 120 else ''}"
+        detail = f"$ {cmd[:120]}{'…' if len(cmd) > 120 else ''}"
     elif name == "make_dir":
-        detail = f"📁 {args.get('path', '')}"
+        detail = args.get("path", "")
     elif name == "think":
         thought = (args.get("thought") or args.get("content") or "").strip().replace("\n", " ")
-        detail = f"💭 {thought[:80]}{'…' if len(thought) > 80 else ''}" if thought else "💭"
+        detail = f"{thought[:80]}{'…' if len(thought) > 80 else ''}" if thought else ""
     else:
         parts = []
         for k, v in args.items():
@@ -978,7 +980,7 @@ class ChatScreen(Screen):
         else:
             expanded, attached = _expand_file_mentions(text)   # @path → 附文件内容
             if attached:
-                self._mount(f"📎 已附 {len(attached)} 个文件：{', '.join(attached)}", "meta")
+                self._mount(f"已附 {len(attached)} 个文件：{', '.join(attached)}", "meta")
             if self._pending_notices:
                 expanded = ("【后台作业完成】\n" + "\n\n".join(self._pending_notices)
                             + "\n\n【用户消息】\n" + expanded)
@@ -1183,12 +1185,14 @@ class ChatScreen(Screen):
                     await transcript.mount(line)
                     self._pending_tool_labels.append((line, text))  # 等结果回来标 ✓
                 elif kind == "tool_result":
+                    tool_name = rest[0] if rest else ""
                     result = rest[1] if len(rest) > 1 else ""
-                    renderable, stats = self._render_result(result)
-                    # FIFO 配对：最早发起的未完成工具行 → ⏺ 改 ✓、去进行中色、带 diff 统计
+                    renderable, stats = self._render_result(tool_name, result)
+                    # FIFO 配对：最早发起的未完成工具行 → 去进行中色（⏺ 由琥珀转常态蓝＝完成，
+                    # 不换字形），带 diff 统计
                     if self._pending_tool_labels:
                         lbl, text = self._pending_tool_labels.pop(0)
-                        done_text = "✓" + text[1:] + (f"  {stats}" if stats else "")
+                        done_text = text + (f"  {stats}" if stats else "")
                         with contextlib.suppress(Exception):
                             lbl.update(done_text)
                             lbl.remove_class("running")
@@ -1213,10 +1217,10 @@ class ChatScreen(Screen):
                     self._reset_tool_calls()
                     self._agent_header_mounted = False
                     self._busy = False
-                    # 轮次分隔（全宽线 + 淡入动效）
+                    # 轮次分隔（真·全宽细线，随终端宽度自适应 + 淡入动效）
                     if self._turn_count > 0:
                         try:
-                            sep = Static("╌" * 40, classes="turn-sep", markup=False)
+                            sep = Rule(classes="turn-sep")
                             sep.styles.opacity = 0.0
                             transcript.mount(sep)
                             sep.styles.animate("opacity", 1.0, duration=0.3)
@@ -1299,21 +1303,57 @@ class ChatScreen(Screen):
         return "\n".join(out)
 
     @staticmethod
-    def _render_result(result: str):
+    def _render_result(name: str, result: str):
         """工具结果 → (可渲染对象, 统计串)。
 
-        含 git diff（编辑工具已带 ```diff 块）→ 彩色 Rich Text（+绿 / -红 / @@青）
-        + 统计 (+N −M)，给完成的 ✓ 行用；否则退回纯多行块字符串、无统计。
+        结果行给「结论」不给「原文前几行」——按工具类型摘要：
+        - 读取：调用行已说明文件+范围，只回一句行数（错误信息原样透出）；
+        - 搜索：命中数 + 涉及文件数 + 顶部 2 条；
+        - 写入/编辑：改动摘要（改了哪、净增删）作 lead + 彩色 diff（+绿/-红/@@青）；
+        - 命令/其余：裁剪后的实际输出（stdout 本身就是信号）。
         """
+        result = (result or "").strip()
+        if not result:
+            return "⎿ 完成", ""
+
+        # ── 读取类：只回行数结论，不 dump 文件头 ──
+        if name in ("read_file", "read_file_lines"):
+            import re
+            if re.match(r"^\s*\d+\|", result):        # 带行号的文件正文 → 数行数
+                return f"⎿ {result.count(chr(10)) + 1} 行", ""
+            return ChatScreen._result_block(result), ""   # 错误/短消息原样透出
+
+        # ── 搜索类：命中数 + 文件数 + 顶部两条 ──
+        if name == "grep_code":
+            first = result.splitlines()[0] if result.splitlines() else ""
+            if first.startswith(("未找到", "搜索超时", "系统中未找到")):
+                return f"⎿ {first}", ""
+            hits = [ln for ln in result.splitlines()
+                    if ":" in ln and not ln.startswith(("...", "…", "（"))]
+            files = {ln.split(":", 1)[0] for ln in hits}
+            head = f"⎿ {len(hits)} 处 · {len(files)} 个文件"
+            for ln in hits[:2]:
+                head += f"\n  {ln[:100]}"
+            return head, ""
+
+        # ── 写入/编辑：彩色 diff + 改动摘要作 lead ──
         if "```diff" in result:
             from rich.text import Text
+            lead = ""
+            for ln in result.splitlines():
+                s = ln.strip()
+                if s.startswith("操作:"):          # 编辑：最精确（改了哪、几行→几行）
+                    lead = s
+                    break
+                if s.startswith(("已写入:", "已编辑:")):
+                    lead = s
             body = result.split("```diff", 1)[1].split("```", 1)[0]
             lines = [ln for ln in body.splitlines() if ln.strip()]
             adds = sum(1 for ln in lines if ln.startswith("+"))
             dels = sum(1 for ln in lines if ln.startswith("-"))
             shown = lines[:40]
             text = Text()
-            text.append("⎿ 变更", style="dim")
+            text.append("⎿ " + (lead or "变更"), style="dim")
             for ln in shown:
                 s = ln[:120]
                 style = ("green" if ln.startswith("+") else "red" if ln.startswith("-")
@@ -1323,6 +1363,7 @@ class ChatScreen(Screen):
             if extra > 0:
                 text.append(f"\n  … +{extra} 行", style="dim")
             return text, f"(+{adds} −{dels})"
+
         return ChatScreen._result_block(result), ""
 
     async def _flush_md(self, transcript, finalize: bool = True) -> None:
@@ -1354,7 +1395,7 @@ class ChatScreen(Screen):
             await self._ensure_agent_header(transcript)
             self._collapse_active()               # 新思考块前先折上一个
             self._reasoning_box = Static(self._cur_reasoning, classes="thinking", markup=False)
-            box = Collapsible(self._reasoning_box, title="💭 思考", collapsed=False,
+            box = Collapsible(self._reasoning_box, title="思考", collapsed=False,
                               collapsed_symbol="▸ ", expanded_symbol="▾ ",
                               classes="collapsible-chat")
             await transcript.mount(box)
@@ -1424,6 +1465,7 @@ class ChatScreen(Screen):
             t.mount(Static(f"⋯ 省略前 {len(user_indices) - n} 轮（{folded} 条消息）", classes="meta", markup=False))
 
         agent_named = False   # 一个用户轮只挂一次 CTGents 头（多个 assistant 循环归其下）
+        tool_names: deque = deque()   # FIFO：assistant 发起的工具名，按序配 tool 结果（摘要要按工具类型）
         for i, m in enumerate(all_msgs):
             if i < skip_up_to:
                 continue
@@ -1443,7 +1485,7 @@ class ChatScreen(Screen):
                     self._mount_agent_name()
                     agent_named = True
                 if reasoning:
-                    self._mount_collapsed("💭 思考", reasoning)
+                    self._mount_collapsed("思考", reasoning)
                 for tc in tool_calls:
                     fn = tc.get("function", {})
                     name = fn.get("name", "")
@@ -1452,13 +1494,15 @@ class ChatScreen(Screen):
                     except Exception:
                         args = {}
                     label, detail = _fmt_tool(name, args)
-                    t.mount(Label(f"✓ {label}  {detail}".rstrip(), classes="tool-call", markup=False))
+                    t.mount(Label(f"⏺ {label}  {detail}".rstrip(), classes="tool-call", markup=False))
+                    tool_names.append(name)
                 if content:
                     t.mount(Markdown(content, classes="msg-body"))
                     t.scroll_end(animate=False)
             elif role == "tool":
                 result = m.get("content", "")
-                renderable, _ = self._render_result(result)
+                name = tool_names.popleft() if tool_names else ""
+                renderable, _ = self._render_result(name, result)
                 t.mount(Static(renderable, classes="tool-result", markup=False))
         t.scroll_end(animate=False)
 
@@ -1552,7 +1596,7 @@ class ChatScreen(Screen):
         active = next((i for i, (ic, _) in enumerate(steps) if ic != "✅"), n - 1)
         start = 0 if n <= win else max(0, min(active - 1, n - win))
         end = min(n, start + win)
-        lines = [f"📋 任务进度  {done}/{n}"]
+        lines = [f"任务进度  {done}/{n}"]
         if start > 0:
             lines.append(f"  ↑ {start} 已完成")
         for i in range(start, end):

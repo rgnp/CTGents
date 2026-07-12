@@ -65,13 +65,13 @@ class TestSplashLogoVisible:
 # ── 纯函数 ──
 class TestPureHelpers:
     def test_fmt_tool_known_pretty(self):
-        """已知工具按类型出精炼标签（图标+关键信息），不 dump 全部参数。"""
+        """已知工具按类型出精炼标签（关键信息 · 分隔，无装饰 emoji），不 dump 全部参数。"""
         _, d_read = _fmt_tool("read_file", {"path": "a.py"})
-        assert d_read == "📄 a.py"
+        assert d_read == "a.py"                  # 无 📄，素文本
         _, d_grep = _fmt_tool("grep_code", {"pattern": "foo", "path": "src"})
-        assert "🔍 foo" in d_grep and "📁 src" in d_grep
+        assert d_grep == "foo · src"             # 无 🔍📁，· 分隔
         _, d_test = _fmt_tool("run_command", {"command": "pytest -q"})
-        assert d_test == "$ pytest -q"          # 显真实命令，不再抽象成"▶ 运行测试"
+        assert d_test == "$ pytest -q"          # $ 是约定文本记号，保留
 
     def test_fmt_tool_unknown_caps_value(self):
         """未知工具回退 k=v，单值超长截到 60 防一行刷屏。"""
@@ -92,11 +92,26 @@ class TestPureHelpers:
         """含 ```diff 块 → 返回 Rich Text(非纯串) + (+N −M) 统计；普通结果无统计。"""
         from rich.text import Text
         diff = "已写入: a.py\n变更:\n```diff\n@@ -1 +1,2 @@\n-old\n+new1\n+new2\n```"
-        renderable, stats = ChatScreen._render_result(diff)
+        renderable, stats = ChatScreen._render_result("write_file", diff)
         assert isinstance(renderable, Text)
         assert stats == "(+2 −1)"             # 2 加 1 减
-        plain, no_stats = ChatScreen._render_result("普通输出\n第二行")
+        plain, no_stats = ChatScreen._render_result("run_command", "普通输出\n第二行")
         assert isinstance(plain, str) and no_stats == ""
+
+    def test_render_result_read_gives_line_count(self):
+        """读取类结果：只回行数结论，不 dump 文件头。"""
+        numbered = "\n".join(f"{i:4d}|line{i}" for i in range(1, 6))
+        r, stats = ChatScreen._render_result("read_file", numbered)
+        assert r == "⎿ 5 行" and stats == ""
+        # 错误信息原样透出（非行号正文）
+        err, _ = ChatScreen._render_result("read_file", "文件不存在: x.py")
+        assert "文件不存在" in err
+
+    def test_render_result_grep_gives_hit_count(self):
+        """搜索结果：命中数 + 文件数摘要。"""
+        out = "src/a.py:10:foo()\nsrc/a.py:20:foo2\nsrc/b.py:3:foo3"
+        r, _ = ChatScreen._render_result("grep_code", out)
+        assert "3 处" in r and "2 个文件" in r
 
     def test_expand_file_mentions(self, tmp_path):
         """@<存在的文件> → 内容附在消息后 + 返回已附列表；不存在的 @ 原样不动。"""
