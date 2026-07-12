@@ -632,8 +632,8 @@ class ChatScreen(Screen):
     .user-msg { color: $accent; text-style: bold; margin: 1 0 0 0; padding: 0 0 0 1; }
     /* ── agent 标记：◆ CTGents，冷色；每个用户轮只一次，思考/工具/输出全归其下 ── */
     .agent-name { color: $primary; text-style: bold; margin: 1 0 0 0; padding: 0 0 0 1; }
-    /* ── 输出正文：柔化的月光白（不再纯前景平铺）+ 阅读列缩进 ── */
-    .msg-body { margin: 0 0 1 0; padding: 0 0 0 3; color: #cdd6e6; }
+    /* ── 输出正文：中性偏暖月光白（不再蓝调平铺，让蓝=结构、橙=强调都跳得出来）+ 阅读列缩进 ── */
+    .msg-body { margin: 0 0 1 0; padding: 0 0 0 3; color: #dad7d0; }
     /* 段落之间留一行呼吸（"字体观感"的核心可调项之一） */
     .msg-body MarkdownParagraph { margin: 0 0 1 0; }
     /* 结构冷、强调暖：标题冷色、列表符/加粗暖色点睛 */
@@ -649,7 +649,7 @@ class ChatScreen(Screen):
     }
     /* 行内：加粗=暖强调，斜体=柔白，行内代码=海藻绿 */
     MarkdownBlock > .strong { color: $accent; text-style: bold; }
-    MarkdownBlock > .em { color: #cdd6e6; text-style: italic; }
+    MarkdownBlock > .em { color: #dad7d0; text-style: italic; }
     MarkdownBlock > .code_inline { color: $success; background: $panel; }
     /* ── 代码块：给对比底色 + 左色条，让语法高亮在深海 bg 上跳出来
        （默认 black 10% 叠在 #0a101c 上几乎不可见，高亮等于白做）── */
@@ -669,6 +669,10 @@ class ChatScreen(Screen):
     .tool-call { color: $primary-lighten-2; margin: 0 0 0 3; }
     .tool-call.running { color: $warning; }
     .tool-result { color: $secondary; margin: 0 0 0 5; text-style: dim; }
+    /* ── 可折叠工具结果：标题=结论(弱色可点)，展开=全文 ── */
+    .tool-result-box { margin: 0 0 0 3; border: none; background: transparent; }
+    .tool-result-box CollapsibleTitle { color: $secondary; background: transparent; }
+    .tool-result-box CollapsibleTitle:hover { color: $primary-lighten-1; }
     /* ── 长任务 live TODO 面板（顶部常驻，无任务时隐藏）── */
     #taskpanel {
         dock: top; height: auto; padding: 0 1;
@@ -1231,7 +1235,7 @@ class ChatScreen(Screen):
                 elif kind == "tool_result":
                     tool_name = rest[0] if rest else ""
                     result = rest[1] if len(rest) > 1 else ""
-                    renderable, stats = self._render_result(tool_name, result)
+                    widget, stats = self._build_tool_result_widget(tool_name, result)
                     # FIFO 配对：最早发起的未完成工具行 → 去进行中色（⏺ 由琥珀转常态蓝＝完成，
                     # 不换字形），带 diff 统计
                     if self._pending_tool_labels:
@@ -1240,7 +1244,7 @@ class ChatScreen(Screen):
                         with contextlib.suppress(Exception):
                             lbl.update(done_text)
                             lbl.remove_class("running")
-                    await transcript.mount(Static(renderable, classes="tool-result", markup=False))
+                    await transcript.mount(widget)   # 可折叠：默认收起，点开看全文
                     self._current_tool = ""
                 elif kind == "footer":
                     self._mount_footer(rest[0])
@@ -1348,69 +1352,86 @@ class ChatScreen(Screen):
             out.append(f"  … +{extra} 行")
         return "\n".join(out)
 
-    @staticmethod
-    def _render_result(name: str, result: str):
-        """工具结果 → (可渲染对象, 统计串)。
+    _RESULT_BODY_MAX = 400   # 展开时最多渲染的原文行数
 
-        结果行给「结论」不给「原文前几行」——按工具类型摘要：
-        - 读取：调用行已说明文件+范围，只回一句行数（错误信息原样透出）；
-        - 搜索：命中数 + 涉及文件数 + 顶部 2 条；
-        - 写入/编辑：改动摘要（改了哪、净增删）作 lead + 彩色 diff（+绿/-红/@@青）；
-        - 命令/其余：裁剪后的实际输出（stdout 本身就是信号）。
+    @staticmethod
+    def _render_tool_result(name: str, result: str):
+        """工具结果 → (折叠标题, 展开正文, 增删统计)。
+
+        标题=一眼结论（读取→行数 / 搜索→命中数 / 编辑→改动摘要+增删 / 命令→首行或行数）；
+        正文=展开后看的全文（None 表示标题即全部、无需折叠）；统计=挂到 ⏺ 工具行的 (+N −M)。
+        Claude Code 式：默认折叠只看结论，点开看细节。
         """
         result = (result or "").strip()
         if not result:
-            return "⎿ 完成", ""
+            return "完成", None, ""
 
-        # ── 读取类：只回行数结论，不 dump 文件头 ──
+        # ── 读取：标题=行数，展开=文件内容 ──
         if name in ("read_file", "read_file_lines"):
             import re
-            if re.match(r"^\s*\d+\|", result):        # 带行号的文件正文 → 数行数
-                return f"⎿ {result.count(chr(10)) + 1} 行", ""
-            return ChatScreen._result_block(result), ""   # 错误/短消息原样透出
+            if re.match(r"^\s*\d+\|", result):        # 带行号的文件正文
+                n = result.count("\n") + 1
+                body = "\n".join(result.splitlines()[:ChatScreen._RESULT_BODY_MAX])
+                return f"{n} 行", body, ""
+            first = result.splitlines()[0]            # 错误/短消息原样透出，不折叠
+            return first[:100], (result if "\n" in result else None), ""
 
-        # ── 搜索类：命中数 + 文件数 + 顶部两条 ──
+        # ── 搜索：标题=命中数+文件数，展开=全部匹配 ──
         if name == "grep_code":
             first = result.splitlines()[0] if result.splitlines() else ""
             if first.startswith(("未找到", "搜索超时", "系统中未找到")):
-                return f"⎿ {first}", ""
+                return first, None, ""
             hits = [ln for ln in result.splitlines()
                     if ":" in ln and not ln.startswith(("...", "…", "（"))]
             files = {ln.split(":", 1)[0] for ln in hits}
-            head = f"⎿ {len(hits)} 处 · {len(files)} 个文件"
-            for ln in hits[:2]:
-                head += f"\n  {ln[:100]}"
-            return head, ""
+            body = "\n".join(hits[:ChatScreen._RESULT_BODY_MAX])
+            return f"{len(hits)} 处 · {len(files)} 个文件", body, ""
 
-        # ── 写入/编辑：彩色 diff + 改动摘要作 lead ──
+        # ── 写入/编辑：标题=改动摘要+增删，展开=彩色 diff ──
         if "```diff" in result:
             from rich.text import Text
             lead = ""
             for ln in result.splitlines():
                 s = ln.strip()
-                if s.startswith("操作:"):          # 编辑：最精确（改了哪、几行→几行）
+                if s.startswith("操作:"):
                     lead = s
                     break
                 if s.startswith(("已写入:", "已编辑:")):
                     lead = s
-            body = result.split("```diff", 1)[1].split("```", 1)[0]
-            lines = [ln for ln in body.splitlines() if ln.strip()]
+            diff = result.split("```diff", 1)[1].split("```", 1)[0]
+            lines = [ln for ln in diff.splitlines() if ln.strip()]
             adds = sum(1 for ln in lines if ln.startswith("+"))
             dels = sum(1 for ln in lines if ln.startswith("-"))
-            shown = lines[:40]
             text = Text()
-            text.append("⎿ " + (lead or "变更"), style="dim")
-            for ln in shown:
-                s = ln[:120]
+            for j, ln in enumerate(lines[:ChatScreen._RESULT_BODY_MAX]):
                 style = ("green" if ln.startswith("+") else "red" if ln.startswith("-")
                          else "cyan" if ln.startswith("@@") else "dim")
-                text.append("\n  " + s, style=style)
-            extra = len(lines) - len(shown)
-            if extra > 0:
-                text.append(f"\n  … +{extra} 行", style="dim")
-            return text, f"(+{adds} −{dels})"
+                text.append(("" if j == 0 else "\n") + ln[:120], style=style)
+            stats = f"(+{adds} −{dels})"
+            return f"{lead or '变更'}  {stats}", text, stats
 
-        return ChatScreen._result_block(result), ""
+        # ── 命令/其余：标题=首行(多行则标行数)，展开=全文 ──
+        lines = result.splitlines()
+        if len(lines) > 3 or len(result) > 200:
+            head = (lines[0][:90] + " …") if lines else "输出"
+            body = "\n".join(lines[:ChatScreen._RESULT_BODY_MAX])
+            return f"{head}  · {len(lines)} 行", body, ""
+        return result[:200], None, ""
+
+    def _build_tool_result_widget(self, name: str, result: str):
+        """工具结果 → (可挂载 widget, 增删统计)。有展开内容→可折叠(默认收起,点开看全文)；
+        否则一行 Static。供实时与回放共用，保证两条路径一致。
+        """
+        title, body, stats = self._render_tool_result(name, result)
+        if body is None:
+            return Static(f"⎿ {title}", classes="tool-result", markup=False), stats
+        box = Collapsible(
+            Static(body, classes="tool-result", markup=False),
+            title=title, collapsed=True,
+            collapsed_symbol="▸ ", expanded_symbol="▾ ",
+            classes="tool-result-box",
+        )
+        return box, stats
 
     async def _flush_md(self, transcript, finalize: bool = True) -> None:
         if self._cur_text:
@@ -1550,8 +1571,8 @@ class ChatScreen(Screen):
             elif role == "tool":
                 result = m.get("content", "")
                 name = tool_names.popleft() if tool_names else ""
-                renderable, _ = self._render_result(name, result)
-                t.mount(Static(renderable, classes="tool-result", markup=False))
+                widget, _ = self._build_tool_result_widget(name, result)
+                t.mount(widget)   # 与实时一致：可折叠
         t.scroll_end(animate=False)
 
     def _mount_collapsed(self, title: str, body: str) -> None:

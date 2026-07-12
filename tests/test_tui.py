@@ -88,30 +88,31 @@ class TestPureHelpers:
         assert "⎿ L0" in b2 and "… +7 行" in b2 and "L3" not in b2
         assert ChatScreen._result_block("   \n  ") == "⎿ 完成"
 
-    def test_render_result_diff_colored_and_stats(self):
-        """含 ```diff 块 → 返回 Rich Text(非纯串) + (+N −M) 统计；普通结果无统计。"""
+    def test_render_result_diff_titled_with_stats_and_body(self):
+        """含 ```diff 块 → 标题带改动摘要+(+N −M)，展开正文=彩色 Rich Text。"""
         from rich.text import Text
         diff = "已写入: a.py\n变更:\n```diff\n@@ -1 +1,2 @@\n-old\n+new1\n+new2\n```"
-        renderable, stats = ChatScreen._render_result("write_file", diff)
-        assert isinstance(renderable, Text)
-        assert stats == "(+2 −1)"             # 2 加 1 减
-        plain, no_stats = ChatScreen._render_result("run_command", "普通输出\n第二行")
-        assert isinstance(plain, str) and no_stats == ""
+        title, body, stats = ChatScreen._render_tool_result("write_file", diff)
+        assert stats == "(+2 −1)" and stats in title  # 2 加 1 减，标题带统计
+        assert isinstance(body, Text)                  # 展开=彩色 diff
+        # 普通短输出：标题即全部，无展开体
+        title2, body2, stats2 = ChatScreen._render_tool_result("run_command", "OK")
+        assert body2 is None and stats2 == ""
 
-    def test_render_result_read_gives_line_count(self):
-        """读取类结果：只回行数结论，不 dump 文件头。"""
+    def test_render_result_read_gives_line_count_and_expandable(self):
+        """读取类：标题=行数，展开=文件内容；错误信息原样、不折叠。"""
         numbered = "\n".join(f"{i:4d}|line{i}" for i in range(1, 6))
-        r, stats = ChatScreen._render_result("read_file", numbered)
-        assert r == "⎿ 5 行" and stats == ""
-        # 错误信息原样透出（非行号正文）
-        err, _ = ChatScreen._render_result("read_file", "文件不存在: x.py")
-        assert "文件不存在" in err
+        title, body, stats = ChatScreen._render_tool_result("read_file", numbered)
+        assert title == "5 行" and stats == "" and body is not None and "line3" in body
+        err_title, err_body, _ = ChatScreen._render_tool_result("read_file", "文件不存在: x.py")
+        assert "文件不存在" in err_title and err_body is None
 
     def test_render_result_grep_gives_hit_count(self):
-        """搜索结果：命中数 + 文件数摘要。"""
+        """搜索结果：标题=命中数+文件数，展开=全部匹配。"""
         out = "src/a.py:10:foo()\nsrc/a.py:20:foo2\nsrc/b.py:3:foo3"
-        r, _ = ChatScreen._render_result("grep_code", out)
-        assert "3 处" in r and "2 个文件" in r
+        title, body, _ = ChatScreen._render_tool_result("grep_code", out)
+        assert "3 处" in title and "2 个文件" in title
+        assert body is not None and "src/b.py" in body
 
     def test_expand_file_mentions(self, tmp_path):
         """@<存在的文件> → 内容附在消息后 + 返回已附列表；不存在的 @ 原样不动。"""
@@ -346,6 +347,22 @@ class TestChatScreen:
                 # 工具结果/system 注入仍被跳过(不渲染)。
                 assert len(list(app.screen.query(".user-msg"))) == 1
                 assert len(list(app.screen.query(".agent-name"))) == 1
+
+        asyncio.run(go())
+
+    def test_tool_result_collapsible_when_body(self, monkeypatch):
+        """有展开内容→可折叠 Collapsible(默认收起,点开看全文)；无内容→一行 Static。"""
+        async def go():
+            app = self._fresh_chat_app()
+            from textual.widgets import Collapsible, Static
+            async with app.run_test() as pilot:
+                await self._enter_chat(app, pilot)
+                s = app.screen
+                numbered = "\n".join(f"{i:4d}|x{i}" for i in range(1, 8))
+                w, _ = s._build_tool_result_widget("read_file", numbered)
+                assert isinstance(w, Collapsible) and w.collapsed is True
+                w2, _ = s._build_tool_result_widget("run_command", "OK")
+                assert isinstance(w2, Static)
 
         asyncio.run(go())
 
