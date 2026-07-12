@@ -187,6 +187,21 @@ def _cmd_sessions(r: CmdResult, _ctx, _args, _sid) -> None:
     r.message = "\n".join(lines)
 
 
+@builtin_multi(["/rename", "/name"], description="给当前会话命名（存档列表更好认）",
+               usage="/rename <名字>")
+def _cmd_rename(r: CmdResult, _ctx, args, _sid) -> None:
+    if not _sid:
+        r.message = "当前还没有会话（先发一条消息，会话自动创建后再命名）"
+        return
+    name = " ".join(args).strip()
+    if not name:
+        r.message = "用法: /rename <名字>"
+        return
+    from .session import save_session_name
+    save_session_name(_sid, name)
+    r.message = f"已把当前会话命名为「{name}」"
+
+
 @builtin("/load", description="切换会话", usage="/load <编号>")
 def _cmd_load(r: CmdResult, _ctx, args, _sid) -> None:
     if not args:

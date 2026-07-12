@@ -502,12 +502,15 @@ class SaveSelectScreen(Screen):
         background: $surface;
     }
     #saves { height: auto; max-height: 16; background: $surface; }
-    #saves > ListItem { padding: 0 1; min-height: 1; }
+    #saves > ListItem { padding: 0 1; min-height: 1; height: auto; }
     #saves > ListItem:even { background: $panel; }
     #saves > ListItem:odd { background: $surface; }
     #saves > ListItem.--highlight {
         background: $primary; color: $background; text-style: bold;
     }
+    /* 一句话预览：弱色第二行；选中时反白保持可读 */
+    .save-preview { color: $primary-darken-1; text-style: none; }
+    #saves > ListItem.--highlight .save-preview { color: $background; }
     #newbtn {
         width: 100%; border: none; background: transparent;
         color: $success; text-style: bold;
@@ -534,7 +537,7 @@ class SaveSelectScreen(Screen):
         max_name = max((len(infos.get(s, {}).get("name", s)) for s in sessions), default=20)
         items: list[ListItem] = []
         for i, sid in enumerate(sessions):
-            info = infos.get(sid, {"name": sid, "date": "", "time": ""})
+            info = infos.get(sid, {"name": sid, "date": "", "time": "", "preview": ""})
             name = info["name"]
             time_text = f"{info['date']} {info['time']}".strip()
             prefix = "● " if i == 0 else "  "
@@ -544,7 +547,11 @@ class SaveSelectScreen(Screen):
                 text = prefix + name + " " * max(pad, 1) + time_text
             else:
                 text = prefix + name
-            items.append(ListItem(Label(text, markup=False), name=sid))
+            preview = info.get("preview", "")
+            rows: list = [Label(text, markup=False)]
+            if preview:
+                rows.append(Label(f"    {preview}", classes="save-preview", markup=False))
+            items.append(ListItem(Vertical(*rows), name=sid))
         with Vertical(id="selectwrap"):
             yield Static("◆ SELECT  SAVE ◆", id="savetitle", markup=False)
             with Vertical(id="savebox"):

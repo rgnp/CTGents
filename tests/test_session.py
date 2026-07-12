@@ -6,11 +6,14 @@ import os
 
 from src.session import (
     _sanitize_surrogates,
+    _session_preview,
     delete_session,
     get_session_name,
+    get_sessions_info,
     list_sessions,
     load_session,
     save_session,
+    save_session_name,
 )
 
 
@@ -93,6 +96,37 @@ class TestSessionIO:
             json.dump({"name": "My Session"}, f)
         name = get_session_name("named")
         assert name == "My Session"
+
+
+class TestNameAndPreview:
+    def test_rename_roundtrips(self, tmp_path, monkeypatch):
+        monkeypatch.setattr("src.session.SESSION_DIR", str(tmp_path))
+        save_session([{"role": "user", "content": "hi"}], session_id="s")
+        save_session_name("s", "世界模型讨论")
+        assert get_session_name("s") == "世界模型讨论"
+        assert get_sessions_info(["s"])["s"]["name"] == "世界模型讨论"
+
+    def test_rename_empty_clears(self, tmp_path, monkeypatch):
+        monkeypatch.setattr("src.session.SESSION_DIR", str(tmp_path))
+        save_session([{"role": "user", "content": "hi"}], session_id="s")
+        save_session_name("s", "临时名")
+        save_session_name("s", "  ")           # 空 → 清除，回退 sid
+        assert get_session_name("s") == "s"
+
+    def test_preview_falls_back_to_first_user_msg(self, tmp_path, monkeypatch):
+        monkeypatch.setattr("src.session.SESSION_DIR", str(tmp_path))
+        save_session([
+            {"role": "system", "content": "注入"},
+            {"role": "user", "content": "世界模型评测基准有哪些？"},
+        ], session_id="s")
+        assert "世界模型评测基准" in _session_preview("s")
+
+    def test_preview_prefers_summary(self, tmp_path, monkeypatch):
+        monkeypatch.setattr("src.session.SESSION_DIR", str(tmp_path))
+        save_session([{"role": "user", "content": "原始问题"}], session_id="s")
+        with open(os.path.join(str(tmp_path), "s", "summary.txt"), "w", encoding="utf-8") as f:
+            f.write("这次聊了世界模型仿真\n更多细节")
+        assert _session_preview("s") == "这次聊了世界模型仿真"
 
 
 class TestAtomicWrite:

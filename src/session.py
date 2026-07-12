@@ -84,16 +84,61 @@ def list_session_names(session_ids: list[str]) -> dict[str, str]:
 
 
 
-def get_sessions_info(session_ids: list[str]) -> dict[str, dict]:
-    """批量获取会话信息：名字 + 格式化的日期/时间。
+def _session_preview(session_id: str, limit: int = 54) -> str:
+    """一句话预览：summary.txt 首行优先，无则回退 messages.json 首条 user 消息。
 
-    返回 {sid: {"name": str, "date": str, "time": str}}
+    让存档列表从"一堵时间戳墙"变成"一眼认出是哪次对话"。
+    """
+    try:
+        with open(os.path.join(_session_path(session_id), "summary.txt"), encoding="utf-8") as f:
+            line = f.read().strip().split("\n", 1)[0].strip()
+            if line:
+                return line[:limit]
+    except Exception:
+        pass
+    try:
+        for m in load_session(session_id):
+            if m.get("role") == "user":
+                c = (m.get("content") or "").strip()
+                for mark in ("── 用户问题 ──", "【用户消息】"):
+                    if mark in c:
+                        c = c.split(mark, 1)[1].strip()
+                c = c.split("\n", 1)[0].strip()
+                if c:
+                    return c[:limit]
+    except Exception:
+        pass
+    return ""
+
+
+def save_session_name(session_id: str, name: str) -> None:
+    """给会话命名（写进 meta.json，原子写）。空名视为清除。"""
+    sess_dir = _session_path(session_id)
+    os.makedirs(sess_dir, exist_ok=True)
+    meta: dict = {}
+    try:
+        with open(_meta_path(session_id), encoding="utf-8") as f:
+            meta = json.load(f)
+    except Exception:
+        pass
+    name = name.strip()
+    if name:
+        meta["name"] = name
+    else:
+        meta.pop("name", None)
+    _atomic_write_text(_meta_path(session_id), json.dumps(meta, ensure_ascii=False, indent=2))
+
+
+def get_sessions_info(session_ids: list[str]) -> dict[str, dict]:
+    """批量获取会话信息：名字 + 格式化的日期/时间 + 一句话预览。
+
+    返回 {sid: {"name": str, "date": str, "time": str, "preview": str}}
     date 为空串表示"今天"，date 非空表示"月-日"。
     """
     now = datetime.now()
     result: dict[str, dict] = {}
     for sid in session_ids:
-        info: dict[str, str] = {"name": sid, "date": "", "time": ""}
+        info: dict[str, str] = {"name": sid, "date": "", "time": "", "preview": ""}
         # 名字：从 meta.json 读取
         try:
             with open(_meta_path(sid), encoding="utf-8") as f:
@@ -101,6 +146,7 @@ def get_sessions_info(session_ids: list[str]) -> dict[str, dict]:
                 info["name"] = meta.get("name", sid)
         except Exception:
             pass
+        info["preview"] = _session_preview(sid)
         # 时间：从 session ID（时间戳）解析
         try:
             dt = datetime.strptime(sid, "%Y-%m-%d-%H%M%S")
