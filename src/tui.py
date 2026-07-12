@@ -700,6 +700,7 @@ class ChatScreen(Screen):
         Binding("ctrl+l", "clear_screen", "清屏", show=False),
         Binding("ctrl+up", "arrow_up", "上一条", show=False),
         Binding("ctrl+down", "arrow_down", "下一条", show=False),
+        Binding("ctrl+r", "show_history", "回看全部历史", show=False),
         Binding("enter", "submit_prompt", "发送", show=False, priority=True),
     ]
 
@@ -1460,10 +1461,11 @@ class ChatScreen(Screen):
         t.mount(Label(text, classes="meta", markup=False))
         t.scroll_end(animate=False)
 
-    def _echo_conversation(self) -> None:
+    def _echo_conversation(self, max_turns: int | None = None) -> None:
         """加载会话后回放：与实时同结构——每个用户轮一个 CTGents 头，思考折叠 + 工具链 + 文字归其下。
 
-        只显示最近 self._echo_max_turns 轮，超出部分折叠提示。
+        max_turns=None → 只显示最近 self._echo_max_turns 轮（默认，超出折叠提示）；
+        传大数（Ctrl+R 回看全部）→ 渲染整段历史。
         """
         import json
 
@@ -1471,7 +1473,7 @@ class ChatScreen(Screen):
         all_msgs = self.app.ctx.log
         # 找所有 user 消息的位置，只保留最近 N 轮
         user_indices = [i for i, m in enumerate(all_msgs) if m.get("role") == "user"]
-        n = self._echo_max_turns
+        n = max_turns if max_turns is not None else self._echo_max_turns
         skip_users = max(0, len(user_indices) - n)
         skip_up_to = user_indices[skip_users] if skip_users > 0 and skip_users < len(user_indices) else 0
 
@@ -1719,6 +1721,22 @@ class ChatScreen(Screen):
 
     def action_clear_screen(self) -> None:
         with contextlib.suppress(Exception):
+            self.query_one("#transcript", VerticalScroll).scroll_end(animate=False)
+
+    def action_show_history(self) -> None:
+        """Ctrl+R：展开本会话全部历史（默认只精简显示最近几轮以保流畅）。
+
+        平时靠 _prune_transcript 精简保性能；想回看时一键给全，继续对话后自动回到精简。
+        """
+        if self._busy:
+            return
+        with contextlib.suppress(Exception):
+            self.query_one("#transcript", VerticalScroll).remove_children()
+            self._agent_header_mounted = False
+            self._reset_reasoning()
+            self._reset_tool_calls()
+            self._echo_conversation(max_turns=10 ** 9)   # 全部
+            self._mount("（已展开本会话全部历史；继续对话后自动回到精简显示）", "sys-meta")
             self.query_one("#transcript", VerticalScroll).scroll_end(animate=False)
 
     def action_arrow_up(self) -> None:

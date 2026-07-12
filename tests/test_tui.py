@@ -376,6 +376,29 @@ class TestChatScreen:
 
         asyncio.run(go())
 
+    def test_show_history_expands_beyond_prune_cap(self, monkeypatch):
+        """Ctrl+R 回看：默认精简只显最近 3 轮，展开后本会话全部轮都渲染。"""
+        async def go():
+            app = self._fresh_chat_app()
+            async with app.run_test() as pilot:
+                await self._enter_chat(app, pilot)
+                s = app.screen
+                # 造 5 轮对话（user + assistant 文字）
+                log = []
+                for i in range(5):
+                    log.append({"role": "user", "content": f"问题{i}"})
+                    log.append({"role": "assistant", "content": f"答复{i}"})
+                app.ctx.log = log
+                s.query_one("#transcript").remove_children()
+                s._echo_conversation()                       # 默认精简
+                await pilot.pause()
+                assert len(list(s.query(".user-msg"))) == 3
+                s.action_show_history()                       # Ctrl+R 展开全部
+                await pilot.pause()
+                assert len(list(s.query(".user-msg"))) == 5
+
+        asyncio.run(go())
+
     def test_task_panel_shows_hides_windows(self, monkeypatch):
         """有未完成任务 → 面板显示(窗口≤4跟随活跃步)；无步骤/全做完 → 隐藏。"""
         import src.tasks as tasks
