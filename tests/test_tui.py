@@ -114,6 +114,14 @@ class TestPureHelpers:
         assert "3 处" in title and "2 个文件" in title
         assert body is not None and "src/b.py" in body
 
+    def test_render_result_exec_folds_multiline(self):
+        """执行代码/命令：多行输出要折叠（展开有正文）；单行短输出平铺。"""
+        title, body, _ = ChatScreen._render_tool_result("run_python", "第一行\n第二行\n第三行")
+        assert body is not None and "3 行" in title
+        # 单行短输出不折叠
+        _, body2, _ = ChatScreen._render_tool_result("run_python", "42")
+        assert body2 is None
+
     def test_expand_file_mentions(self, tmp_path):
         """@<存在的文件> → 内容附在消息后 + 返回已附列表；不存在的 @ 原样不动。"""
         f = tmp_path / "note.txt"

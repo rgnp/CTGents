@@ -1414,9 +1414,11 @@ class ChatScreen(Screen):
             stats = f"(+{adds} −{dels})"
             return f"{lead or '变更'}  {stats}", text, stats
 
-        # ── 命令/其余：标题=首行(多行则标行数)，展开=全文 ──
+        # ── 命令/执行/其余：标题=首行(多行则标行数)，展开=全文 ──
+        # 执行类(run_python/run_command/…)输出=想收起的细节，门槛放低：多于 1 行或较长就折叠，
+        # 只有单行短输出(如 42 / (无输出))才平铺。
         lines = result.splitlines()
-        if len(lines) > 3 or len(result) > 200:
+        if len(lines) > 1 or len(result) > 120:
             head = (lines[0][:90] + " …") if lines else "输出"
             body = "\n".join(lines[:ChatScreen._RESULT_BODY_MAX])
             return f"{head}  · {len(lines)} 行", body, ""
