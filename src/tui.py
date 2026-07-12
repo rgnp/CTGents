@@ -1229,7 +1229,7 @@ class ChatScreen(Screen):
                     self._current_tool = label
                     self._collapse_active()             # 进工具阶段 → 折起上一个思考块
                     await self._ensure_agent_header(transcript)
-                    text = f"⏺ {label}  {detail}".rstrip()
+                    text = f"⏺  {label}  {detail}".rstrip()
                     line = Label(text, classes="tool-call running", markup=False)
                     await transcript.mount(line)
                     self._pending_tool_labels.append((line, label, detail))  # 等结果回来合并
@@ -1334,7 +1334,7 @@ class ChatScreen(Screen):
         ch = self._SPINNER[self._spin_frame]
         for lbl, label, detail in self._pending_tool_labels:
             with contextlib.suppress(Exception):
-                lbl.update(f"{ch} {label}  {detail}".rstrip())
+                lbl.update(f"{ch}  {label}  {detail}".rstrip())
 
     @staticmethod
     def _result_block(result: str, max_lines: int = 6, width: int = 100) -> str:
@@ -1439,10 +1439,10 @@ class ChatScreen(Screen):
             return Collapsible(
                 Static(body, classes="tool-result", markup=False),
                 title=full, collapsed=True,
-                collapsed_symbol="▸ ", expanded_symbol="▾ ",
+                collapsed_symbol="▸  ", expanded_symbol="▾  ",
                 classes="tool-result-box",
             )
-        done = f"⏺ {header}  · {title}".rstrip() if title else f"⏺ {header}"
+        done = f"⏺  {header}  · {title}".rstrip() if title else f"⏺  {header}"
         return Static(done, classes="tool-call done", markup=False)
 
     async def _flush_md(self, transcript, finalize: bool = True) -> None:
@@ -1477,7 +1477,7 @@ class ChatScreen(Screen):
             self._collapse_active()               # 新思考块前先折上一个
             self._reasoning_box = Static(self._cur_reasoning, classes="thinking", markup=False)
             box = Collapsible(self._reasoning_box, title="思考", collapsed=False,
-                              collapsed_symbol="▸ ", expanded_symbol="▾ ",
+                              collapsed_symbol="▸  ", expanded_symbol="▾  ",
                               classes="collapsible-chat")
             await transcript.mount(box)
             self._reasoning_collapsible = box
@@ -1594,7 +1594,7 @@ class ChatScreen(Screen):
         t = self.query_one("#transcript", VerticalScroll)
         t.mount(Collapsible(Static(body, classes="thinking", markup=False),
                             title=title, collapsed=True,
-                            collapsed_symbol="▸ ", expanded_symbol="▾ ",
+                            collapsed_symbol="▸  ", expanded_symbol="▾  ",
                             classes="collapsible-chat"))
         t.scroll_end(animate=False)
 
