@@ -121,6 +121,7 @@ def test_smoke_tool_call_then_final(monkeypatch):
     覆盖 _tracked_execute_tool（含 708/713 的 from .tracker import
     record_tool_call）——这正是 tracker 越界导入的另两处接缝。
     """
+    monkeypatch.setenv("CTG_FORCE_PLAN", "0")   # 本测试隔离工具执行机制，关掉开工前强制思考
     responses = iter([
         ("", [_tool_call("think", {"thought": "先想想"})], {}),  # 第一轮：调工具
         ("干完了", [], {}),                                       # 第二轮：收尾
@@ -172,6 +173,7 @@ def test_smoke_malformed_tool_args_handled(monkeypatch):
     覆盖 972-988 的 JSON 修复/兜底接线。坏参数的工具调用也必须补一条 tool
     结果消息，否则下一轮 API 因缺 tool 消息 400。
     """
+    monkeypatch.setenv("CTG_FORCE_PLAN", "0")   # 隔离 JSON 修复路径，关掉开工前强制思考
     responses = iter([
         ("", [{"id": "call_x", "type": "function",
                "function": {"name": "think", "arguments": "{坏的"}}], {}),
@@ -213,3 +215,68 @@ def test_request_breaker_stops_runaway_loop(monkeypatch):
     )
     assert "熔断" in out
     assert calls["n"] == 3, f"应恰好发 3 次请求后熔断，实际 {calls['n']}"
+
+
+# ── 开工前强制思考（在 loop 里卡一道，不靠 psyche 软提示）──
+
+def test_force_plan_bounces_then_executes(monkeypatch):
+    """首次要动工具却没先说计划(content 空) → 打回一次、注入计划提示、本轮不执行工具；
+    下一轮(已强制过)正常执行——打回不是永久拦截。
+    """
+    monkeypatch.setenv("CTG_FORCE_PLAN", "1")
+    responses = iter([
+        ("", [_tool_call("think", {"thought": "直接冲工具"})], {}),   # 空 content → 被打回
+        ("", [_tool_call("think", {"thought": "补计划后再来"})], {}),  # plan_forced 已 True → 执行
+        ("完成", [], {}),
+    ])
+    monkeypatch.setattr(llm, "_invoke_llm_eager", lambda *a, **k: next(responses))
+    tools: list[tuple] = []
+    ctx = _ctx()
+    out = llm.run_conversation(
+        ctx, "帮我改点东西",
+        on_token=lambda _t: None,
+        on_tool=lambda name, args: tools.append((name, args)),
+        session_id="",
+    )
+    assert out == "完成"
+    assert any(m.get("_force_plan") for m in ctx.log)          # 注入了"先说理解+计划"提示
+    assert any(m.get("role") == "tool" and m.get("_tool_name") == "think" for m in ctx.log)  # 最终执行了
+
+
+def test_force_plan_skips_pure_qa(monkeypatch):
+    """纯问答无 tool_calls → 不打回、零额外调用（一次收尾）。"""
+    monkeypatch.setenv("CTG_FORCE_PLAN", "1")
+    calls = {"n": 0}
+
+    def _once(*_a, **_k):
+        calls["n"] += 1
+        return ("世界模型是一种……", [], {})
+
+    monkeypatch.setattr(llm, "_invoke_llm_eager", _once)
+    ctx = _ctx()
+    out = llm.run_conversation(
+        ctx, "世界模型是什么",
+        on_token=lambda _t: None, on_tool=lambda *_a: None, session_id="",
+    )
+    assert out == "世界模型是一种……"
+    assert calls["n"] == 1                                     # 零额外开销
+    assert not any(m.get("_force_plan") for m in ctx.log)
+
+
+def test_force_plan_no_bounce_when_plan_present(monkeypatch):
+    """首个响应已带足够长的理解+计划 content → 不打回，直接执行工具。"""
+    monkeypatch.setenv("CTG_FORCE_PLAN", "1")
+    plan = "我理解你要我改缓存层。计划：先读 cache_context.py 定位 send()，再动手改。"
+    responses = iter([
+        (plan, [_tool_call("think", {"thought": "按计划来"})], {}),   # content 够长 → 不打回
+        ("完成", [], {}),
+    ])
+    monkeypatch.setattr(llm, "_invoke_llm_eager", lambda *a, **k: next(responses))
+    ctx = _ctx()
+    out = llm.run_conversation(
+        ctx, "改缓存层",
+        on_token=lambda _t: None, on_tool=lambda *_a: None, session_id="",
+    )
+    assert out == "完成"
+    assert not any(m.get("_force_plan") for m in ctx.log)      # 已有计划，没打回
+    assert any(m.get("role") == "tool" and m.get("_tool_name") == "think" for m in ctx.log)

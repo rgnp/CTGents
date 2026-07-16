@@ -91,6 +91,9 @@ def test_pure_append_no_system_tail_by_default(monkeypatch):
 
     对话末尾即"输入结束位置",下轮首请求可靠命中缓存单元(见 [[ctgents-context-cache]])。
     """
+    # 隔离纯追加基线：关掉"开工前强制思考"（它会追加一条 _force_plan system 提示到 log——
+    # 那是永久追加、非 send() 易变挂尾，与终止门/审计 nudge 同类，单独在 test_llm 覆盖）。
+    monkeypatch.setenv("CTG_FORCE_PLAN", "0")
     ctx = _prefix_ctx()
     n_prefix = len(ctx.prefix)
     _mock_llm(monkeypatch,

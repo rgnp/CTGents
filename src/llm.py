@@ -885,14 +885,24 @@ def _invoke_llm_eager(
     # （之前 pending/submit 每次重试都清空重来，orphaned future 仍在后台跑、结果被静默丢弃，
     # 随后正常执行路径又把同一个调用再打一次——外部 API 被打两次）。
     submitted: dict[tuple[str, str], Future[str]] = {}
+    ready_tools: dict[int, str] = {}
     lock = threading.Lock()
     executor = _get_eager_executor()
 
     def on_tool_ready(idx: int, name: str, args_json: str) -> None:
-        """流式线程回调：参数完整 → 若是 SAFE 工具，立即提交执行（同一调用跨重试只提交一次）。"""
+        """流式线程回调：只 eager 执行从索引 0 开始的连续 SAFE 前缀。
+
+        后续 SAFE 工具不能跨过前面的写/串行工具，否则 `[write(A), read(A)]` 会在
+        流式阶段先读到旧内容。若前序调用尚未完整解析，也保守留到正式 batch 执行。
+        """
+        ready_tools[idx] = name
         # poll 是阻塞的时变读：预跑它占线程 + 刷屏、且省不了延迟（后台作业已改为完成
         # 自动通知、不靠 poll）。其余 parallel-safe 读照常 eager。
         if name not in _PARALLEL_SAFE or name == "poll":
+            return
+        if any(i not in ready_tools for i in range(idx)):
+            return
+        if any(ready_tools[i] not in _PARALLEL_SAFE or ready_tools[i] == "poll" for i in range(idx)):
             return
         try:
             args = json.loads(args_json)
@@ -963,6 +973,13 @@ _TOOL_RESULT_COMPRESS_THRESHOLD = RUNTIME.tool_result_compress_threshold
 _COMPRESS_MIN_OMITTED = 120
 # 单轮请求数熔断——真值在 params.RUNTIME
 _MAX_REQUESTS_PER_TURN = RUNTIME.max_requests_per_turn
+
+# ── 开工前强制思考（在 loop 里卡一道，不靠 psyche 软提示）──
+# 本轮首次要动工具、却没先说"理解+计划"（content 太短=直接冲工具）→ 打回一次，
+# 逼它先articulate再执行。触发器="要动手且没解释"（模型自身输出信号），不是用户输入长度
+# （后者是被删的 auto-plan 错轴）。纯问答/闲聊无 tool_calls，不受影响、零开销。
+# CTG_FORCE_PLAN=0 关闭。
+_PLAN_MIN_CHARS = 40
 # 挂尾机制已整体删除：send() 永远纯追加（[前缀][对话]），不存在"工具循环是否带尾"
 # 之类的开关。每个请求 payload shape 一致、对话即输入结束单元。见 [[ctgents-context-cache]]。
 # （建任务提示 maybe_suggest_task_nudge 曾在此挂尾，随挂尾机制删除——逻辑保留为 dormant。）
@@ -1157,8 +1174,30 @@ def _compact_cache_context(ctx, user_input: str, force: bool = False) -> None:
     kept = log[keep_start:]
     # 抢救被驱逐区里已加载的 psyche：加载时 append 在尾部，但会话足够长后仍可能滚进驱逐区，
     # 若被摘要掉 = 悄悄卸载 agent 主动加载的认知框架。原样搬到新 log 顶部、不进摘要。
-    rescued = [m for m in evicted if m.get("_psyche_meta")]
-    to_summarize = [m for m in evicted if not m.get("_psyche_meta")]
+    from .psyche_bridge import loaded_psyches_in_log
+    from .skill_bridge import loaded_skills
+
+    active_psyches = {
+        meta.get("id") or meta.get("name") for meta in loaded_psyches_in_log(ctx)
+    }
+    active_skills = {meta.get("name") for meta in loaded_skills(ctx)}
+
+    def _is_active_psyche_core(message: dict) -> bool:
+        meta = message.get("_psyche_meta")
+        return bool(meta and meta.get("name") in active_psyches)
+
+    def _is_active_skill_core(message: dict) -> bool:
+        event = message.get("_skill_event")
+        return bool(
+            event and event.get("type") == "activate" and event.get("name") in active_skills
+        )
+
+    rescued = [
+        m for m in evicted if _is_active_psyche_core(m) or _is_active_skill_core(m)
+    ]
+    to_summarize = [
+        m for m in evicted if not (_is_active_psyche_core(m) or _is_active_skill_core(m))
+    ]
     summary = _make_brief_summary(to_summarize, previous_summary=_previous_summary) \
         if to_summarize else None
     if not summary and not rescued:
@@ -1439,17 +1478,21 @@ def _execute_tool_batch(approved: list[tuple]) -> list[str]:
             total_serial += 1
             i += 1
         else:
-            batch_size = _execute_parallel_batch(approved, i, n, results)
+            batch_size, next_i = _execute_parallel_batch(approved, i, n, results)
             total_parallel += batch_size
-            i += batch_size
+            i = next_i
 
     _update_safe_stats(total_parallel, total_serial)
     return results
 
 
 def _execute_parallel_batch(approved: list[tuple], start: int, n: int,
-                            results: list[str]) -> int:
-    """收集从 start 开始的连续 SAFE 工具并并行执行。返回执行数。"""
+                            results: list[str]) -> tuple[int, int]:
+    """收集从 start 开始的连续 SAFE 工具并并行执行。
+
+    返回 `(实际执行数, 下一扫描位置)`。下一位置按扫描跨度推进，不能按执行数推进：
+    中间若夹着 eager 预置结果，二者不同，按执行数会让后面的工具被重复执行。
+    """
     from concurrent.futures import ThreadPoolExecutor, as_completed
     batch: list[int] = []
     i = start
@@ -1463,7 +1506,7 @@ def _execute_parallel_batch(approved: list[tuple], start: int, n: int,
         else:
             break
     if not batch:
-        return 0
+        return 0, i
     names = [approved[j][1] for j in batch]
     print(f"  ⚡ [SAFE] 并行执行 {len(batch)} 个工具: {', '.join(names)}")
     with ThreadPoolExecutor(max_workers=min(len(batch), 8)) as pool:
@@ -1473,7 +1516,7 @@ def _execute_parallel_batch(approved: list[tuple], start: int, n: int,
             fut_map[fut] = j
         for fut in as_completed(fut_map):
             results[fut_map[fut]] = fut.result()
-    return len(batch)
+    return len(batch), i
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -1660,7 +1703,7 @@ def _detect_control_signal(tool_calls: list[dict]) -> tuple[str, str] | None:
 
 
 def _handle_psyche_tools(ctx: CacheContext, approved: list[tuple]) -> None:
-    """处理 load_psyche / unload_psyche 工具调用结果。
+    """处理 Psyche / Skill 认知层工具调用结果。
 
     在工具结果写 log **之后**执行（调用点顺序是协议不变量的一部分）：inject_psyche
     append 的 system 消息若落在 assistant(tool_calls) 与 tool 结果之间，API 400。
@@ -1670,11 +1713,33 @@ def _handle_psyche_tools(ctx: CacheContext, approved: list[tuple]) -> None:
         if tool_name == "load_psyche":
             name = (args.get("name") or "").strip()
             if name:
-                inject_psyche(ctx, name)
+                inject_psyche(
+                    ctx,
+                    name,
+                    scope="task",
+                    source="agent",
+                    reason=(args.get("reason") or "").strip(),
+                )
         elif tool_name == "unload_psyche":
             name = (args.get("name") or "").strip()
             if name:
-                remove_psyche(ctx, name)
+                remove_psyche(ctx, name, source="agent")
+        elif tool_name == "activate_skill":
+            from .skill_bridge import activate_skill
+
+            name = (args.get("name") or "").strip()
+            if name:
+                result = activate_skill(
+                    ctx,
+                    name,
+                    axes=args.get("axes") if isinstance(args.get("axes"), dict) else None,
+                    reason=(args.get("reason") or "").strip(),
+                )
+                if not result.startswith("✅"):
+                    ctx.log.append({
+                        "role": "system",
+                        "content": f"【Skill activation rejected】{result}",
+                    })
 
 
 def _handle_tool_results(
@@ -1768,11 +1833,12 @@ def _reconcile_system_context(ctx: CacheContext) -> None:
     resync 未覆盖的场景）。每轮调用前用 loaded_psyches_in_log 扫一次，
     把漏注册的补上。
     """
-    from .psyche_bridge import loaded_psyches_in_log
+    from .psyche_bridge import exit_checks_for_active, loaded_psyches_in_log
     from .system_context import Source, loaded_keys, reconcile, register
 
     # ── 兜底：从 ctx.log 回填 registry ──
-    log_psyche_names = {meta["name"] for meta in loaded_psyches_in_log(ctx)}
+    active_meta = loaded_psyches_in_log(ctx)
+    log_psyche_names = {meta.get("id") or meta["name"] for meta in active_meta}
     reg_psyche_names = {k.split("/", 1)[1] for k in loaded_keys() if k.startswith("psyche/")}
     missing = log_psyche_names - reg_psyche_names
     for name in missing:
@@ -1784,16 +1850,22 @@ def _reconcile_system_context(ctx: CacheContext) -> None:
     # 获取当前已加载的 psyche 列表
     psyche_keys = sorted(k for k in loaded_keys() if k.startswith("psyche/"))
     names = [k.split("/", 1)[1] for k in psyche_keys]
+    signatures = sorted(
+        f"{meta.get('id') or meta.get('name')}@{meta.get('version', '?')}"
+        for meta in active_meta
+    )
 
     def _make_msg(ns: list[str]) -> dict | None:
         if not ns:
             return None
+        checks = exit_checks_for_active(ctx)
+        check_text = "\n".join(f"- {check}" for check in checks) or "- 对照当前 Psyche 的判断增量复核结论"
         return {
             "role": "system",
             "content": (
-                f"【自律检查】已加载psyche: {', '.join(ns)}。\n"
-                "在写最终回复前，自检你的判断是否遵循了这些psyche的准则。\n"
-                "每发现一条违反，在回复末尾追加: ⚠️ 违反psyche {name}: {说明}"
+                f"【Active Psyche Stack】{', '.join(ns)}。\n"
+                "最终回复前执行与当前任务相关的检查：\n"
+                f"{check_text}"
             ),
             "_system_context": "system/self-check",
         }
@@ -1801,7 +1873,7 @@ def _reconcile_system_context(ctx: CacheContext) -> None:
     msg = _make_msg(names)
     register(Source(
         key="system/self-check",
-        snapshot=names,
+        snapshot=signatures,
         baseline=msg,
         update=lambda _prev, _curr: _make_msg(
             sorted(k.split("/", 1)[1] for k in loaded_keys() if k.startswith("psyche/"))
@@ -1877,6 +1949,8 @@ def run_conversation(
 
     requests_made = 0
     _tool_call_count = 0  # 工具调用步数（规划审查用）
+    force_plan = os.environ.get("CTG_FORCE_PLAN", "1") != "0"  # 开工前强制思考
+    plan_forced = False   # 本轮是否已强制过一次"先说理解+计划"（每轮最多一次，不死循环）
     # ── stormBreaker：同轮连续同一错误 → 打破死亡螺旋 ──
     _storm_sig: str | None = None   # 上一轮失败签名
     _storm_count = 0                # 同一签名连续次数
@@ -1967,6 +2041,29 @@ def run_conversation(
                 on_progress()
             return "\n\n[⏹️ 已中断]"
         if tool_calls:
+            # ── 开工前强制思考：本轮首次要动工具、却没先说理解+计划 → 打回一次，先出计划再执行 ──
+            # 只在"要动手且没解释"时触发（模型自身输出信号，非用户输入长度）；控制信号
+            # (task_done/need_user) 不算动手、不拦；每轮最多一次（plan_forced 守卫，不死循环）。
+            # 副作用工具(write)非 eager、此刻尚未执行，丢弃 tool_calls 安全；被丢的只读 eager
+            # 结果下一轮由会话读缓存吸收（重跑近乎零成本）。
+            _ctrl_pre = _detect_control_signal(tool_calls)
+            if (force_plan and not plan_forced and _ctrl_pre is None
+                    and len((content or "").strip()) < _PLAN_MIN_CHARS):
+                plan_forced = True
+                if content and content.strip():
+                    ctx.log.append({"role": "assistant", "content": content})
+                ctx.log.append({
+                    "role": "system",
+                    "content": (
+                        "动手前先想一步（一两句即可）：(1) 你理解我要的是什么；"
+                        "(2) 打算怎么做——要动哪些工具/走哪几步。说完再执行。"
+                        "若需求可能有多种解读，先问我，别猜着动手。"
+                    ),
+                    "_force_plan": True,
+                })
+                if on_progress:
+                    on_progress()
+                continue
             # 解析→执行→stormBreaker→压缩→写 log 全部走 _handle_tool_results（单一实现）。
             # 此处曾内联同一套 ~130 行（与 helper 漂移出 content=None 等差异，违反 C9 DRY）——
             # 已删，改为调 helper。中途崩溃留下的光杆 tool_calls 由 send() 的
@@ -1982,6 +2079,10 @@ def run_conversation(
             ctrl = _detect_control_signal(tool_calls)
             if ctrl:
                 ctx.control_signal, ctx.control_payload = ctrl
+                if ctx.control_signal == "task_done":
+                    from .psyche_bridge import deactivate_scope
+
+                    deactivate_scope(ctx, "task")
                 if on_progress:
                     on_progress()
                 return content or ""
