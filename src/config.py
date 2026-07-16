@@ -48,6 +48,7 @@ TOOL_LOOP_THRESHOLD: float = CONTEXT.tool_loop_threshold
 MAX_CONTEXT_TOKENS: int = CONTEXT.max_context_tokens
 MAX_RETRIES: int = RUNTIME.max_retries
 RETRY_BASE_DELAY: float = RUNTIME.retry_base_delay
+LLM_TIMEOUT: float = RUNTIME.llm_timeout
 MAX_EXEC_TIMEOUT: int = RUNTIME.max_exec_timeout
 TOOL_RESULT_BUDGET: float = RUNTIME.tool_result_budget
 TOKEN_PER_CHAR_CJK: float = RUNTIME.token_per_char_cjk

@@ -126,6 +126,11 @@ class RuntimeParams:
     max_retries: int = _env_int("CTG_MAX_RETRIES", 3)
     # 重试退避基数（秒），实际延迟 = base * 2**(attempt-1)
     retry_base_delay: float = _env_float("CTG_RETRY_BASE_DELAY", 1.0)
+    # LLM 请求超时（秒）。给 OpenAI 客户端一个显式读超时——SDK 默认 600s，流式时若
+    # DeepSeek 连接中途卡住（无新 chunk），`for chunk in stream` 会阻塞在 socket 读上、
+    # 长达 10 分钟且期间 Esc 监听都插不进来（整个 UI 冻死）。显式超时把"卡死"转成
+    # APITimeoutError → 命中已有的 RETRYABLE 重试 → 再不行才干净报错。
+    llm_timeout: float = _env_float("CTG_LLM_TIMEOUT", 120.0)
     # run_python 代码执行超时（秒）
     max_exec_timeout: int = _env_int("CTG_MAX_EXEC_TIMEOUT", 5)
     # 单轮工具循环最大 API 请求数（成本熔断：失控循环唯一的钱闸）

@@ -303,8 +303,10 @@ class TestChatScreen:
 
         asyncio.run(go())
 
-    def test_busy_keeps_prompt_typeable_and_preserves_text(self, monkeypatch):
-        """跑动时输入框不禁用、busy 下回车不清空也不提交——修"按 Esc 后不能打字"。"""
+    def test_busy_enter_queues_next_message(self, monkeypatch):
+        """跑动时输入框不禁用；busy 下回车不再静默无反应，而是把这句排队、清空输入框
+        （本轮 done 后自动发）——修"回车没反应/没法排队"的别扭点，同时不丢正在编辑的文本。
+        """
         async def go():
             app = self._fresh_chat_app()
             async with app.run_test() as pilot:
@@ -316,8 +318,44 @@ class TestChatScreen:
                 p.focus()
                 await pilot.pause()
                 assert p.disabled is False, "跑动时输入框不应被禁用"
-                s.action_submit_prompt()             # busy 下回车
-                assert p.text == "正在编辑的下一句", "busy 下回车应保留正在编辑的文本"
+                s.action_submit_prompt()             # busy 下回车 → 排队
+                assert s._queued == "正在编辑的下一句", "busy 下回车应把消息排队"
+                assert p.text == "", "排队后输入框清空（内容已进队列、未丢）"
+
+        asyncio.run(go())
+
+    def test_interrupt_enter_empty_resumes_new_text_restarts(self, monkeypatch):
+        """中断态回车：空 = 续跑被打断的事；有新内容 = 当全新消息重开（退出中断态）。
+        修"提示说'输入新消息重开'、实际却把新消息塞回旧上下文当调整指示"的自相矛盾。
+        """
+        async def go():
+            app = self._fresh_chat_app()
+            async with app.run_test() as pilot:
+                await self._enter_chat(app, pilot)
+                s = app.screen
+                calls: list = []
+                monkeypatch.setattr(s, "_resume_after_interrupt",
+                                    lambda t: calls.append(("resume", t)))
+                monkeypatch.setattr(s, "_submit_text",
+                                    lambda t: calls.append(("submit", t)))
+                p = s.query_one("#prompt")
+                # 空回车 → 续跑
+                s._busy = False
+                s._interrupted = True
+                p.text = ""
+                p.focus()
+                await pilot.pause()
+                s.action_submit_prompt()
+                assert calls == [("resume", "")]
+                # 有新内容 → 退出中断态、当新消息发
+                calls.clear()
+                s._interrupted = True
+                p.text = "换个话题：解释下缓存"
+                p.focus()
+                await pilot.pause()
+                s.action_submit_prompt()
+                assert calls == [("submit", "换个话题：解释下缓存")]
+                assert s._interrupted is False, "有新内容应退出中断态"
 
         asyncio.run(go())
 

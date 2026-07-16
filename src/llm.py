@@ -17,13 +17,21 @@ from dataclasses import dataclass
 from pathlib import Path
 from types import SimpleNamespace
 
-from openai import APIConnectionError, APITimeoutError, InternalServerError, OpenAI, RateLimitError
+from openai import (
+    APIConnectionError,
+    APITimeoutError,
+    AuthenticationError,
+    InternalServerError,
+    OpenAI,
+    RateLimitError,
+)
 
 from .cache_context import CacheContext
 from .config import (
     DEEPSEEK_API_KEY,
     DEEPSEEK_BASE_URL,
     FLASH_MAX_TOKENS,
+    LLM_TIMEOUT,
     MAX_CONTEXT_TOKENS,
     MAX_RETRIES,
     MODEL_FLASH,
@@ -49,6 +57,25 @@ RETRYABLE = (
     APITimeoutError, RateLimitError, APIConnectionError, InternalServerError,
     OSError,
 )
+
+
+def humanize_llm_error(e: BaseException) -> str | None:
+    """把常见的外部失败翻成一句人话（给用户看）。认不出的返回 None → 调用方回退原始异常。
+
+    目的：网络/超时/限流/鉴权这类"外部出问题"不该甩用户一坨 Python traceback，
+    而应给一句能照做的提示。只覆盖能明确归因的类别，其余交回原路径（不掩盖真 bug）。
+    """
+    if isinstance(e, APITimeoutError):
+        return "⚠️ 模型响应超时（网络慢或服务端卡住）。已自动重试仍未成功——请稍后重试，或用 /retry 重发上一条。"
+    if isinstance(e, APIConnectionError):
+        return "⚠️ 连不上模型服务（DeepSeek）。请检查网络连接后重试；本轮现场已保存，可用 /retry 重发。"
+    if isinstance(e, RateLimitError):
+        return "⚠️ 触发模型限流（请求过于频繁或额度不足）。请稍等片刻再试。"
+    if isinstance(e, AuthenticationError):
+        return "⚠️ 模型鉴权失败：DEEPSEEK_API_KEY 可能无效或过期，请检查 .env 配置。"
+    if isinstance(e, InternalServerError):
+        return "⚠️ 模型服务端错误（5xx）。这通常是对方临时故障，请稍后重试。"
+    return None
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -160,6 +187,13 @@ class DeepSeekBackend(LLMBackend):
             self._client = OpenAI(
                 api_key=DEEPSEEK_API_KEY,
                 base_url=DEEPSEEK_BASE_URL,
+                # 显式读超时：流式时若连接卡住（无新 chunk），for chunk in stream 会阻塞
+                # 在 socket 读上、SDK 默认长达 600s，期间 Esc 都插不进来 → 整个 UI 冻死。
+                # 超时后 SDK 抛 APITimeoutError（已在 RETRYABLE 里）→ 自动重试 → 干净降级。
+                # SDK 自带的 2 次重试关掉（max_retries=0）：我们有自己的 MAX_RETRIES 循环
+                # （含流式→非流式降级），两层叠加会让单次卡顿被放大成 N×timeout 的等待。
+                timeout=LLM_TIMEOUT,
+                max_retries=0,
             )
         return self._client
 
@@ -821,7 +855,17 @@ def _collect_eager_results(
 ) -> None:
     """收集 eager 预执行工具的轮询结果，含 Tavily 自愈。"""
     for idx, fut, name, args in pending:
-        result = fut.result(timeout=30)
+        try:
+            result = fut.result(timeout=30)
+        except Exception as e:  # noqa: BLE001
+            # eager 工具卡住/抛错不能崩掉整轮：降级成错误结果交给模型，让它自己决定重试或换路。
+            # （_tracked_execute_tool 已吞了工具体内异常，这里主要兜 futures.TimeoutError。）
+            with lock:
+                pre_results[idx] = json.dumps(
+                    {"error": f"eager 工具 {name} 未在 30s 内返回或出错: {type(e).__name__}: {e}"},
+                    ensure_ascii=False,
+                )
+            continue
         if name == "search_web" and _is_quota_error(result):
             healed = _tavily_self_heal()
             if healed:
@@ -937,7 +981,12 @@ def _invoke_llm_eager(
                     fn = tc_data.get("function", {})
                     fut = submitted.get((fn.get("name"), fn.get("arguments")))
                     if fut is not None:
-                        pre_results[i] = fut.result(timeout=30)
+                        try:
+                            pre_results[i] = fut.result(timeout=30)
+                        except Exception as e:  # noqa: BLE001  复用的 orphan future 卡住/出错 →
+                            # 不崩整轮，留空让正常执行路径重新跑一次这个调用（副作用工具已由
+                            # submitted 表去重，不会真打两次）。
+                            logger.warning("复用 eager future 失败 (%s)，交回正常路径执行", e)
 
             if track_stats:
                 _update_cache_stats(model_key, messages, session_id)
@@ -2047,7 +2096,15 @@ def run_conversation(
             # 副作用工具(write)非 eager、此刻尚未执行，丢弃 tool_calls 安全；被丢的只读 eager
             # 结果下一轮由会话读缓存吸收（重跑近乎零成本）。
             _ctrl_pre = _detect_control_signal(tool_calls)
+            # 只在这批真要动"有副作用/不可逆"的手时才拦（写/跑命令/git…=非 PARALLEL_SAFE）。
+            # 纯读/检索/查看（全 SAFE）低风险且可逆，逼它们先写计划=对轻活也端着、显得啰嗦而慢——
+            # 用户实测的"不舒服"主因。原始意图"别改东西前不假思索"由此保留、只落在真动手的轮。
+            _touches_side_effect = any(
+                ((tc.get("function") or {}).get("name") or "") not in _PARALLEL_SAFE
+                for tc in tool_calls
+            )
             if (force_plan and not plan_forced and _ctrl_pre is None
+                    and _touches_side_effect
                     and len((content or "").strip()) < _PLAN_MIN_CHARS):
                 plan_forced = True
                 if content and content.strip():

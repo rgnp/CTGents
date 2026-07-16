@@ -207,6 +207,12 @@ def _banner_plain(text: str) -> str:
 
 
 # ── 纯函数辅助 ──
+def _shorten(text: str, limit: int) -> str:
+    """单行截断预览：折叠换行、超长加省略号。用于排队/回执类一行提示。"""
+    one_line = " ".join(text.split())
+    return one_line if len(one_line) <= limit else one_line[: limit - 1] + "…"
+
+
 def _fmt_tool(name: str, args: dict) -> tuple[str, str]:
     """工具调用 → (标签, 参数摘要)。每个工具只显示关键信息，不 dump 全部参数。
 
@@ -767,6 +773,7 @@ class ChatScreen(Screen):
         self._interrupt_pending = False
         self._interrupted = False
         self._hard_kill = False      # 二次 Esc 升级：pending 态再按 Esc → 强制终止，不等 LLM yield
+        self._queued: str | None = None  # 排队消息：agent 跑着时回车不再静默丢，存下来、本轮 done 后自动发
         self._pending_notices: list[str] = []
         self._history: list[str] = []
         self._history_idx: int = -1
@@ -1006,15 +1013,31 @@ class ChatScreen(Screen):
                 self._ac_accept()
                 return
         text = ta.text.strip()
-        # 中断态：回车 = 继续被打断的事（不管带不带指示都算"继续"，统一走 resume）。
-        # 带指示 → 接着做并按指示调整；不带 → 纯暂停再续。两者都不开新话题、不读任务状态。
+        # 中断态回车：空 = 继续被打断的事（纯 resume）；有新内容 = 当新消息重开（不再把
+        # 你打的话硬塞回旧上下文当"调整指示"——那是之前"提示说重开、实际接着续"的自相矛盾，
+        # 也是实测的别扭点）。想在旧的基础上微调，就明说"接着刚才的继续，但…"。
         if self._interrupted and not self._busy:
-            ta.clear()
-            self._resume_after_interrupt(text)
+            if not text:
+                ta.clear()
+                self._resume_after_interrupt("")   # 空回车 = 纯续跑被打断的事
+                return
+            self._exit_interrupted()               # 有新内容 = 退出中断态，落到下面当全新消息发
+        elif self._busy:
+            # agent 还在跑：回车不再静默无反应，把这句排队、本轮结束后自动发（像 Claude Code）。
+            # 空回车不排队；重复排队则覆盖为最新一句。按 Esc 截停会把排队内容退回输入框、不丢。
+            if text:
+                self._queued = text
+                ta.clear()
+                self._mount(f"⏳ 已排队，本轮结束后自动发送：{_shorten(text, 60)}", "meta")
             return
-        if self._busy:
-            return  # agent 还在跑：保留正在编辑的内容、不清空也不提交（按 Esc 截停后再发）
         ta.clear()
+        self._submit_text(text)
+
+    def _submit_text(self, text: str) -> None:
+        """把一条已确定的文本当作新的一轮用户消息发出。
+
+        正常回车、以及"排队消息在本轮 done 后自动发"都走这里——单一实现，避免两处漂移。
+        """
         if not text:
             return
         self._history.append(text)
@@ -1035,6 +1058,17 @@ class ChatScreen(Screen):
                             + "\n\n【用户消息】\n" + expanded)
                 self._pending_notices.clear()
             self._run_turn(expanded)
+
+    def _restore_queued_to_input(self, text: str) -> None:
+        """本轮被打断/终止时，把排队消息退回输入框（不自动发、也不丢），由用户决定。"""
+        try:
+            ta = self.query_one("#prompt", TextArea)
+        except Exception:
+            return
+        if ta.text.strip():
+            return  # 用户已经在打新内容了，别覆盖
+        ta.text = text
+        self._mount(f"↩ 排队消息已退回输入框（本轮被打断，未自动发送）：{_shorten(text, 60)}", "meta")
 
     # ── 指令 ──
     def _handle_command(self, text: str) -> None:
@@ -1191,7 +1225,9 @@ class ChatScreen(Screen):
                 self.app.ctx, text, self.app.session_id, display=disp)
             self.app.final_session_id = self.app.session_id
         except Exception as e:  # noqa: BLE001
-            ev.append(("error", f"{type(e).__name__}: {e}"))
+            from .llm import humanize_llm_error
+            friendly = humanize_llm_error(e)
+            ev.append(("error", friendly if friendly else f"{type(e).__name__}: {e}"))
         finally:
             ev.append(("done",))
 
@@ -1269,6 +1305,8 @@ class ChatScreen(Screen):
                     self._reset_tool_calls()
                     self._agent_header_mounted = False
                     self._busy = False
+                    # 本轮是被打断/终止收尾、还是自然收尾——决定排队消息是自动发还是退回输入框。
+                    _stopped = self._hard_kill or self._interrupt_pending
                     # 轮次分隔（真·全宽细线，随终端宽度自适应 + 淡入动效）
                     if self._turn_count > 0:
                         try:
@@ -1289,6 +1327,13 @@ class ChatScreen(Screen):
                         self._status_cache = (None, "")
                     elif self._interrupt_pending:
                         self._enter_interrupted()
+                    # 排队消息：本轮自然收尾 → 自动发出；被打断/终止 → 退回输入框，不丢也不偷偷发。
+                    if self._queued is not None:
+                        q, self._queued = self._queued, None
+                        if _stopped:
+                            self._restore_queued_to_input(q)
+                        else:
+                            self._submit_text(q)
                 changed = True
         if self._reasoning_dirty:
             await self._flush_reasoning(transcript)
@@ -1633,7 +1678,8 @@ class ChatScreen(Screen):
                     elapsed = time.monotonic() - self._turn_started
                     tool_info = f"  │  {self._current_tool}" if self._current_tool else ""
                     tool_count = f"  🛠×{len(self._pending_tool_labels)}" if self._pending_tool_labels else ""
-                    line = f"[yellow]{dot}[/]  思考中 {elapsed:.0f}s{tool_count}{tool_info}  │  {line}"
+                    queued = "  ⏳已排队1条" if self._queued else ""
+                    line = f"[yellow]{dot}[/]  思考中 {elapsed:.0f}s{tool_count}{tool_info}{queued}  │  {line}"
                 status.remove_class("interrupted")
             elif self._interrupted:
                 line = f"[red]●[/]  ⏸ 已中断  │  Enter 继续 · Esc 终止  │  {line}"

@@ -354,7 +354,15 @@ def _on_tool(name: str, args: dict) -> None:
 
 
 def _render_turn_error(e: BaseException) -> tuple[list[str], bool]:
-    """分类一轮对话的残余异常。"""
+    """分类一轮对话的残余异常。
+
+    能归因的外部失败（网络/超时/限流/鉴权）→ 给一句人话提示，不甩 traceback；
+    其余未知异常仍打印精简调用栈（那是真 bug、需要栈定位）。会话都不中断。
+    """
+    from .llm import humanize_llm_error
+    friendly = humanize_llm_error(e)
+    if friendly is not None:
+        return [f"\n{friendly}\n"], False
     if isinstance(e, Exception):
         lines = [f"\n💥 错误: {type(e).__name__}: {e}"]
         lines += [f"   {ln.strip()}" for ln in traceback.format_exception(type(e), e, e.__traceback__)[-5:]]
@@ -616,7 +624,11 @@ def _run_line_repl(ctx: CacheContext, session_id: str | None) -> str | None:
                 print(msg)
                 continue
 
-            r = dispatch_cmd(user_input, ctx, session_id)
+            try:
+                r = dispatch_cmd(user_input, ctx, session_id)
+            except Exception as e:  # noqa: BLE001  指令内部出错不该崩掉整个 REPL（与 TUI 一致）
+                print(f"⚠️ 指令出错: {type(e).__name__}: {e}")
+                continue
             if r.message:
                 print(r.message)
             if r.save:
