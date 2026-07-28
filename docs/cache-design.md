@@ -71,11 +71,11 @@ messages.insert(1, _make_project_context()) # 同样破坏缓存
 
 | 任务 | 说明 | 状态 |
 |------|------|:----:|
-| `_compact_cache_context()` | 保留最近轮次，压缩历史到摘要（支持话题切换检测） | ✅ |
-| 话题切换压缩 | 检测到换话题时追加边界标记，历史日志完整保留 | ✅ |
-| 附录优化 | 采用 append-only 策略：不删旧消息，仅末尾追加摘要 | ✅ |
+| `_compact_cache_context()` | live token 超出舒适区上界时，保留最近轮次并把旧消息替换为摘要 | ✅ |
+| Owner 感知保留 | 原样抢救仍 active 的 psyche/skill 激活消息；已停用 owner 可以随旧历史驱逐 | ✅ |
+| 防抖与重武装 | 连续低效压缩暂停重试，上下文继续显著增长后自动重新武装 | ✅ |
 | 接入对话循环 | 在 `run_conversation` 中调用 | ✅ |
-| 测试 | 单元测试覆盖边界/类型/白名单 | ✅ |
+| 测试 | 单元测试覆盖阈值、驱逐边界、active owner 抢救和 inactive owner 淘汰 | ✅ |
 
 **实现位置**：`src/llm.py` — `_compact_context()` / `_compact_cache_context()`
 
@@ -127,7 +127,7 @@ messages.insert(1, _make_project_context()) # 同样破坏缓存
 |------|--------|---------|
 | 消息结构 | `insert(0, ...)` 破坏前缀 | 三段式 `CacheContext`，prefix 固定不变 |
 | 前缀缓存 | 100% 失效 | prefix 哈希校验，缓存候选 |
-| 历史压缩 | 无 | 话题切换时自动摘要压缩 |
+| 历史压缩 | 无 | live token 超舒适区后滑窗摘要；保留仍 active 的 psyche/skill |
 | Phase 4 并行/去重 | — | 待实现 |
 
 > ⚠️ **注意**：当前仅完成了架构改造（Phase 3）和基础压缩（Phase 1），实际的缓存命中效果取决于 DeepSeek 服务端对 prefix 的缓存策略。后续可通过对比 `send()` 返回的 token 用量数据来量化验证。
