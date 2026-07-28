@@ -1,5 +1,7 @@
 """配置中心：密钥/模型/路径。可调行为旋钮见 params.py（按域分组）。"""
 
+from __future__ import annotations
+
 import os
 from pathlib import Path
 
@@ -8,6 +10,9 @@ from tavily import InvalidAPIKeyError, TavilyClient, UsageLimitExceededError
 from tavily.errors import ForbiddenError
 
 from .params import CONTEXT, RUNTIME
+from .paths import MEMORY_DIR as _MEMORY_DIR
+from .paths import SESSIONS_DIR as _SESSIONS_DIR
+from .paths import TASKS_DIR as _TASKS_DIR
 
 load_dotenv(Path(__file__).parent.parent / ".env")
 
@@ -48,16 +53,17 @@ TOOL_LOOP_THRESHOLD: float = CONTEXT.tool_loop_threshold
 MAX_CONTEXT_TOKENS: int = CONTEXT.max_context_tokens
 MAX_RETRIES: int = RUNTIME.max_retries
 RETRY_BASE_DELAY: float = RUNTIME.retry_base_delay
+LLM_TIMEOUT: float = RUNTIME.llm_timeout
 MAX_EXEC_TIMEOUT: int = RUNTIME.max_exec_timeout
 TOOL_RESULT_BUDGET: float = RUNTIME.tool_result_budget
 TOKEN_PER_CHAR_CJK: float = RUNTIME.token_per_char_cjk
 TOKEN_PER_CHAR_OTHER: float = RUNTIME.token_per_char_other
 
 # -- 路径 --
-SESSION_DIR: str = str(Path(__file__).parent.parent / "sessions")
-MEMORY_DIR: str = str(Path(__file__).parent.parent / "memory")
+SESSION_DIR: str = str(_SESSIONS_DIR)
+MEMORY_DIR: str = str(_MEMORY_DIR)
 # 任务归档:架构教训多写在这里。recall 也索引它，否则它对检索是"只写不读的坟场"。
-ARCHIVE_DIR: str = str(Path(__file__).parent.parent / "tasks" / "archive")
+ARCHIVE_DIR: str = str(_TASKS_DIR / "archive")
 
 
 class MultiKeyTavilyClient:

@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import atexit
 import contextlib
 import os
@@ -30,10 +32,14 @@ SHELL_META_CHARS = frozenset("&|;<>\n\r")
 
 # ── 异步 Job 管理 ──
 
-_JOB_TTL_SECONDS = 600
+_JOB_TTL_SECONDS = RUNTIME.job_ttl_seconds
 _JOB_MAX_COUNT = 50
+_JOB_LOG_DIR = Path(os.environ.get("CTG_JOB_LOG_DIR", "/tmp/ctg-jobs"))
 _jobs: dict[str, dict] = {}
 _jobs_lock = threading.Lock()
+
+with contextlib.suppress(OSError):
+    _JOB_LOG_DIR.mkdir(parents=True, exist_ok=True)
 
 
 def _kill_job(job: dict | None) -> None:
@@ -44,6 +50,7 @@ def _kill_job(job: dict | None) -> None:
     """
     if not job:
         return
+    _close_job_log(job)
     proc = job.get("proc")
     if proc is not None and proc.poll() is None:  # 仍在运行
         with contextlib.suppress(OSError):
@@ -78,6 +85,37 @@ def _kill_all_jobs() -> None:
 atexit.register(_kill_all_jobs)
 
 
+def _read_log_tail(log_path: str, n_lines: int = 20) -> str:
+    try:
+        with open(log_path, encoding="utf-8", errors="replace") as f:
+            lines = f.readlines()
+            return "".join(lines[-n_lines:]).rstrip() or "(日志为空)"
+    except FileNotFoundError:
+        return "(日志文件尚未创建)"
+    except OSError:
+        return "(无法读取日志)"
+
+
+def _close_job_log(job: dict) -> None:
+    """关闭 job 的日志文件句柄。"""
+    fh = job.pop("log_fh", None)
+    if fh is not None:
+        with contextlib.suppress(OSError):
+            fh.close()
+
+
+def _verification_fingerprint(command: str) -> str:
+    """验证命令启动时冻结工作区；普通命令不承担此成本。"""
+    try:
+        from ..verification_receipts import is_verification_command, workspace_fingerprint
+
+        if is_verification_command(command):
+            return workspace_fingerprint()
+    except Exception:
+        pass
+    return ""
+
+
 def _start_job(command: str, timeout: int, workdir: str | None) -> str:
     cwd = Path(workdir).expanduser().resolve() if workdir else Path.cwd()
     if not cwd.exists() or not cwd.is_dir():
@@ -85,11 +123,14 @@ def _start_job(command: str, timeout: int, workdir: str | None) -> str:
     cmd_parts = _split_command(command)
     if isinstance(cmd_parts, str):
         raise ValueError(cmd_parts)
+    verification_fingerprint = _verification_fingerprint(command)
     job_id = f"job-{uuid.uuid4().hex[:8]}"
+    log_path = _JOB_LOG_DIR / f"{job_id}.log"
+    log_fh = open(log_path, "w")  # noqa: SIM115 — 句柄跨函数存活，由 _close_job_log 统一关闭
     proc = subprocess.Popen(
         cmd_parts,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
+        stdout=log_fh,
+        stderr=subprocess.STDOUT,
         cwd=cwd,
     )
     _job_cleanup()
@@ -100,8 +141,56 @@ def _start_job(command: str, timeout: int, workdir: str | None) -> str:
             "timeout": timeout,
             "workdir": str(cwd),
             "created_at": time.time(),
+            "log_path": str(log_path),
+            "log_fh": log_fh,
+            "verification_fingerprint": verification_fingerprint,
         }
     return job_id
+
+
+def _claim_finished_job(job_id: str, job: dict) -> bool:
+    """Poll 与自动收割竞争时，只允许一个调用者完成并写回执。"""
+    with _jobs_lock:
+        if _jobs.get(job_id) is not job or job["proc"].poll() is None:
+            return False
+        _jobs.pop(job_id)
+        return True
+
+
+def _collect_finished_job(job_id: str, job: dict) -> tuple[int, float, str, str] | None:
+    if not _claim_finished_job(job_id, job):
+        return None
+    elapsed = time.time() - job["created_at"]
+    _close_job_log(job)
+    drain_thread = job.pop("drain_thread", None)
+    if drain_thread is not None:
+        drain_thread.join(timeout=5)
+    rc = job["proc"].returncode
+    log_path = job.get("log_path", "")
+    tail = _read_log_tail(log_path, n_lines=200) if log_path else "(无输出)"
+    return rc, elapsed, _truncate_output(tail), log_path
+
+
+def _record_async_verification(job: dict, exit_code: int, output: str) -> str:
+    fingerprint = job.get("verification_fingerprint", "")
+    if not fingerprint:
+        return ""
+    try:
+        from ..verification_receipts import record_verification
+
+        receipt = record_verification(
+            job["command"],
+            job["workdir"],
+            exit_code,
+            output,
+            expected_fingerprint=fingerprint,
+        )
+    except Exception:
+        return "\n验证回执: 未记录（回执写入失败）"
+    if receipt is None:
+        return "\n验证回执: 未记录（后台执行期间工作区变化或写入失败）"
+    result = "通过" if receipt.passed else "失败证据"
+    return f"\n验证回执: 已记录（{result}）"
 
 
 def _poll_job(job_id: str) -> str:
@@ -114,10 +203,12 @@ def _poll_job(job_id: str) -> str:
     proc: subprocess.Popen = job["proc"]
     timeout = job["timeout"]
     elapsed = time.time() - job["created_at"]
+    log_path = job.get("log_path", "")
 
     def _expire() -> str:
         with contextlib.suppress(OSError):
             proc.kill()
+        _close_job_log(job)
         with _jobs_lock:
             _jobs.pop(job_id, None)
         return f"⏱️ job {job_id} 超时（>{timeout}s）: {job['command']}"
@@ -125,43 +216,41 @@ def _poll_job(job_id: str) -> str:
     if elapsed > timeout:
         return _expire()
 
-    # long-poll：内部阻塞等到作业完成或等够预算才返回，避免 agent ~1s 一次忙等长任务
-    # （每次 poll = 一整个 LLM 往返）。等待不超过作业剩余超时；锁已释放，长阻塞不占锁。
-    wait = min(RUNTIME.poll_wait_seconds, max(timeout - elapsed, 0))
-    try:
-        proc.wait(timeout=wait)
-    except subprocess.TimeoutExpired:
-        elapsed = time.time() - job["created_at"]
-        if elapsed > timeout:
-            return _expire()
-        return f"🔄 job {job_id}: 仍在运行（{elapsed:.0f}s / {timeout}s）: {job['command']}"
+    if proc.poll() is None:
+        # bounded long-poll：显式 poll 时在工具内部等一小段，避免 agent 每秒发起
+        # 一整个 LLM 往返；TUI 的 drain_finished_jobs 仍保持完全非阻塞。
+        wait = min(RUNTIME.poll_wait_seconds, max(timeout - elapsed, 0))
+        try:
+            proc.wait(timeout=wait)
+        except subprocess.TimeoutExpired:
+            elapsed = time.time() - job["created_at"]
+            if elapsed > timeout:
+                return _expire()
+            tail = _read_log_tail(log_path) if log_path else ""
+            info = f"🔄 job {job_id}: 仍在运行（{elapsed:.0f}s / {timeout}s）: {job['command']}"
+            if tail:
+                info += f"\n\n--- 最后 20 行 ---\n{tail}"
+            return info
 
-    stdout_bytes, stderr_bytes = proc.communicate()
-    stdout = stdout_bytes.decode("utf-8", errors="replace") if stdout_bytes else ""
-    stderr = stderr_bytes.decode("utf-8", errors="replace") if stderr_bytes else ""
-    rc = proc.returncode
-
-    parts: list[str] = []
-    if stdout.strip():
-        parts.append(stdout.rstrip())
-    if stderr.strip():
-        parts.append(f"[stderr]\n{stderr.rstrip()}")
-    output = "\n".join(parts) if parts else "(无输出)"
+    # 进程已结束；与自动收割竞争时仅一个调用者拥有最终化权。
+    completion = _collect_finished_job(job_id, job)
+    if completion is None:
+        return f"job {job_id} 已由另一完成事件收割"
+    rc, elapsed, output, _ = completion
+    receipt_note = _record_async_verification(job, rc, output)
 
     prefix = f"✅ job {job_id}: 完成（exit={rc}, {elapsed:.0f}s）: {job['command']}\n"
     if rc != 0:
         prefix = f"❌ job {job_id}: 完成（exit={rc}, {elapsed:.0f}s）: {job['command']}\n"
 
-    with _jobs_lock:
-        _jobs.pop(job_id, None)
-    return prefix + _truncate_output(output)
+    return prefix + output + receipt_note
 
 
 # ── 工具定义 ──
 
 TOOLS_EXEC = [
     {
-        "_meta": {"label": "执行代码", "dedup_blacklist": True},
+        "_meta": {"group": "core", "label": "执行代码", "dedup_blacklist": True},
         "type": "function",
         "function": {
             "name": "run_python",
@@ -179,7 +268,7 @@ TOOLS_EXEC = [
         },
     },
     {
-        "_meta": {"label": "执行命令", "dedup_blacklist": True},
+        "_meta": {"group": "core", "label": "执行命令", "dedup_blacklist": True},
         "type": "function",
         "function": {
             "name": "run_command",
@@ -205,7 +294,7 @@ TOOLS_EXEC = [
         },
     },
     {
-        "_meta": {"label": "异步执行", "dedup_blacklist": True},
+        "_meta": {"group": "core", "label": "异步执行", "dedup_blacklist": True},
         "type": "function",
         "function": {
             "name": "run_async",
@@ -234,7 +323,7 @@ TOOLS_EXEC = [
         },
     },
     {
-        "_meta": {"label": "轮询异步任务", "parallel_safe": True, "no_dedup": True},
+        "_meta": {"group": "core", "label": "轮询异步任务", "parallel_safe": True, "no_dedup": True},
         "type": "function",
         "function": {
             "name": "poll",
@@ -422,29 +511,75 @@ def run_command(command: str, timeout: int = 30, workdir: str | None = None) -> 
         timeout = max(timeout, RUNTIME.git_commit_timeout_floor)
     if _is_test_command(cmd_parts):
         timeout = max(timeout, RUNTIME.test_timeout_floor)
+    verification_fingerprint = _verification_fingerprint(command)
 
     try:
-        result = subprocess.run(
+        proc = subprocess.Popen(
             cmd_parts,
-            capture_output=True,
-            encoding="utf-8",
-            errors="replace",
-            timeout=timeout,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
             cwd=cwd,
         )
+        stdout_bytes, stderr_bytes = proc.communicate(timeout=timeout)
     except subprocess.TimeoutExpired:
-        return f"命令执行超时（{timeout} 秒）: {command}"
+        # 令超时进程无缝转入后台 async job 系统，不杀进程
+        _job_cleanup()
+        job_id = f"job-{uuid.uuid4().hex[:8]}"
+        log_path = _JOB_LOG_DIR / f"{job_id}.log"
+
+        # 将 proc 的 PIPE 输出 drain 到日志文件（后台线程），方便 tail -f
+        def _drain_to_log() -> None:
+            with open(log_path, "ab") as lf:
+                out, err = proc.communicate()
+                if out:
+                    lf.write(out)
+                if err:
+                    lf.write(b"\n[stderr]\n")
+                    lf.write(err)
+
+        drain_thread = threading.Thread(target=_drain_to_log, daemon=True)
+        drain_thread.start()
+
+        with _jobs_lock:
+            _jobs[job_id] = {
+                "proc": proc,
+                "command": command,
+                "timeout": timeout,
+                "workdir": str(cwd),
+                "created_at": time.time(),
+                "log_path": str(log_path),
+                "drain_thread": drain_thread,
+                "verification_fingerprint": verification_fingerprint,
+            }
+        return (
+            f"⏳ 命令在前台 {timeout}s 内未完成，已转后台: job {job_id}\n"
+            f"命令: {command}\n"
+            f"监控: tail -f {log_path}\n"
+            f"完成后自动通知，去干别的事。"
+        )
     except OSError as e:
         return f"执行失败: {e}"
 
+    stdout = stdout_bytes.decode("utf-8", errors="replace")
+    stderr = stderr_bytes.decode("utf-8", errors="replace")
     parts: list[str] = []
-    if result.stdout.strip():
-        parts.append(result.stdout.rstrip())
-    if result.stderr.strip():
-        parts.append(f"[stderr]\n{result.stderr.rstrip()}")
+    if stdout.strip():
+        parts.append(stdout.rstrip())
+    if stderr.strip():
+        parts.append(f"[stderr]\n{stderr.rstrip()}")
     output = "\n".join(parts) if parts else "(无输出)"
-    if result.returncode != 0:
-        output = f"退出码: {result.returncode}\n\n" + output
+    if proc.returncode != 0:
+        output = f"退出码: {proc.returncode}\n\n" + output
+    with contextlib.suppress(Exception):
+        from ..verification_receipts import record_verification
+
+        record_verification(
+            command,
+            cwd,
+            proc.returncode,
+            output,
+            expected_fingerprint=verification_fingerprint or None,
+        )
     return _truncate_output(output)
 
 
@@ -467,9 +602,11 @@ def run_async(command: str, timeout: int = 120, workdir: str | None = None) -> s
         job_id = _start_job(command, timeout, workdir)
     except ValueError as e:
         return str(e)
+    log_path = _JOB_LOG_DIR / f"{job_id}.log"
     return (
-        f"🚀 已后台启动 job {job_id}: {command}（超时 {timeout}s）。"
-        f"完成后会自动通知你——不要 poll 轮询，本轮可直接结束或去做别的事。"
+        f"🚀 已后台启动 job {job_id}（超时 {timeout}s）: {command}\n"
+        f"监控: tail -f {log_path}\n"
+        f"完成后自动通知，去干别的事。"
     )
 
 
@@ -486,7 +623,7 @@ def running_job_count() -> int:
 def drain_finished_jobs() -> list[str]:
     """收割所有已结束的后台作业，返回完成通知（每条一段）。
 
-    非阻塞：只 communicate 已结束的进程，未结束的留着下次收。REPL 在回合间调用
+    非阻塞：只处理已结束的进程，未结束的留着下次收。REPL 在回合间调用
     → 「派发即停 + 完成自动通知」模型，取代 agent 反复 poll 忙等（那是刷屏 + 把
     216s 的活 babysit 成 10 分钟体感的根，见 [[ctgents-test-gate-speed]]）。
     """
@@ -497,26 +634,16 @@ def drain_finished_jobs() -> list[str]:
         proc = job["proc"]
         if proc.poll() is None:
             continue  # 仍在运行，下次再收
-        elapsed = time.time() - job["created_at"]
-        try:
-            stdout_bytes, stderr_bytes = proc.communicate(timeout=5)
-        except Exception:
+        completion = _collect_finished_job(job_id, job)
+        if completion is None:
             continue
-        with _jobs_lock:
-            _jobs.pop(job_id, None)
-        stdout = stdout_bytes.decode("utf-8", errors="replace") if stdout_bytes else ""
-        stderr = stderr_bytes.decode("utf-8", errors="replace") if stderr_bytes else ""
-        rc = proc.returncode
-        parts: list[str] = []
-        if stdout.strip():
-            parts.append(stdout.rstrip())
-        if stderr.strip():
-            parts.append(f"[stderr]\n{stderr.rstrip()}")
-        output = "\n".join(parts) if parts else "(无输出)"
+        rc, elapsed, output, log_path = completion
+        receipt_note = _record_async_verification(job, rc, output)
         mark = "✅" if rc == 0 else "❌"
+        log_hint = f"\n日志: {log_path}" if log_path else ""
         notices.append(
-            f"{mark} 后台 job {job_id} 完成（exit={rc}, {elapsed:.0f}s）: {job['command']}\n"
-            + _truncate_output(output)
+            f"{mark} 后台 job {job_id} 完成（exit={rc}, {elapsed:.0f}s）: {job['command']}"
+            + log_hint + "\n" + output + receipt_note
         )
     return notices
 

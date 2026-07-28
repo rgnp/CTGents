@@ -1,5 +1,7 @@
 """LLM 后端抽象：多模型支持、自动路由、流式调用。"""
 
+from __future__ import annotations
+
 import contextlib
 import hashlib
 import json
@@ -15,13 +17,21 @@ from dataclasses import dataclass
 from pathlib import Path
 from types import SimpleNamespace
 
-from openai import APIConnectionError, APITimeoutError, InternalServerError, OpenAI, RateLimitError
+from openai import (
+    APIConnectionError,
+    APITimeoutError,
+    AuthenticationError,
+    InternalServerError,
+    OpenAI,
+    RateLimitError,
+)
 
 from .cache_context import CacheContext
 from .config import (
     DEEPSEEK_API_KEY,
     DEEPSEEK_BASE_URL,
     FLASH_MAX_TOKENS,
+    LLM_TIMEOUT,
     MAX_CONTEXT_TOKENS,
     MAX_RETRIES,
     MODEL_FLASH,
@@ -31,6 +41,7 @@ from .config import (
     TOOL_LOOP_THRESHOLD,
 )
 from .params import CONTEXT, RUNTIME
+from .paths import STATS_DIR as _STATS_DIR
 from .tools import execute_tool, get_tools
 
 # 工具显示标签（安全确认 + 终端回显共用）
@@ -47,6 +58,25 @@ RETRYABLE = (
     APITimeoutError, RateLimitError, APIConnectionError, InternalServerError,
     OSError,
 )
+
+
+def humanize_llm_error(e: BaseException) -> str | None:
+    """把常见的外部失败翻成一句人话（给用户看）。认不出的返回 None → 调用方回退原始异常。
+
+    目的：网络/超时/限流/鉴权这类"外部出问题"不该甩用户一坨 Python traceback，
+    而应给一句能照做的提示。只覆盖能明确归因的类别，其余交回原路径（不掩盖真 bug）。
+    """
+    if isinstance(e, APITimeoutError):
+        return "⚠️ 模型响应超时（网络慢或服务端卡住）。已自动重试仍未成功——请稍后重试，或用 /retry 重发上一条。"
+    if isinstance(e, APIConnectionError):
+        return "⚠️ 连不上模型服务（DeepSeek）。请检查网络连接后重试；本轮现场已保存，可用 /retry 重发。"
+    if isinstance(e, RateLimitError):
+        return "⚠️ 触发模型限流（请求过于频繁或额度不足）。请稍等片刻再试。"
+    if isinstance(e, AuthenticationError):
+        return "⚠️ 模型鉴权失败：DEEPSEEK_API_KEY 可能无效或过期，请检查 .env 配置。"
+    if isinstance(e, InternalServerError):
+        return "⚠️ 模型服务端错误（5xx）。这通常是对方临时故障，请稍后重试。"
+    return None
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -158,6 +188,13 @@ class DeepSeekBackend(LLMBackend):
             self._client = OpenAI(
                 api_key=DEEPSEEK_API_KEY,
                 base_url=DEEPSEEK_BASE_URL,
+                # 显式读超时：流式时若连接卡住（无新 chunk），for chunk in stream 会阻塞
+                # 在 socket 读上、SDK 默认长达 600s，期间 Esc 都插不进来 → 整个 UI 冻死。
+                # 超时后 SDK 抛 APITimeoutError（已在 RETRYABLE 里）→ 自动重试 → 干净降级。
+                # SDK 自带的 2 次重试关掉（max_retries=0）：我们有自己的 MAX_RETRIES 循环
+                # （含流式→非流式降级），两层叠加会让单次卡顿被放大成 N×timeout 的等待。
+                timeout=LLM_TIMEOUT,
+                max_retries=0,
             )
         return self._client
 
@@ -419,8 +456,7 @@ def auto_select_model(user_input: str) -> LLMBackend:
 
 
 
-# 统计持久化目录：agent/stats/{session_id}.json
-_STATS_DIR = Path(__file__).resolve().parent.parent / "stats"
+# 统计持久化目录：个人 workspace/stats/{session_id}.json
 
 # 取证开关：CTG_DUMP_PAYLOADS=1 时把每次真实发给 API 的 canonical_request（完整请求字段：
 # model/messages/tools/max_tokens/stream/stream_options/extra_body）+ usage + system_fingerprint
@@ -813,13 +849,23 @@ def _invoke_llm(
 
 
 def _collect_eager_results(
-    pending: list[tuple[int, "Future[str]", str, dict]],
+    pending: list[tuple[int, Future[str], str, dict]],
     pre_results: dict[int, str],
     lock: threading.Lock,
 ) -> None:
     """收集 eager 预执行工具的轮询结果，含 Tavily 自愈。"""
     for idx, fut, name, args in pending:
-        result = fut.result(timeout=30)
+        try:
+            result = fut.result(timeout=30)
+        except Exception as e:  # noqa: BLE001
+            # eager 工具卡住/抛错不能崩掉整轮：降级成错误结果交给模型，让它自己决定重试或换路。
+            # （_tracked_execute_tool 已吞了工具体内异常，这里主要兜 futures.TimeoutError。）
+            with lock:
+                pre_results[idx] = json.dumps(
+                    {"error": f"eager 工具 {name} 未在 30s 内返回或出错: {type(e).__name__}: {e}"},
+                    ensure_ascii=False,
+                )
+            continue
         if name == "search_web" and _is_quota_error(result):
             healed = _tavily_self_heal()
             if healed:
@@ -830,7 +876,7 @@ def _collect_eager_results(
 
 
 def _try_llm_call(
-    backend: "LLMBackend",
+    backend: LLMBackend,
     messages: list[dict],
     on_token: TokenCallback,
     tools: list[dict] | None,
@@ -878,24 +924,43 @@ def _invoke_llm_eager(
 
     pre_results: dict[int, str] = {}
     pending: list[tuple[int, Future[str], str, dict]] = []
+    # 跨重试持久（不在 except 分支清空）：流式中途失败会重试，若模型对同一个 (name, args)
+    # 重新吐出 tool_calls，靠这张表复用上次已经真实提交的 future，不重复调用副作用工具
+    # （之前 pending/submit 每次重试都清空重来，orphaned future 仍在后台跑、结果被静默丢弃，
+    # 随后正常执行路径又把同一个调用再打一次——外部 API 被打两次）。
+    submitted: dict[tuple[str, str], Future[str]] = {}
+    ready_tools: dict[int, str] = {}
     lock = threading.Lock()
     executor = _get_eager_executor()
 
     def on_tool_ready(idx: int, name: str, args_json: str) -> None:
-        """流式线程回调：参数完整 → 若是 SAFE 工具，立即提交执行。"""
+        """流式线程回调：只 eager 执行从索引 0 开始的连续 SAFE 前缀。
+
+        后续 SAFE 工具不能跨过前面的写/串行工具，否则 `[write(A), read(A)]` 会在
+        流式阶段先读到旧内容。若前序调用尚未完整解析，也保守留到正式 batch 执行。
+        """
+        ready_tools[idx] = name
         # poll 是阻塞的时变读：预跑它占线程 + 刷屏、且省不了延迟（后台作业已改为完成
         # 自动通知、不靠 poll）。其余 parallel-safe 读照常 eager。
         if name not in _PARALLEL_SAFE or name == "poll":
+            return
+        if any(i not in ready_tools for i in range(idx)):
+            return
+        if any(ready_tools[i] not in _PARALLEL_SAFE or ready_tools[i] == "poll" for i in range(idx)):
             return
         try:
             args = json.loads(args_json)
         except json.JSONDecodeError:
             return
-        tc = SimpleNamespace(function=SimpleNamespace(name=name, arguments=args_json))
-        fut = executor.submit(_tracked_execute_tool, tc)
+        key = (name, args_json)
         with lock:
+            fut = submitted.get(key)
+            if fut is None:
+                tc = SimpleNamespace(function=SimpleNamespace(name=name, arguments=args_json))
+                fut = executor.submit(_tracked_execute_tool, tc)
+                submitted[key] = fut
+                print(f"  ⚡ [Eager] {name}({args_json[:60]}...) 已提交（流未结束）")
             pending.append((idx, fut, name, args))
-        print(f"  ⚡ [Eager] {name}({args_json[:60]}...) 已提交（流未结束）")
 
     for attempt in range(1, MAX_RETRIES + 1):
         try:
@@ -906,6 +971,22 @@ def _invoke_llm_eager(
 
             # ── 收集 eager 结果 ──
             _collect_eager_results(pending, pre_results, lock)
+
+            # 重试后最终拿到的 tool_calls（可能来自非流式降级，不再走 on_tool_ready）里，
+            # 若某条命中此前已提交的 orphaned future，复用其结果，不留给正常执行路径重打一次。
+            if tool_calls:
+                for i, tc_data in enumerate(tool_calls):
+                    if i in pre_results:
+                        continue
+                    fn = tc_data.get("function", {})
+                    fut = submitted.get((fn.get("name"), fn.get("arguments")))
+                    if fut is not None:
+                        try:
+                            pre_results[i] = fut.result(timeout=30)
+                        except Exception as e:  # noqa: BLE001  复用的 orphan future 卡住/出错 →
+                            # 不崩整轮，留空让正常执行路径重新跑一次这个调用（副作用工具已由
+                            # submitted 表去重，不会真打两次）。
+                            logger.warning("复用 eager future 失败 (%s)，交回正常路径执行", e)
 
             if track_stats:
                 _update_cache_stats(model_key, messages, session_id)
@@ -941,6 +1022,13 @@ _TOOL_RESULT_COMPRESS_THRESHOLD = RUNTIME.tool_result_compress_threshold
 _COMPRESS_MIN_OMITTED = 120
 # 单轮请求数熔断——真值在 params.RUNTIME
 _MAX_REQUESTS_PER_TURN = RUNTIME.max_requests_per_turn
+
+# ── 开工前强制思考（在 loop 里卡一道，不靠 psyche 软提示）──
+# 本轮首次要动工具、却没先说"理解+计划"（content 太短=直接冲工具）→ 打回一次，
+# 逼它先articulate再执行。触发器="要动手且没解释"（模型自身输出信号），不是用户输入长度
+# （后者是被删的 auto-plan 错轴）。纯问答/闲聊无 tool_calls，不受影响、零开销。
+# CTG_FORCE_PLAN=0 关闭。
+_PLAN_MIN_CHARS = 40
 # 挂尾机制已整体删除：send() 永远纯追加（[前缀][对话]），不存在"工具循环是否带尾"
 # 之类的开关。每个请求 payload shape 一致、对话即输入结束单元。见 [[ctgents-context-cache]]。
 # （建任务提示 maybe_suggest_task_nudge 曾在此挂尾，随挂尾机制删除——逻辑保留为 dormant。）
@@ -1056,11 +1144,23 @@ def _compress_tool_result(tool_name: str, result: str) -> str:
 # ═══════════════════════════════════════════════════════════════
 
 # 上下文/压缩旋钮统一定义在 params.CONTEXT；此处绑定本地名，保持模块内引用与可 monkeypatch。
-_COMPACT_THRESHOLD = CONTEXT.compact_threshold          # 滑窗压缩触发比例 (65%)
+# 压缩触发线已改读 CONTEXT.comfort_zone_high（绝对舒适区上界），旧的 compact_threshold 比例已删。
 _COMPACT_KEEP_RATIO = CONTEXT.compact_keep_ratio        # 压缩后保留最近 N% 消息
+_COMPACT_REARM_GROWTH = CONTEXT.compact_rearm_growth    # 防抖后用量再涨 MAX 此比例 → 重新武装
 # ── 压缩防抖状态 ──
+# 模块级而非挂在 CacheContext 上：/new /load 切会话必须重置，否则旧会话攒的防抖锁
+# 会原样带进新会话，导致新会话的压缩被静默跳过。见 reset_compaction_state。
 _previous_summary: str | None = None          # 上次压缩的摘要，供迭代更新
 _ineffective_compression_count: int = 0       # 连续低效压缩计数
+_compact_skip_floor: int = 0                  # 防抖触发时的 used 水位；超它 _COMPACT_REARM_GROWTH 即重试
+
+
+def reset_compaction_state() -> None:
+    """切会话（/new /load）时调用：清空压缩防抖状态，避免旧会话的锁带进新会话。"""
+    global _previous_summary, _ineffective_compression_count, _compact_skip_floor
+    _previous_summary = None
+    _ineffective_compression_count = 0
+    _compact_skip_floor = 0
 
 
 
@@ -1121,10 +1221,32 @@ def _compact_cache_context(ctx, user_input: str, force: bool = False) -> None:
 
     evicted = log[:keep_start]
     kept = log[keep_start:]
-    # 抢救被驱逐区里已加载的 psyche：它由 load_psyche 插在 log[0]（最旧），落在驱逐区，
+    # 抢救被驱逐区里已加载的 psyche：加载时 append 在尾部，但会话足够长后仍可能滚进驱逐区，
     # 若被摘要掉 = 悄悄卸载 agent 主动加载的认知框架。原样搬到新 log 顶部、不进摘要。
-    rescued = [m for m in evicted if m.get("_psyche_meta")]
-    to_summarize = [m for m in evicted if not m.get("_psyche_meta")]
+    from .psyche_bridge import loaded_psyches_in_log
+    from .skill_bridge import loaded_skills
+
+    active_psyches = {
+        meta.get("id") or meta.get("name") for meta in loaded_psyches_in_log(ctx)
+    }
+    active_skills = {meta.get("name") for meta in loaded_skills(ctx)}
+
+    def _is_active_psyche_core(message: dict) -> bool:
+        meta = message.get("_psyche_meta")
+        return bool(meta and meta.get("name") in active_psyches)
+
+    def _is_active_skill_core(message: dict) -> bool:
+        event = message.get("_skill_event")
+        return bool(
+            event and event.get("type") == "activate" and event.get("name") in active_skills
+        )
+
+    rescued = [
+        m for m in evicted if _is_active_psyche_core(m) or _is_active_skill_core(m)
+    ]
+    to_summarize = [
+        m for m in evicted if not (_is_active_psyche_core(m) or _is_active_skill_core(m))
+    ]
     summary = _make_brief_summary(to_summarize, previous_summary=_previous_summary) \
         if to_summarize else None
     if not summary and not rescued:
@@ -1139,13 +1261,26 @@ def _compact_cache_context(ctx, user_input: str, force: bool = False) -> None:
 
 
 def _should_compact(used: int) -> bool:
-    """检查是否应该触发压缩（用量超阈值且未进入防抖）。"""
+    """检查是否应该触发压缩（live 超舒适区上界且未进入防抖）。
+
+    触发线 = comfort_zone_high（绝对 25w，对齐舒适区）。折叠（无损）够不着的对话文字
+    爬升到此即削有损摘要、把 live 拉回舒适区；折叠能摁住的 tool 体积根本到不了这条线。
+    """
     global _ineffective_compression_count
-    limit = int(MAX_CONTEXT_TOKENS * _COMPACT_THRESHOLD)
+    limit = CONTEXT.comfort_zone_high
     if used < limit:
         return False
     if _ineffective_compression_count >= 2:
-        logger.warning("压缩跳过——最近 %d 次节省 <10%%。", _ineffective_compression_count)
+        # 单向锁修复：防抖关停后，若上下文又显著长高（新可驱逐内容堆积），重新武装再试；
+        # 否则永久关闭（旧 bug：清零只发生在有效压缩里，被跳过后 _update 永不被调、计数卡死）。
+        rearm_at = _compact_skip_floor + int(MAX_CONTEXT_TOKENS * _COMPACT_REARM_GROWTH)
+        if _compact_skip_floor and used >= rearm_at:
+            logger.info("压缩重新武装：用量 %d→%d 已超重试水位 %d，解防抖。",
+                        _compact_skip_floor, used, rearm_at)
+            _ineffective_compression_count = 0
+            return True
+        logger.warning("压缩跳过——最近 %d 次节省 <10%%（用量 %d 未到重试水位 %d）。",
+                       _ineffective_compression_count, used, rearm_at)
         return False
     return True
 
@@ -1183,12 +1318,15 @@ def _update_compaction_effectiveness(before: int, after: int) -> None:
     旧版用 len(msgs)*80 拍脑袋估 token 判"有没有效"——假精确数，已删。这里 before/
     after 都是 _live_context_tokens 的真值，省得 <10% 才算一次低效。
     """
-    global _ineffective_compression_count
+    global _ineffective_compression_count, _compact_skip_floor
     pct = (before - after) / before * 100 if before > 0 else 0
     if pct < 10:
         _ineffective_compression_count += 1
+        if _ineffective_compression_count >= 2:
+            _compact_skip_floor = after   # 放弃时的水位：超它 _COMPACT_REARM_GROWTH 才重试
     else:
         _ineffective_compression_count = 0
+        _compact_skip_floor = 0
 
 
 def _replace_log_with_summary(ctx, kept: list[dict], summary: str | None,
@@ -1389,17 +1527,21 @@ def _execute_tool_batch(approved: list[tuple]) -> list[str]:
             total_serial += 1
             i += 1
         else:
-            batch_size = _execute_parallel_batch(approved, i, n, results)
+            batch_size, next_i = _execute_parallel_batch(approved, i, n, results)
             total_parallel += batch_size
-            i += batch_size
+            i = next_i
 
     _update_safe_stats(total_parallel, total_serial)
     return results
 
 
 def _execute_parallel_batch(approved: list[tuple], start: int, n: int,
-                            results: list[str]) -> int:
-    """收集从 start 开始的连续 SAFE 工具并并行执行。返回执行数。"""
+                            results: list[str]) -> tuple[int, int]:
+    """收集从 start 开始的连续 SAFE 工具并并行执行。
+
+    返回 `(实际执行数, 下一扫描位置)`。下一位置按扫描跨度推进，不能按执行数推进：
+    中间若夹着 eager 预置结果，二者不同，按执行数会让后面的工具被重复执行。
+    """
     from concurrent.futures import ThreadPoolExecutor, as_completed
     batch: list[int] = []
     i = start
@@ -1413,7 +1555,7 @@ def _execute_parallel_batch(approved: list[tuple], start: int, n: int,
         else:
             break
     if not batch:
-        return 0
+        return 0, i
     names = [approved[j][1] for j in batch]
     print(f"  ⚡ [SAFE] 并行执行 {len(batch)} 个工具: {', '.join(names)}")
     with ThreadPoolExecutor(max_workers=min(len(batch), 8)) as pool:
@@ -1423,7 +1565,7 @@ def _execute_parallel_batch(approved: list[tuple], start: int, n: int,
             fut_map[fut] = j
         for fut in as_completed(fut_map):
             results[fut_map[fut]] = fut.result()
-    return len(batch)
+    return len(batch), i
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -1536,14 +1678,17 @@ def _check_storm_breaker(
 
 
 def _build_failure_signature(approved: list[tuple]) -> str | None:
-    """如果所有工具结果都包含 error，返回签名；否则返回 None。"""
+    """从本批失败的工具调用构建签名（忽略同批里成功的调用）；批内没有失败则返回 None。
+
+    之前要求整批全部失败才返回签名——SAFE 工具常被并行打包，一个必错调用只要跟任意
+    一个成功调用同批，签名就整体判 None，storm_count 被清零，死循环检测形同虚设。
+    """
     sig_parts: list[str] = []
     for _item in approved:
         tool_name = _item[1]
         err_line = _extract_error_line(_item[4])
-        if err_line is None:
-            return None
-        sig_parts.append(f"{tool_name}:{err_line}")
+        if err_line is not None:
+            sig_parts.append(f"{tool_name}:{err_line}")
     return "|".join(sig_parts) if sig_parts else None
 
 
@@ -1566,29 +1711,51 @@ def _track_storm(cur_sig: str, storm_sig: str | None, storm_count: int) -> tuple
 
 
 def _inject_loop_guard(approved: list[tuple], storm_count: int) -> None:
-    """在最后一条 approved 结果中注入 loop guard 警告。"""
-    last = approved[-1]
+    """在批内最后一条**真正失败**的结果上注入 loop guard 警告。
+
+    不能无脑用 approved[-1]：signature 现在允许成功/失败混批（见 _build_failure_signature），
+    批里最后一条完全可能是刚成功的调用——警告挂在它身上会误报"这个工具连续失败"。
+    """
+    fail_idx = next((i for i in range(len(approved) - 1, -1, -1)
+                      if _extract_error_line(approved[i][4]) is not None), None)
+    if fail_idx is None:
+        return
+    target = approved[fail_idx]
     warn = (
-        f"\n\n[loop guard] '{last[1]}' 已连续失败 {storm_count} 次"
+        f"\n\n[loop guard] '{target[1]}' 已连续失败 {storm_count} 次"
         f"且错误相同。重复发送——即使换了措辞——也不会有帮助。换方法："
         f"如果参数被截断，拆成多个小调用；"
         f"否则修正参数、换工具、或在最终回复中说明障碍。"
     )
-    last_result = last[4] + warn
-    approved[-1] = (last[0], last[1], last[2], last[3], last_result)
-    logger.warning("stormBreaker: %s 连续失败 %d 次，已注入 loop guard", last[1], storm_count)
+    new_result = target[4] + warn
+    approved[fail_idx] = (target[0], target[1], target[2], target[3], new_result)
+    logger.warning("stormBreaker: %s 连续失败 %d 次，已注入 loop guard", target[1], storm_count)
 
 
-def _detect_control_signal(tool_calls: list[dict]) -> tuple[str, str] | None:
+def _detect_control_signal(
+    tool_calls: list[dict],
+    ctx: CacheContext | None = None,
+) -> tuple[str, str] | None:
     """本批工具是否含显式停止信号（task_done/need_user）。返回 (信号名, 附带文本) 或 None。
 
     走原生 function-calling、不另搞 JSON 协议——只是把"结束"从隐式（模型不调工具）变成
     agent 显式调控制工具。附带文本=summary 或 question，供 UI 把问题/总结交还用户。
+    传入 ctx 时，task_done 必须已被工具结果明确接受；验收失败不能伪装成停止信号。
     """
     from .tools.control import CONTROL_TOOLS
     for tc in tool_calls:
         name = tc.get("function", {}).get("name", "")
         if name in CONTROL_TOOLS:
+            if name == "task_done" and ctx is not None:
+                call_id = tc.get("id")
+                accepted = any(
+                    msg.get("role") == "tool"
+                    and msg.get("tool_call_id") == call_id
+                    and str(msg.get("content", "")).startswith("[任务完成信号]")
+                    for msg in reversed(ctx.log)
+                )
+                if not accepted:
+                    continue
             try:
                 args = json.loads(tc["function"]["arguments"])
             except (json.JSONDecodeError, KeyError, TypeError):
@@ -1599,20 +1766,43 @@ def _detect_control_signal(tool_calls: list[dict]) -> tuple[str, str] | None:
 
 
 def _handle_psyche_tools(ctx: CacheContext, approved: list[tuple]) -> None:
-    """处理 load_psyche / unload_psyche 工具调用结果。
+    """处理 Psyche / Skill 认知层工具调用结果。
 
-    在工具执行后、结果写 log 前执行，实际调用 psyche_bridge 注入/移除。
+    在工具结果写 log **之后**执行（调用点顺序是协议不变量的一部分）：inject_psyche
+    append 的 system 消息若落在 assistant(tool_calls) 与 tool 结果之间，API 400。
     """
     from .psyche_bridge import inject_psyche, remove_psyche
     for _tc_data, tool_name, args, _tc, _result in approved:
         if tool_name == "load_psyche":
             name = (args.get("name") or "").strip()
             if name:
-                inject_psyche(ctx, name)
+                inject_psyche(
+                    ctx,
+                    name,
+                    scope="task",
+                    source="agent",
+                    reason=(args.get("reason") or "").strip(),
+                )
         elif tool_name == "unload_psyche":
             name = (args.get("name") or "").strip()
             if name:
-                remove_psyche(ctx, name)
+                remove_psyche(ctx, name, source="agent")
+        elif tool_name == "activate_skill":
+            from .skill_bridge import activate_skill
+
+            name = (args.get("name") or "").strip()
+            if name:
+                result = activate_skill(
+                    ctx,
+                    name,
+                    axes=args.get("axes") if isinstance(args.get("axes"), dict) else None,
+                    reason=(args.get("reason") or "").strip(),
+                )
+                if not result.startswith("✅"):
+                    ctx.log.append({
+                        "role": "system",
+                        "content": f"【Skill activation rejected】{result}",
+                    })
 
 
 def _handle_tool_results(
@@ -1662,6 +1852,20 @@ def _handle_tool_results(
         if i < len(approved) and approved[i][4] is None:
             approved[i] = (approved[i][0], approved[i][1], approved[i][2], approved[i][3], eager_result)
 
+    # 一批多个 delegate 只放行第一个：delegate 串行阻塞主线（parallel_safe=False，
+    # 嵌套 run_conversation 单线程重入），批量连发 = 主线停摆几十分钟且拿不到中间
+    # 结果调整后续 brief（2026-07-20 实测一条消息 3 连发）。后续的直接拒绝并教正道；
+    # 拒绝结果照常写 log，API 的 tool_calls↔tool 配对契约不破坏。
+    _delegate_pending = [i for i, it in enumerate(approved)
+                         if it[1] == "delegate" and it[4] is None]
+    for i in _delegate_pending[1:]:
+        tc_data, name, args, tc, _ = approved[i]
+        approved[i] = (tc_data, name, args, tc, (
+            "⛔ 本批已有一个 delegate 在执行，此调用未运行。\n"
+            "delegate 是串行阻塞的：一次只派一个，拿到上一个的结果（可能改变你对"
+            "后续调研的判断/brief）再派下一个。正道：下一轮携带首个结果重新委派本任务。"
+        ))
+
     # 执行未跑的工具
     exec_indices = [i for i, item in enumerate(approved) if item[4] is None]
     exec_items = [approved[i] for i in exec_indices]
@@ -1673,9 +1877,6 @@ def _handle_tool_results(
     # stormBreaker
     storm_sig, storm_count = _check_storm_breaker(approved, storm_sig, storm_count)
 
-    # ── 处理 psyche 加载/卸载（agent 自主调用） ──
-    _handle_psyche_tools(ctx, approved)
-
     # 写 tool 结果到 log
     for tc_data, tool_name, _args, _tc, result in approved:
         result = truncate_to_budget(result, ctx.all)
@@ -1683,6 +1884,16 @@ def _handle_tool_results(
         ctx.log.append({"role": "tool", "tool_call_id": tc_data["id"], "content": result, "_tool_name": tool_name})
         if on_tool_result is not None:
             on_tool_result(tool_name, result)
+
+    # ── 处理 psyche 加载/卸载（agent 自主调用） ──
+    # 必须在 tool 结果写完之后：inject_psyche 会 append 非 volatile 的 system 消息，
+    # 若插在 assistant(tool_calls) 与 tool 结果之间，DeepSeek 按紧邻性校验直接 400
+    # "insufficient tool messages following tool_calls message"（2026-07-03 实测复现）。
+    _handle_psyche_tools(ctx, approved)
+
+    # 工具结果的陈旧折叠只在 send() 时对发送副本做（_collapse_stale_tool_results，可逆、
+    # 压力自适应、fetch 可捞回）——不在写入时改 ctx.log 本身：那会销毁原文、破坏可逆性，
+    # 且无视舒适区无条件折叠（2026-07-10 移除写时折叠，回到单一可逆机制）。
 
     return storm_sig, storm_count
 
@@ -1693,22 +1904,45 @@ def _reconcile_system_context(ctx: CacheContext) -> None:
 
     自律检查 source 的 snapshot = 当前已加载的所有 psyche name 列表。
     reconcile() 根据 snapshot 变化自动推送 baseline/update/removed。
+
+    修复 (2026-07-09): 补从 ctx.log 回填 registry 的兜底——psyche 内容
+    可能已注入 log 但 register 丢失（如 ensure_base_psyche 跳过或
+    resync 未覆盖的场景）。每轮调用前用 loaded_psyches_in_log 扫一次，
+    把漏注册的补上。
     """
+    from .psyche_bridge import exit_checks_for_active, loaded_psyches_in_log
     from .system_context import Source, loaded_keys, reconcile, register
+
+    # ── 兜底：从 ctx.log 回填 registry ──
+    active_meta = loaded_psyches_in_log(ctx)
+    log_psyche_names = {meta.get("id") or meta["name"] for meta in active_meta}
+    reg_psyche_names = {k.split("/", 1)[1] for k in loaded_keys() if k.startswith("psyche/")}
+    missing = log_psyche_names - reg_psyche_names
+    for name in missing:
+        register(Source(
+            key=f"psyche/{name}",
+            snapshot="?",  # 版本未知，来自回填
+        ))
 
     # 获取当前已加载的 psyche 列表
     psyche_keys = sorted(k for k in loaded_keys() if k.startswith("psyche/"))
     names = [k.split("/", 1)[1] for k in psyche_keys]
+    signatures = sorted(
+        f"{meta.get('id') or meta.get('name')}@{meta.get('version', '?')}"
+        for meta in active_meta
+    )
 
     def _make_msg(ns: list[str]) -> dict | None:
         if not ns:
             return None
+        checks = exit_checks_for_active(ctx)
+        check_text = "\n".join(f"- {check}" for check in checks) or "- 对照当前 Psyche 的判断增量复核结论"
         return {
             "role": "system",
             "content": (
-                f"【自律检查】已加载psyche: {', '.join(ns)}。\n"
-                "在写最终回复前，自检你的判断是否遵循了这些psyche的准则。\n"
-                "每发现一条违反，在回复末尾追加: ⚠️ 违反psyche {name}: {说明}"
+                f"【Active Psyche Stack】{', '.join(ns)}。\n"
+                "最终回复前执行与当前任务相关的检查：\n"
+                f"{check_text}"
             ),
             "_system_context": "system/self-check",
         }
@@ -1716,7 +1950,7 @@ def _reconcile_system_context(ctx: CacheContext) -> None:
     msg = _make_msg(names)
     register(Source(
         key="system/self-check",
-        snapshot=names,
+        snapshot=signatures,
         baseline=msg,
         update=lambda _prev, _curr: _make_msg(
             sorted(k.split("/", 1)[1] for k in loaded_keys() if k.startswith("psyche/"))
@@ -1725,6 +1959,15 @@ def _reconcile_system_context(ctx: CacheContext) -> None:
 
     # reconcile 会处理所有 source 的 baseline/update/removed
     reconcile(ctx)
+
+
+def _run_termination_gate(assistant_content: str, ctx: CacheContext) -> str:
+    """终止门：证据驱动的 loop 终止验证。返回 "pass" | "warn:msg" | "fail:msg"。
+
+    导入在函数体内（延迟加载，不拖慢 llm 模块首导）。
+    """
+    from .verifier import run_termination_gate
+    return run_termination_gate(assistant_content, ctx)
 
 
 def run_conversation(
@@ -1736,14 +1979,20 @@ def run_conversation(
     session_id: str = "",
     on_reasoning: Callable[[str], None] | None = None,
     on_tool_result: Callable[[str, str], None] | None = None,
+    tools: list[dict] | None = None,
+    track_stats: bool = True,
+    max_requests: int | None = None,
 ) -> str:
     """处理一轮对话：自动路由 + 工具调用循环。
 
     循环终止条件：
       1. LLM 返回无 tool_calls（自然完成）
       2. 上下文 token 超限
-      3. 单轮请求数达 _MAX_REQUESTS_PER_TURN（成本熔断）
+      3. 单轮请求数达熔断上限（max_requests，None=全局 _MAX_REQUESTS_PER_TURN）
       4. 用户 Esc 中断
+
+    tools / track_stats / max_requests 三参供隔离嵌套调用（delegate worker）收窄：
+    自定义工具子集、不污染主会话缓存统计、独立请求预算。默认值=主会话现行为。
     """
     # ── 运行时守卫：防止误传 list[dict] 等错误类型 ──
     if not hasattr(ctx, "log") or not hasattr(ctx, "all"):
@@ -1777,6 +2026,8 @@ def run_conversation(
 
     requests_made = 0
     _tool_call_count = 0  # 工具调用步数（规划审查用）
+    force_plan = os.environ.get("CTG_FORCE_PLAN", "1") != "0"  # 开工前强制思考
+    plan_forced = False   # 本轮是否已强制过一次"先说理解+计划"（每轮最多一次，不死循环）
     # ── stormBreaker：同轮连续同一错误 → 打破死亡螺旋 ──
     _storm_sig: str | None = None   # 上一轮失败签名
     _storm_count = 0                # 同一签名连续次数
@@ -1815,18 +2066,19 @@ def run_conversation(
         })
 
 
-    # ── System Context reconcile：自律检查 + 生命周期管理 ──
-    _reconcile_system_context(ctx)
-
-
     while True:
-        if requests_made >= _MAX_REQUESTS_PER_TURN:
+        # ── System Context reconcile：自律检查 + 生命周期管理 ──
+        # 挂在循环内而非只在入口跑一次：工具循环中途若 load_psyche（_handle_psyche_tools
+        # 在 _handle_tool_results 里随时可能触发），新登记的自律检查本轮内就能推送，不用
+        # 等到下一次外部调用 run_conversation（下一用户回合/续跑下一步）才刷新。
+        _reconcile_system_context(ctx)
+        request_budget = max_requests if max_requests is not None else _MAX_REQUESTS_PER_TURN
+        if requests_made >= request_budget:
             # 经 on_token 显式吐出停因——否则这条 return 被 _drive_turn 忽略、用户只看到
             # 回复戛然而止、不知为何停。长任务里这是"本步到顶、续跑下一步新预算接力"，非失败。
             msg = (
-                f"本轮已发出 {requests_made} 次 API 请求，达到单轮熔断上限"
-                f"（CTG_MAX_REQUESTS_PER_TURN={_MAX_REQUESTS_PER_TURN}）。本步已停；"
-                "若在长任务里、续跑会带新预算接着做下一步，否则请拆小后继续。"
+                f"本轮已发出 {requests_made} 次 API 请求，达到熔断上限（{request_budget}）。"
+                "本步已停；若在长任务里、续跑会带新预算接着做下一步，否则请拆小后继续。"
             )
             on_token("\n" + msg + "\n")
             return msg
@@ -1839,17 +2091,18 @@ def run_conversation(
             )
             on_token("\n" + msg + "\n")
             return msg
-        # 自动压缩旧对话（用量超过 _COMPACT_THRESHOLD 即触发）
-        compact_limit = int(MAX_CONTEXT_TOKENS * _COMPACT_THRESHOLD)
+        # 自动压缩旧对话（live 超舒适区上界即触发；_should_compact 内再做防抖判定）
+        compact_limit = CONTEXT.comfort_zone_high
         if used >= compact_limit:
-            logger.info("触发上下文优化：%d >= %d (%.0f%%)", used, compact_limit, _COMPACT_THRESHOLD * 100)
+            logger.info("触发上下文优化：%d >= %d（舒适区上界）", used, compact_limit)
             _compact_context(ctx, user_input)
             logger.info("压缩后消息数: %d", len(ctx))
 
         try:
             _reasoning_accum.clear()
             content, tool_calls, eager_results = _invoke_llm_eager(
-                backend, ctx.send(), on_token, session_id, on_reasoning=_capture_reasoning,
+                backend, ctx.send(), on_token, session_id,
+                track_stats=track_stats, tools=tools, on_reasoning=_capture_reasoning,
             )
             requests_made += 1
         except UserInterruptError:
@@ -1865,10 +2118,41 @@ def run_conversation(
                 on_progress()
             return "\n\n[⏹️ 已中断]"
         if tool_calls:
+            # ── 开工前强制思考：本轮首次要动工具、却没先说理解+计划 → 打回一次，先出计划再执行 ──
+            # 只在"要动手且没解释"时触发（模型自身输出信号，非用户输入长度）；控制信号
+            # (task_done/need_user) 不算动手、不拦；每轮最多一次（plan_forced 守卫，不死循环）。
+            # 副作用工具(write)非 eager、此刻尚未执行，丢弃 tool_calls 安全；被丢的只读 eager
+            # 结果下一轮由会话读缓存吸收（重跑近乎零成本）。
+            _ctrl_pre = _detect_control_signal(tool_calls)
+            # 只在这批真要动"有副作用/不可逆"的手时才拦（写/跑命令/git…=非 PARALLEL_SAFE）。
+            # 纯读/检索/查看（全 SAFE）低风险且可逆，逼它们先写计划=对轻活也端着、显得啰嗦而慢——
+            # 用户实测的"不舒服"主因。原始意图"别改东西前不假思索"由此保留、只落在真动手的轮。
+            _touches_side_effect = any(
+                ((tc.get("function") or {}).get("name") or "") not in _PARALLEL_SAFE
+                for tc in tool_calls
+            )
+            if (force_plan and not plan_forced and _ctrl_pre is None
+                    and _touches_side_effect
+                    and len((content or "").strip()) < _PLAN_MIN_CHARS):
+                plan_forced = True
+                if content and content.strip():
+                    ctx.log.append({"role": "assistant", "content": content})
+                ctx.log.append({
+                    "role": "system",
+                    "content": (
+                        "动手前先想一步（一两句即可）：(1) 你理解我要的是什么；"
+                        "(2) 打算怎么做——要动哪些工具/走哪几步。说完再执行。"
+                        "若需求可能有多种解读，先问我，别猜着动手。"
+                    ),
+                    "_force_plan": True,
+                })
+                if on_progress:
+                    on_progress()
+                continue
             # 解析→执行→stormBreaker→压缩→写 log 全部走 _handle_tool_results（单一实现）。
             # 此处曾内联同一套 ~130 行（与 helper 漂移出 content=None 等差异，违反 C9 DRY）——
             # 已删，改为调 helper。中途崩溃留下的光杆 tool_calls 由 send() 的
-            # _repair_tool_pairing 在唯一咽喉兜底补占位（旧内联的 except 回填已冗余，一并删）。
+            # _enforce_tool_pairing 在唯一咽喉兜底补占位（旧内联的 except 回填已冗余，一并删）。
             _storm_sig, _storm_count = _handle_tool_results(
                 ctx, tool_calls, eager_results, on_tool,
                 _storm_sig, _storm_count, content,
@@ -1877,9 +2161,13 @@ def run_conversation(
             )
             # 显式停止信号：agent 这批调了 task_done/need_user → 置 ctx.control_signal、
             # 结束本轮（不再靠"模型不调工具"猜结束）。续跑/主干据此决定停或继续。
-            ctrl = _detect_control_signal(tool_calls)
+            ctrl = _detect_control_signal(tool_calls, ctx)
             if ctrl:
                 ctx.control_signal, ctx.control_payload = ctrl
+                if ctx.control_signal == "task_done":
+                    from .psyche_bridge import deactivate_scope
+
+                    deactivate_scope(ctx, "task")
                 if on_progress:
                     on_progress()
                 return content or ""
@@ -1891,10 +2179,41 @@ def run_conversation(
             if _reasoning_accum:
                 _msg["_reasoning"] = "".join(_reasoning_accum)  # 重启回放折叠区用，不进 API
             ctx.log.append(_msg)
-            # 模型这轮没调任何工具 = 本轮自然结束（纯文本回复）。长任务的"接着做"不在这里
-            # 硬续——由 main.run_agent_turn 在 agent 参与了任务时自主驱动（run_task_continuation，
-            # "有未完成就继续"），停靠 agent 显式调 task_done/need_user（见 tools/control.py）
-            # 或卡死保险，不再靠"在回复里说停"或"注入不要停"那套自问自答补丁。
+            # ── 终止门（Termination Gate）：证据驱动的 loop 终止验证 ──
+            # 模型这轮没调工具 ≠ 真的做完了。Verifier 检查 agent 声称做的事是否
+            # 真的发生（文件存在、任务步骤更新、测试覆盖），证据不对 → loop 继续。
+            gate_action = _run_termination_gate(content or "", ctx)
+            gate_status, _, gate_message = gate_action.partition(":")
+            if gate_status == "fail":
+                # 失败原因必须进入下一次请求；只 continue 会让模型在没有新指令的
+                # assistant 尾部继续生成，既不知道哪里错了，也可能重复原答案。
+                ctx.log.append({
+                    "role": "system",
+                    "content": (
+                        "【终止验证未通过】\n"
+                        f"{gate_message or '验证器未提供具体原因。请重新核对完成证据。'}\n"
+                        "请先补齐证据或修正不准确的完成声明，再给出最终答复。"
+                    ),
+                    "_termination_gate": "fail",
+                })
+                continue
+            if gate_status == "warn":
+                # 只提醒不拦截：追加到 log 后正常终止。去重——同一条 warn 不重复堆：
+                # check_task_consistency 之类的检查每轮都可能复现同一提醒（任务挂着未做完），
+                # 无去重会每轮 append 一条一模一样的 system 消息、越滚越多（cf. check_modified_tests
+                # 内部的 already_warned）。这里在 append 层统一挡掉，覆盖所有 warn 来源。
+                already = any(
+                    m.get("_termination_gate") == "warn" and m.get("content") == gate_message
+                    for m in ctx.log
+                )
+                if not already:
+                    ctx.log.append({
+                        "role": "system",
+                        "content": gate_message,
+                        "_termination_gate": "warn",
+                    })
+            # 长任务的"接着做"不在这里硬续——由 main.run_agent_turn 在 agent 参与了
+            # 任务时自主驱动（run_task_continuation），停靠 agent 显式调 task_done/need_user。
             if on_progress:
                 on_progress()
             from .tasks import get_task_progress_line

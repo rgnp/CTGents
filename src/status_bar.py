@@ -120,13 +120,14 @@ def _task_title(current_md: str) -> str:
 
 
 def _footer(lt: dict) -> str:
-    """组装每轮收尾小结一行（紧凑徽标式；miss 由前端再弱化一档）。"""
+    """组装每轮收尾小结一行（素文本，只留日常关心的：耗时/输出/请求）。
+
+    miss 是缓存内部指标，对日常使用是噪声——移出 footer，需要时看 /context 下钻。
+    """
     parts = [f"耗时 {lt['elapsed']:.1f}s", f"输出 {lt['out']:,} tok"]
     if lt["req"]:
         parts.append(f"请求 {lt['req']}")
-    if lt["miss"] > 0:
-        parts.append(f"miss {_fmt_k(lt['miss'])}" + (" 突刺" if lt["spike"] else ""))
-    return "  本轮  " + "  ·  ".join(parts)
+    return "  " + " · ".join(parts)
 
 
 def _build(ctx, session_id: str):

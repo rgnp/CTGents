@@ -1,0 +1,11 @@
+name: gate-check
+version: "1.0"
+description: >
+  任务交付前的门禁检查。读 current.md 当前步骤的 gate 条件，
+  逐条验证证据是否存在、是否通过，缺失的拒绝 task_done。
+
+# v1 无轴——单一流程，不需要按场景变体
+
+axes: []
+
+always_load: []

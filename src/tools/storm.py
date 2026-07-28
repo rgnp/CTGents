@@ -16,6 +16,8 @@
   storm_record("read_file", {"path": "main.py"}, actual_result)
 """
 
+from __future__ import annotations
+
 import json
 import threading
 

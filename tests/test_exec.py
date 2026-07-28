@@ -4,6 +4,7 @@ import contextlib
 import re
 import shlex
 import time
+from types import SimpleNamespace
 
 import src.tools.exec as exec_mod
 from src.tools.exec import (
@@ -78,6 +79,22 @@ def _parts(cmd: str) -> list[str]:
     return shlex.split(cmd)
 
 
+def _captured_run_command_timeout(monkeypatch, command: str, timeout: int) -> int:
+    """捕获 Popen.communicate 收到的 timeout，不启动真实子进程。"""
+    seen: dict[str, int] = {}
+
+    class FakeProcess:
+        returncode = 0
+
+        def communicate(self, *, timeout):
+            seen["timeout"] = timeout
+            return b"", b""
+
+    monkeypatch.setattr(exec_mod.subprocess, "Popen", lambda *_a, **_k: FakeProcess())
+    run_command(command, timeout=timeout)
+    return seen["timeout"]
+
+
 class TestGitHookBypassGuard:
     def test_commit_no_verify_blocked(self):
         assert _check_git_hook_bypass(_parts("git commit --no-verify -m msg"))
@@ -130,41 +147,18 @@ class TestGitDestructiveGuard:
 
 class TestGitCommitTimeoutFloor:
     def test_commit_timeout_raised(self, monkeypatch):
-        seen: dict = {}
-
-        def fake_run(*args, **kwargs):
-            seen["timeout"] = kwargs.get("timeout")
-            raise FileNotFoundError
-
-        monkeypatch.setattr(exec_mod.subprocess, "run", fake_run)
-        run_command("git commit -m msg", timeout=10)
-        assert seen["timeout"] == exec_mod.RUNTIME.git_commit_timeout_floor
+        assert _captured_run_command_timeout(monkeypatch, "git commit -m msg", 10) == \
+            exec_mod.RUNTIME.git_commit_timeout_floor
 
     def test_non_commit_timeout_untouched(self, monkeypatch):
-        seen: dict = {}
-
-        def fake_run(*args, **kwargs):
-            seen["timeout"] = kwargs.get("timeout")
-            raise FileNotFoundError
-
-        monkeypatch.setattr(exec_mod.subprocess, "run", fake_run)
-        run_command("git status", timeout=10)
-        assert seen["timeout"] == 10
+        assert _captured_run_command_timeout(monkeypatch, "git status", 10) == 10
 
 
 class TestTestTimeoutFloor:
     """pytest 命令超时地板：慢测试不被默认 timeout 杀掉，免去 async+反复 poll。"""
 
     def _captured_timeout(self, monkeypatch, command, timeout):
-        seen: dict = {}
-
-        def fake_run(*_a, **kwargs):
-            seen["timeout"] = kwargs.get("timeout")
-            raise FileNotFoundError
-
-        monkeypatch.setattr(exec_mod.subprocess, "run", fake_run)
-        run_command(command, timeout=timeout)
-        return seen["timeout"]
+        return _captured_run_command_timeout(monkeypatch, command, timeout)
 
     def test_pytest_timeout_raised(self, monkeypatch):
         assert self._captured_timeout(monkeypatch, "pytest -q", 30) == \
@@ -284,6 +278,105 @@ class TestDrainFinishedJobs:
         run_async("python -c \"raise SystemExit(3)\"", timeout=10)
         notices = _drain_until()
         assert any("exit=3" in n and "❌" in n for n in notices), notices
+
+
+class TestAsyncVerificationReceipts:
+    @staticmethod
+    def _fake_process(exit_code):
+        class FakeProcess:
+            returncode = exit_code
+
+            def poll(self):
+                return self.returncode
+
+        return FakeProcess()
+
+    def _prepare(self, monkeypatch, tmp_path, exit_code):
+        import src.verification_receipts as receipts
+
+        exec_mod._jobs.clear()
+        monkeypatch.setattr(exec_mod, "_JOB_LOG_DIR", tmp_path)
+        monkeypatch.setattr(
+            exec_mod.subprocess,
+            "Popen",
+            lambda *_args, **_kwargs: self._fake_process(exit_code),
+        )
+        monkeypatch.setattr(receipts, "workspace_fingerprint", lambda *_args: "frozen")
+        captured = []
+
+        def fake_record(command, workdir, code, output, *, expected_fingerprint=None):
+            captured.append((command, str(workdir), code, output, expected_fingerprint))
+            return SimpleNamespace(passed=code == 0)
+
+        monkeypatch.setattr(receipts, "record_verification", fake_record)
+        return captured
+
+    def test_poll_records_success_once(self, monkeypatch, tmp_path):
+        captured = self._prepare(monkeypatch, tmp_path, 0)
+        job_id = exec_mod._start_job("pytest -q", 30, str(tmp_path))
+
+        first = poll_job(job_id)
+        second = poll_job(job_id)
+
+        assert "验证回执: 已记录（通过）" in first
+        assert "不存在" in second or "过期" in second
+        assert len(captured) == 1
+        assert captured[0][0] == "pytest -q"
+        assert captured[0][2] == 0
+        assert captured[0][4] == "frozen"
+
+    def test_automatic_drain_records_failure_evidence(self, monkeypatch, tmp_path):
+        captured = self._prepare(monkeypatch, tmp_path, 2)
+        job_id = exec_mod._start_job("pytest -q", 30, str(tmp_path))
+
+        notices = exec_mod.drain_finished_jobs()
+
+        assert len(notices) == 1
+        assert job_id in notices[0]
+        assert "验证回执: 已记录（失败证据）" in notices[0]
+        assert captured[0][2] == 2
+
+    def test_changed_workspace_is_reported_without_receipt(self, monkeypatch, tmp_path):
+        import src.verification_receipts as receipts
+
+        self._prepare(monkeypatch, tmp_path, 0)
+        monkeypatch.setattr(receipts, "record_verification", lambda *_args, **_kwargs: None)
+        job_id = exec_mod._start_job("pytest -q", 30, str(tmp_path))
+
+        result = poll_job(job_id)
+
+        assert "验证回执: 未记录" in result
+        assert "工作区变化或写入失败" in result
+
+    def test_sync_timeout_transfer_keeps_start_fingerprint(self, monkeypatch, tmp_path):
+        exec_mod._jobs.clear()
+        monkeypatch.setattr(exec_mod, "_JOB_LOG_DIR", tmp_path)
+        monkeypatch.setattr(exec_mod, "_verification_fingerprint", lambda _command: "start-state")
+
+        class TimeoutThenFinish:
+            returncode = 0
+            calls = 0
+
+            def communicate(self, timeout=None):
+                self.calls += 1
+                if self.calls == 1:
+                    raise exec_mod.subprocess.TimeoutExpired("pytest", timeout)
+                return b"passed", b""
+
+            def poll(self):
+                return self.returncode
+
+        monkeypatch.setattr(
+            exec_mod.subprocess,
+            "Popen",
+            lambda *_args, **_kwargs: TimeoutThenFinish(),
+        )
+
+        result = run_command("pytest -q", timeout=1, workdir=str(tmp_path))
+        job_id = _extract_job_id(result)
+
+        assert exec_mod._jobs[job_id]["verification_fingerprint"] == "start-state"
+        exec_mod._kill_all_jobs()
 
 
 class TestJobExecute:

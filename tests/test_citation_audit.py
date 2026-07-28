@@ -153,7 +153,7 @@ def test_identifier_grounded_via_system_message():
 
 def test_tool_name_mention_not_flagged():
     """注册工具名（schema 每轮可见）→ 天然 grounded，不报。"""
-    assert audit_citations([_reply("我会用 `read_file` 和 `edit_file_lines` 来改。")]) is None
+    assert audit_citations([_reply("我会用 `read_file` 和 `replace_in_file` 来改。")]) is None
 
 
 def test_plain_word_and_dunder_not_audited():

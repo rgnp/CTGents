@@ -163,6 +163,146 @@ class TestToolPairingRepair:
         assert [m["role"] for m in api] == ["system", "user", "assistant", "tool", "assistant"]
 
 
+class TestToolPairingAdjacency:
+    """邻接性强制：tool 结果必须**紧邻** assistant(tool_calls) 之后（DeepSeek 实测协议）。"""
+
+    def test_system_between_assistant_and_tool_reordered(self):
+        """失败类钉死（2026-07-03 线上 400 复现）：load_psyche 注入的 system 消息
+        插在 assistant(tool_calls) 与 tool 结果中间 → send() 必须把结果挪回紧邻位。
+        """
+        ctx = CacheContext(
+            prefix_msgs=[{"role": "system", "content": "sys"}],
+            log_msgs=[
+                {"role": "user", "content": "加载psyche"},
+                {"role": "assistant", "content": None,
+                 "tool_calls": [{"id": "p1", "function": {"name": "load_psyche"}}]},
+                {"role": "system", "content": "【Psyche: x】核心内容"},   # 插队者
+                {"role": "tool", "tool_call_id": "p1", "content": "已加载"},
+            ],
+        )
+        api = ctx.send()
+        roles = [m["role"] for m in api]
+        ai = roles.index("assistant")
+        assert api[ai + 1]["role"] == "tool", f"tool 结果必须紧邻 assistant，实际: {roles}"
+        assert api[ai + 1]["tool_call_id"] == "p1"
+        # 插队 system 不丢，被挪到结果之后
+        assert any("Psyche" in (m.get("content") or "") for m in api[ai + 2:])
+
+    def test_result_before_assistant_relocated(self):
+        """Tool 结果出现在 assistant 之前（压缩/加载旧会话乱序）→ 挪到紧邻位，不重复。"""
+        ctx = CacheContext(
+            prefix_msgs=[{"role": "system", "content": "sys"}],
+            log_msgs=[
+                {"role": "tool", "tool_call_id": "x", "content": "result"},
+                {"role": "assistant", "content": None,
+                 "tool_calls": [{"id": "x", "function": {"name": "run"}}]},
+            ],
+        )
+        api = ctx.send()
+        tools = [m for m in api if m["role"] == "tool"]
+        assert len(tools) == 1, "搬运不得产生重复 tool 消息"
+        ai = next(i for i, m in enumerate(api) if m["role"] == "assistant")
+        assert api[ai + 1]["role"] == "tool" and api[ai + 1]["tool_call_id"] == "x"
+
+    def test_healthy_log_byte_identical(self):
+        """健康 log（紧邻配对）→ 输出同对象同顺序，零缓存影响。"""
+        log = [
+            {"role": "user", "content": "Q"},
+            {"role": "assistant", "content": None,
+             "tool_calls": [{"id": "a", "function": {"name": "f"}},
+                            {"id": "b", "function": {"name": "g"}}]},
+            {"role": "tool", "tool_call_id": "a", "content": "r1"},
+            {"role": "tool", "tool_call_id": "b", "content": "r2"},
+            {"role": "assistant", "content": "答案"},
+        ]
+        ctx = CacheContext(prefix_msgs=[{"role": "system", "content": "sys"}], log_msgs=log)
+        assert ctx.send() == ctx.send()
+        roles = [m["role"] for m in ctx.send()]
+        assert roles == ["system", "user", "assistant", "tool", "tool", "assistant"]
+
+    def test_result_after_assistant_is_fine(self):
+        """正常顺序：tool 结果在 assistant 之后 → 不补占位，健康 log 不变。"""
+        ctx = CacheContext(
+            prefix_msgs=[{"role": "system", "content": "sys"}],
+            log_msgs=[
+                {"role": "assistant", "content": None,
+                 "tool_calls": [{"id": "y", "function": {"name": "run"}}]},
+                {"role": "tool", "tool_call_id": "y", "content": "ok"},
+            ],
+        )
+        api = ctx.send()
+        # 应为 prefix(1) + assistant(1) + tool(1) = 3，无额外占位
+        assert len(api) == 3
+        roles = [m["role"] for m in api]
+        assert roles == ["system", "assistant", "tool"]
+
+    def test_multi_assistant_each_has_own_results(self):
+        """多个 assistant，各有 tool 结果在后方 → 全部 OK。"""
+        ctx = CacheContext(
+            prefix_msgs=[{"role": "system", "content": "sys"}],
+            log_msgs=[
+                {"role": "assistant", "content": None,
+                 "tool_calls": [{"id": "a", "function": {"name": "f"}}]},
+                {"role": "tool", "tool_call_id": "a", "content": "r1"},
+                {"role": "assistant", "content": None,
+                 "tool_calls": [{"id": "b", "function": {"name": "g"}}]},
+                {"role": "tool", "tool_call_id": "b", "content": "r2"},
+            ],
+        )
+        api = ctx.send()
+        assert len(api) == 5  # system + 4
+        # 确保没有占位消息
+        tool_contents = [m["content"] for m in api if m["role"] == "tool"]
+        assert all("已占位" not in c for c in tool_contents)
+
+    def test_crossed_results_relocated_adjacent(self):
+        """A、B 两个 assistant 的结果堆在后面 → 各自挪到紧邻位：A,ra,B,rb。"""
+        ctx = CacheContext(
+            prefix_msgs=[{"role": "system", "content": "sys"}],
+            log_msgs=[
+                {"role": "assistant", "content": None,
+                 "tool_calls": [{"id": "a", "function": {"name": "f"}}]},
+                {"role": "assistant", "content": None,
+                 "tool_calls": [{"id": "b", "function": {"name": "g"}}]},
+                {"role": "tool", "tool_call_id": "a", "content": "ra"},
+                {"role": "tool", "tool_call_id": "b", "content": "rb"},
+            ],
+        )
+        api = ctx.send()
+        pairs = [(m["role"], m.get("tool_call_id") or "".join(
+            tc["id"] for tc in (m.get("tool_calls") or []))) for m in api[1:]]
+        assert pairs == [("assistant", "a"), ("tool", "a"),
+                         ("assistant", "b"), ("tool", "b")]
+        tool_contents = [m["content"] for m in api if m["role"] == "tool"]
+        assert all("已占位" not in c for c in tool_contents)
+
+    def test_live_repro_psyche_mid_loop_then_more_tools(self):
+        """完整线上场景：工具循环中 load_psyche 注入 + 后续还有一轮工具调用。"""
+        ctx = CacheContext(
+            prefix_msgs=[{"role": "system", "content": "sys"}],
+            log_msgs=[
+                {"role": "user", "content": "干活"},
+                {"role": "assistant", "content": None,
+                 "tool_calls": [{"id": "t1", "function": {"name": "load_psyche"}},
+                                {"id": "t2", "function": {"name": "read_file"}}]},
+                {"role": "system", "content": "【Psyche: ad】…8KB 核心…"},
+                {"role": "tool", "tool_call_id": "t1", "content": "[加载 psyche: ad]"},
+                {"role": "tool", "tool_call_id": "t2", "content": "文件内容"},
+                {"role": "assistant", "content": "继续",
+                 "tool_calls": [{"id": "t3", "function": {"name": "grep_code"}}]},
+                {"role": "tool", "tool_call_id": "t3", "content": "命中"},
+            ],
+        )
+        api = ctx.send()
+        # 逐个 assistant 校验：其 tool_calls 的结果必须紧跟其后、连续、按声明顺序
+        for i, m in enumerate(api):
+            if m.get("role") == "assistant" and m.get("tool_calls"):
+                ids = [tc["id"] for tc in m["tool_calls"]]
+                following = [x.get("tool_call_id") for x in api[i + 1:i + 1 + len(ids)]]
+                assert following == ids, (
+                    f"assistant@{i} 的结果未紧邻: 期望 {ids}, 实际 {following}")
+
+
 def _turn(uq: str, tcid: str, tool_content: str) -> list[dict]:
     """造一轮：user 提问 + assistant 工具调用 + tool 结果。"""
     return [
@@ -175,6 +315,17 @@ def _turn(uq: str, tcid: str, tool_content: str) -> list[dict]:
 
 class TestStaleToolCollapse:
     """中段陈旧工具结果折叠（send() 视图变换，默认 keep_turns=3 / threshold=600）。"""
+
+    @pytest.fixture(autouse=True)
+    def _force_normal_band(self, monkeypatch):
+        """这些用例测的是 age/threshold 折叠逻辑：舒适区下界置 0、上界置 unreachable，
+        让小上下文也恒走「正常档」，与舒适区分档解耦（分档另由 TestFoldPressureBands 测）。
+        """
+        import dataclasses
+
+        import src.params as params
+        monkeypatch.setattr(params, "CONTEXT", dataclasses.replace(
+            params.CONTEXT, comfort_zone_low=0, comfort_zone_high=10_000_000))
 
     def _ctx_with_turns(self, n: int, big: bool = True) -> CacheContext:
         body = ("X" * 700) if big else "small"
@@ -224,6 +375,15 @@ class TestStaleToolCollapse:
         tools = [m for m in api if m["role"] == "tool"]
         assert tools[0]["tool_call_id"] == "t0"
 
+    def test_stub_notes_archive(self):
+        """折叠 stub 保留首行信号 + 原长度，并诚实标注原文在会话存档（不承诺已删的取回工具）。"""
+        ctx = self._ctx_with_turns(4)
+        api = ctx.send()
+        stub = next(m["content"] for m in api
+                    if m["role"] == "tool" and "折叠" in m["content"])
+        assert "原文在会话存档" in stub
+        assert "fetch_tool_result" not in stub  # 取回工具已删，不留假承诺
+
     def test_short_session_untouched(self):
         """轮数 < keep_turns → 全部新鲜，一律不折。"""
         ctx = self._ctx_with_turns(2)
@@ -248,13 +408,61 @@ class TestStaleToolCollapse:
         assert all("折叠" not in t["content"] for t in tools)
 
 
+class TestFoldPressureBands:
+    """舒适区自适应折叠：低于下界不折 / 区内正常档 / 高于上界紧逼加码。按 pre-fold 绝对体积。"""
+
+    def _ctx(self, n: int) -> CacheContext:
+        log: list[dict] = []
+        for i in range(n):
+            log += _turn(f"Q{i}", f"t{i}", f"头{i}\n" + "X" * 700)
+        return CacheContext(prefix_msgs=[{"role": "system", "content": "sys"}], log_msgs=log)
+
+    def _patch(self, monkeypatch, **kw):
+        import dataclasses
+
+        import src.params as params
+        monkeypatch.setattr(params, "CONTEXT", dataclasses.replace(params.CONTEXT, **kw))
+
+    def _n_folded(self, ctx: CacheContext) -> int:
+        return sum("折叠" in m["content"] for m in ctx.send() if m["role"] == "tool")
+
+    def test_below_comfort_low_no_fold(self, monkeypatch):
+        """体积 < comfort_zone_low → 完全不折，即便有 3 轮前的大结果（舒适区下方、有空间）。"""
+        self._patch(monkeypatch, comfort_zone_low=10_000_000)   # 永远到不了 → 恒不折
+        assert self._n_folded(self._ctx(5)) == 0
+
+    def test_squeeze_folds_more_than_normal(self, monkeypatch):
+        """高于上界的紧逼档比区内正常档折得多：keep_turns 1 vs 3 → 更多轮被折。"""
+        self._patch(monkeypatch, comfort_zone_low=0, comfort_zone_high=10_000_000,
+                    stale_tool_keep_turns=3, stale_tool_collapse_threshold=600)
+        normal = self._n_folded(self._ctx(5))               # 正常档 keep=3 → 折最老 2 轮
+        self._patch(monkeypatch, comfort_zone_low=0, comfort_zone_high=0,
+                    stale_tool_squeeze_keep_turns=1, stale_tool_squeeze_threshold=300)
+        squeeze = self._n_folded(self._ctx(5))              # 紧逼档 keep=1 → 折最老 4 轮
+        assert squeeze > normal, f"紧逼应折更多，实得 紧逼={squeeze} 正常={normal}"
+
+    def test_gate_uses_real_prefold_size(self, monkeypatch):
+        """同一上下文：下界设在其体积之下→折；设在之上→不折（绝对门按真实体积生效）。"""
+        # 折叠看的是 log（不含 prefix）；按 log 内容估，与 _collapse 内部口径一致。
+        approx = sum(len(m.get("content") or "") for m in self._ctx(5).log) // 4
+        self._patch(monkeypatch, comfort_zone_low=approx // 2, comfort_zone_high=10_000_000)
+        assert self._n_folded(self._ctx(5)) > 0, "体积超下界应折"
+        self._patch(monkeypatch, comfort_zone_low=approx * 2, comfort_zone_high=10_000_000)
+        assert self._n_folded(self._ctx(5)) == 0, "体积低于下界应保真不折"
+
+
 class TestLiveContextTokensCoherence:
     """压缩/熔断判定量"实际发送体积"（折叠后），而非 self.log 原文全长。"""
 
-    def test_live_tokens_below_raw_when_stale_collapsed(self):
+    def test_live_tokens_below_raw_when_stale_collapsed(self, monkeypatch):
         """有陈旧大工具结果时，_live_context_tokens < 原文计数（折叠生效）。"""
+        import dataclasses
+
         import src.llm as llm
+        import src.params as params
         from src.tools.tokens import count_messages_tokens
+        monkeypatch.setattr(params, "CONTEXT", dataclasses.replace(  # 小上下文也走正常档
+            params.CONTEXT, comfort_zone_low=0, comfort_zone_high=10_000_000))
         log: list[dict] = []
         for i in range(5):  # 5 轮 → 老的几轮工具结果会被折叠
             log += _turn(f"Q{i}", f"t{i}", "结果头\n" + "Z" * 3000)
@@ -286,6 +494,28 @@ class TestCompactionEffectiveness:
         llm._ineffective_compression_count = 2
         llm._update_compaction_effectiveness(before=1000, after=700)  # 省 30% >= 10%
         assert llm._ineffective_compression_count == 0
+
+    def test_debounce_rearm_on_growth(self):
+        """单向锁修复：防抖关停后，用量涨过重试水位 → 重新允许压缩、计数复位。"""
+        import src.llm as llm
+        try:
+            llm._ineffective_compression_count = 0
+            llm._compact_skip_floor = 0
+            floor_used = llm.CONTEXT.comfort_zone_high + 1000
+            # 连续 2 次低效 → 防抖关停 + 记下放弃水位
+            llm._update_compaction_effectiveness(before=floor_used, after=floor_used - 100)
+            llm._update_compaction_effectiveness(before=floor_used, after=floor_used - 100)
+            assert llm._ineffective_compression_count == 2
+            assert llm._compact_skip_floor == floor_used - 100
+            # 同水位 → 仍防抖，不压
+            assert llm._should_compact(floor_used) is False
+            # 涨过重试水位 → 重新武装、计数复位
+            grown = llm._compact_skip_floor + int(llm.MAX_CONTEXT_TOKENS * llm._COMPACT_REARM_GROWTH) + 1
+            assert llm._should_compact(grown) is True
+            assert llm._ineffective_compression_count == 0
+        finally:
+            llm._ineffective_compression_count = 0
+            llm._compact_skip_floor = 0
 
 
 class TestPrefixIntegrity:

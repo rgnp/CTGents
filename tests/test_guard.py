@@ -16,12 +16,14 @@ _SRC = Path(__file__).parent.parent / "src"
 
 def test_immutable_safety_core():
     """强制安全的机制本身=不可变核（改了等于让防护失效）。"""
-    for name in ("guard.py", "tool_guard.py", "gate_audit.py"):
-        assert is_immutable(_SRC / name), f"{name} 应是不可变核"
+    for path in (_SRC / "guard.py", _SRC / "tools" / "tool_guard.py", _SRC / "gate_audit.py"):
+        assert is_immutable(path), f"{path.name} 应是不可变核"
+
+    assert not is_immutable(_SRC / "tool_guard.py"), "不存在的旧路径不应冒充不可变安全核"
 
 def test_core_business_files_are_core_not_immutable():
     """核心业务文件可改（非不可变），但归 is_core → 走安全带。"""
-    for name in ("main.py", "commands.py", "validate.py", "tools/__init__.py"):
+    for name in ("main.py", "commands.py", "tools/__init__.py"):
         p = _SRC / name
         assert not is_immutable(p), f"{name} 应可改（非不可变核）"
         assert is_core(p), f"{name} 应归核心业务（走 import 冒烟安全带）"
@@ -47,6 +49,15 @@ def test_write_to_immutable_blocked():
     from src.tools.file import write_file
     result = write_file(str(_SRC / "guard.py"), "# test modification")
     assert "不可变安全核" in result, f"应拒绝改 guard.py，实际: {result[:100]}"
+
+
+def test_write_to_real_tool_guard_blocked():
+    """真正执行拦截的 src/tools/tool_guard.py 必须被机械拒写。"""
+    from src.tools.file import write_file
+
+    path = _SRC / "tools" / "tool_guard.py"
+    result = write_file(str(path), path.read_text(encoding="utf-8"))
+    assert "不可变安全核" in result, f"应拒绝改真实 tool_guard.py，实际: {result[:100]}"
 
 def test_delete_core_blocked():
     """核心业务文件可改但不可删。"""

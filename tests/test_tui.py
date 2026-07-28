@@ -16,6 +16,7 @@ from src.tui import (
     SplashScreen,
     _banner_plain,
     _banner_rows,
+    _expand_file_mentions,
     _fmt_tool,
     _status_line,
     _strip_user_wrappers,
@@ -64,18 +65,84 @@ class TestSplashLogoVisible:
 # ── 纯函数 ──
 class TestPureHelpers:
     def test_fmt_tool_known_pretty(self):
-        """已知工具按类型出精炼标签（图标+关键信息），不 dump 全部参数。"""
+        """已知工具按类型出精炼标签（关键信息 · 分隔，无装饰 emoji），不 dump 全部参数。"""
         _, d_read = _fmt_tool("read_file", {"path": "a.py"})
-        assert d_read == "📄 a.py"
+        assert d_read == "a.py"                  # 无 📄，素文本
         _, d_grep = _fmt_tool("grep_code", {"pattern": "foo", "path": "src"})
-        assert "🔍 foo" in d_grep and "📁 src" in d_grep
+        assert d_grep == "foo · src"             # 无 🔍📁，· 分隔
         _, d_test = _fmt_tool("run_command", {"command": "pytest -q"})
-        assert d_test == "▶ 运行测试"
+        assert d_test == "$ pytest -q"          # $ 是约定文本记号，保留
 
     def test_fmt_tool_unknown_caps_value(self):
         """未知工具回退 k=v，单值超长截到 60 防一行刷屏。"""
         _, detail = _fmt_tool("x", {"k": "v" * 200})
         assert detail == "k=" + "v" * 60 + "…"
+
+    def test_result_block_multiline_and_cap(self):
+        """⎿ 多行结果：首行带 ⎿ 其余缩进；超 max_lines 标 … +N 行；空→完成。"""
+        from src.tui import ChatScreen
+        b = ChatScreen._result_block("line1\nline2", max_lines=6)
+        assert b.startswith("⎿ line1") and "  line2" in b
+        many = "\n".join(f"L{i}" for i in range(10))
+        b2 = ChatScreen._result_block(many, max_lines=3)
+        assert "⎿ L0" in b2 and "… +7 行" in b2 and "L3" not in b2
+        assert ChatScreen._result_block("   \n  ") == "⎿ 完成"
+
+    def test_render_result_diff_titled_with_stats_and_body(self):
+        """含 ```diff 块 → 标题带改动摘要+(+N −M)，展开正文=彩色 Rich Text。"""
+        from rich.text import Text
+        diff = "已写入: a.py\n变更:\n```diff\n@@ -1 +1,2 @@\n-old\n+new1\n+new2\n```"
+        title, body, stats = ChatScreen._render_tool_result("write_file", diff)
+        assert stats == "(+2 −1)" and stats in title  # 2 加 1 减，标题带统计
+        assert isinstance(body, Text)                  # 展开=彩色 diff
+        # 普通短输出：标题即全部，无展开体
+        title2, body2, stats2 = ChatScreen._render_tool_result("run_command", "OK")
+        assert body2 is None and stats2 == ""
+
+    def test_render_result_read_gives_line_count_and_expandable(self):
+        """读取类：标题=行数，展开=文件内容；错误信息原样、不折叠。"""
+        numbered = "\n".join(f"{i:4d}|line{i}" for i in range(1, 6))
+        title, body, stats = ChatScreen._render_tool_result("read_file", numbered)
+        assert title == "5 行" and stats == "" and body is not None and "line3" in body
+        err_title, err_body, _ = ChatScreen._render_tool_result("read_file", "文件不存在: x.py")
+        assert "文件不存在" in err_title and err_body is None
+
+    def test_render_result_grep_gives_hit_count(self):
+        """搜索结果：标题=命中数+文件数，展开=全部匹配。"""
+        out = "src/a.py:10:foo()\nsrc/a.py:20:foo2\nsrc/b.py:3:foo3"
+        title, body, _ = ChatScreen._render_tool_result("grep_code", out)
+        assert "3 处" in title and "2 个文件" in title
+        assert body is not None and "src/b.py" in body
+
+    def test_render_result_exec_folds_multiline(self):
+        """执行代码/命令：多行输出要折叠（展开有正文）；单行短输出平铺。"""
+        title, body, _ = ChatScreen._render_tool_result("run_python", "第一行\n第二行\n第三行")
+        assert body is not None and "3 行" in title
+        # 单行短输出不折叠
+        _, body2, _ = ChatScreen._render_tool_result("run_python", "42")
+        assert body2 is None
+
+    def test_expand_file_mentions(self, tmp_path):
+        """@<存在的文件> → 内容附在消息后 + 返回已附列表；不存在的 @ 原样不动。"""
+        f = tmp_path / "note.txt"
+        f.write_text("hello content", encoding="utf-8")
+        msg = f"看看 @{f} 这个文件"
+        expanded, attached = _expand_file_mentions(msg)
+        assert attached == [str(f)]
+        assert "hello content" in expanded and f"### 引用文件 {f}" in expanded
+        assert expanded.startswith(msg)       # 原文保留在前
+        # 不存在 → 不变、空附件
+        out, att = _expand_file_mentions("没有 @/nope/missing.xyz 文件")
+        assert att == [] and out == "没有 @/nope/missing.xyz 文件"
+
+    def test_expand_file_mentions_truncates_large(self, tmp_path):
+        """超 400 行文件 → 截断并标注。"""
+        big = tmp_path / "big.txt"
+        big.write_text("\n".join(f"line{i}" for i in range(600)), encoding="utf-8")
+        expanded, attached = _expand_file_mentions(f"@{big}")
+        assert attached == [str(big)]
+        assert "截断前 400 行" in expanded
+        assert "line399" in expanded and "line400" not in expanded
 
     def test_strip_preread(self):
         assert _strip_user_wrappers("[预读]\n── 用户问题 ──\n真问题") == "真问题"
@@ -168,6 +235,34 @@ class TestSaveSelect:
 
         asyncio.run(go())
 
+    def test_item_height_bounded_with_preview(self, monkeypatch):
+        """带预览的存档项不撑出大片空白（回归：曾把项套进默认 1fr 的 Vertical）。"""
+        monkeypatch.setattr(
+            "src.session.get_sessions_info",
+            lambda sids: {s: {"name": f"名-{s}", "date": "", "time": "12:00",
+                              "preview": "这次聊了世界模型仿真评测"} for s in sids},
+        )
+
+        async def go():
+            app = CTGentsApp(CacheContext(), None, ["a", "b"])
+            async with app.run_test() as pilot:
+                for _ in range(20):
+                    await pilot.pause(0.1)
+                    if app.screen.query("#load_game"):
+                        break
+                from textual.widgets import Button, ListItem
+                app.screen.query_one("#load_game", Button).press()
+                await pilot.pause()
+                assert await _wait_screen(app, pilot, "SaveSelectScreen")
+                await pilot.pause()
+                items = list(app.screen.query(ListItem))
+                assert items, "应有存档项"
+                for it in items:
+                    assert it.size.height <= 3, f"存档项高度应≤3(预览1行)，实得 {it.size.height}"
+                assert list(app.screen.query(".save-preview")), "预览行应渲染"
+
+        asyncio.run(go())
+
 
 # ── 聊天屏 ──
 class TestChatScreen:
@@ -187,8 +282,31 @@ class TestChatScreen:
         await pilot.pause()
         assert await _wait_screen(app, pilot, "ChatScreen")
 
-    def test_busy_keeps_prompt_typeable_and_preserves_text(self, monkeypatch):
-        """跑动时输入框不禁用、busy 下回车不清空也不提交——修"按 Esc 后不能打字"。"""
+    def test_keyhints_reflect_state(self, monkeypatch):
+        """快捷键提示条随状态变：空闲露 @// help，busy 露 Esc 中断，中断态露 Enter 继续。"""
+        async def go():
+            app = self._fresh_chat_app()
+            async with app.run_test() as pilot:
+                await self._enter_chat(app, pilot)
+                s = app.screen
+                s._refresh_hints()
+                await pilot.pause()
+                idle = s.query_one("#keyhints").render()
+                assert "@" in str(idle) and "/help" in str(idle)
+                s._busy = True
+                s._refresh_hints()
+                assert "Esc" in str(s.query_one("#keyhints").render())
+                s._busy = False
+                s._interrupted = True
+                s._refresh_hints()
+                assert "继续" in str(s.query_one("#keyhints").render())
+
+        asyncio.run(go())
+
+    def test_busy_enter_queues_next_message(self, monkeypatch):
+        """跑动时输入框不禁用；busy 下回车不再静默无反应，而是把这句排队、清空输入框
+        （本轮 done 后自动发）——修"回车没反应/没法排队"的别扭点，同时不丢正在编辑的文本。
+        """
         async def go():
             app = self._fresh_chat_app()
             async with app.run_test() as pilot:
@@ -200,8 +318,44 @@ class TestChatScreen:
                 p.focus()
                 await pilot.pause()
                 assert p.disabled is False, "跑动时输入框不应被禁用"
-                s.action_submit_prompt()             # busy 下回车
-                assert p.text == "正在编辑的下一句", "busy 下回车应保留正在编辑的文本"
+                s.action_submit_prompt()             # busy 下回车 → 排队
+                assert s._queued == "正在编辑的下一句", "busy 下回车应把消息排队"
+                assert p.text == "", "排队后输入框清空（内容已进队列、未丢）"
+
+        asyncio.run(go())
+
+    def test_interrupt_enter_empty_resumes_new_text_restarts(self, monkeypatch):
+        """中断态回车：空 = 续跑被打断的事；有新内容 = 当全新消息重开（退出中断态）。
+        修"提示说'输入新消息重开'、实际却把新消息塞回旧上下文当调整指示"的自相矛盾。
+        """
+        async def go():
+            app = self._fresh_chat_app()
+            async with app.run_test() as pilot:
+                await self._enter_chat(app, pilot)
+                s = app.screen
+                calls: list = []
+                monkeypatch.setattr(s, "_resume_after_interrupt",
+                                    lambda t: calls.append(("resume", t)))
+                monkeypatch.setattr(s, "_submit_text",
+                                    lambda t: calls.append(("submit", t)))
+                p = s.query_one("#prompt")
+                # 空回车 → 续跑
+                s._busy = False
+                s._interrupted = True
+                p.text = ""
+                p.focus()
+                await pilot.pause()
+                s.action_submit_prompt()
+                assert calls == [("resume", "")]
+                # 有新内容 → 退出中断态、当新消息发
+                calls.clear()
+                s._interrupted = True
+                p.text = "换个话题：解释下缓存"
+                p.focus()
+                await pilot.pause()
+                s.action_submit_prompt()
+                assert calls == [("submit", "换个话题：解释下缓存")]
+                assert s._interrupted is False, "有新内容应退出中断态"
 
         asyncio.run(go())
 
@@ -235,10 +389,48 @@ class TestChatScreen:
                 app.screen.query_one("#transcript").remove_children()
                 app.screen._echo_conversation()
                 await pilot.pause()
-                # 用户消息现按 markdown 渲染(classes=msg-header user)，agent 回复 classes=msg-header agent；
+                # 用户=› 前缀块(.user-msg)，agent 回复挂一个 CTGents 头(.agent-name)；
                 # 工具结果/system 注入仍被跳过(不渲染)。
-                assert len(list(app.screen.query(".msg-header.user"))) == 1
-                assert len(list(app.screen.query(".msg-header.agent"))) == 1
+                assert len(list(app.screen.query(".user-msg"))) == 1
+                assert len(list(app.screen.query(".agent-name"))) == 1
+
+        asyncio.run(go())
+
+    def test_merged_tool_widget_collapsible_carries_call_info(self, monkeypatch):
+        """合并单元：有展开内容→Collapsible(默认收起)，标题带工具+参数；无内容→一行 ⏺ Static。"""
+        async def go():
+            app = self._fresh_chat_app()
+            from textual.widgets import Collapsible, Static
+            async with app.run_test() as pilot:
+                await self._enter_chat(app, pilot)
+                s = app.screen
+                numbered = "\n".join(f"{i:4d}|x{i}" for i in range(1, 8))
+                w = s._build_merged_tool_widget("读取", "a.py · L1-7", "read_file", numbered)
+                assert isinstance(w, Collapsible) and w.collapsed is True
+                assert "读取" in w.title and "a.py" in w.title   # 调用信息并进折叠标题
+                w2 = s._build_merged_tool_widget("执行命令", "$ ok", "run_command", "OK")
+                assert isinstance(w2, Static)
+                assert "执行命令" in str(w2.render())
+
+        asyncio.run(go())
+
+    def test_speaker_markers_warm_cool(self, monkeypatch):
+        """说话人标记：用户 ❯（暖）、CTGents ◆（冷），无每轮时间戳。"""
+        async def go():
+            app = self._fresh_chat_app()
+            async with app.run_test() as pilot:
+                await self._enter_chat(app, pilot)
+                app.ctx.log = [
+                    {"role": "user", "content": "问题A"},
+                    {"role": "assistant", "content": "回复B"},
+                ]
+                app.screen.query_one("#transcript").remove_children()
+                app.screen._echo_conversation()
+                await pilot.pause()
+                user = str(list(app.screen.query(".user-msg"))[0].render())
+                agent = str(list(app.screen.query(".agent-name"))[0].render())
+                assert user.startswith("❯")
+                assert agent == "◆ CTGents"       # 无 · 时间戳
 
         asyncio.run(go())
 
@@ -264,6 +456,213 @@ class TestChatScreen:
                 # 2 思考折叠，工具不再渲染
                 assert len(cols) == 2, f"应有 2 个折叠块(思考)，实得 {len(cols)}"
                 assert all(c.collapsed for c in cols), "回放的折叠块应默认折叠"
+
+        asyncio.run(go())
+
+    def test_prune_keeps_last_three_turns(self, monkeypatch):
+        """组件累积多轮后剪枝：只留最近 3 轮用户头 + 顶部折叠提示。
+
+        "越用越卡"的真因=组件只增不减；_run_turn 前 _prune_transcript 守住上限，
+        只动显示层（不碰 ctx.log）。
+        """
+        async def go():
+            app = self._fresh_chat_app()
+            from textual.widgets import Label, Markdown, Static
+            async with app.run_test() as pilot:
+                await self._enter_chat(app, pilot)
+                s = app.screen
+                t = s.query_one("#transcript")
+                t.remove_children()
+                await pilot.pause()
+                for i in range(6):                       # 模拟 6 轮
+                    t.mount(Static(f"› 你 {i}", classes="user-msg"))
+                    t.mount(Label(f"CTGents {i}", classes="agent-name"))
+                    t.mount(Markdown(f"答复{i}", classes="msg-body"))
+                await pilot.pause()
+                s._prune_transcript()
+                await pilot.pause()
+                users = list(s.query(".user-msg"))
+                assert len(users) == 3, f"应只剩最近 3 轮用户块，实得 {len(users)}"
+                assert "你 3" in str(users[0].render()), "最早保留的应是第 3 轮"
+                markers = [w for w in s.query(Static) if "已折叠" in str(w.render())]
+                assert len(markers) == 1, "应有一行折叠提示"
+
+        asyncio.run(go())
+
+    def test_copy_code_grabs_last_block(self, monkeypatch):
+        """Ctrl+Y 复制 agent 最后回复的最后一个代码块到剪贴板。"""
+        async def go():
+            app = self._fresh_chat_app()
+            async with app.run_test() as pilot:
+                await self._enter_chat(app, pilot)
+                s = app.screen
+                copied = []
+                monkeypatch.setattr(app, "copy_to_clipboard", lambda t: copied.append(t))
+                s._last_agent_text = (
+                    "先看这个:\n```python\nprint(1)\n```\n再跑:\n```bash\nls -la\npwd\n```"
+                )
+                s.action_copy_code()
+                await pilot.pause()
+                assert copied == ["ls -la\npwd"]        # 最后一个块，去围栏
+                # 无代码块 → 不复制、给提示
+                copied.clear()
+                s._last_agent_text = "纯文本没有代码"
+                s.action_copy_code()
+                assert copied == []
+
+        asyncio.run(go())
+
+    def test_show_history_expands_beyond_prune_cap(self, monkeypatch):
+        """Ctrl+R 回看：默认精简只显最近 3 轮，展开后本会话全部轮都渲染。"""
+        async def go():
+            app = self._fresh_chat_app()
+            async with app.run_test() as pilot:
+                await self._enter_chat(app, pilot)
+                s = app.screen
+                # 造 5 轮对话（user + assistant 文字）
+                log = []
+                for i in range(5):
+                    log.append({"role": "user", "content": f"问题{i}"})
+                    log.append({"role": "assistant", "content": f"答复{i}"})
+                app.ctx.log = log
+                s.query_one("#transcript").remove_children()
+                s._echo_conversation()                       # 默认精简
+                await pilot.pause()
+                assert len(list(s.query(".user-msg"))) == 3
+                s.action_show_history()                       # Ctrl+R 展开全部
+                await pilot.pause()
+                assert len(list(s.query(".user-msg"))) == 5
+
+        asyncio.run(go())
+
+    def test_task_panel_shows_hides_windows(self, monkeypatch):
+        """有未完成任务 → 面板显示(窗口≤4跟随活跃步)；无步骤/全做完 → 隐藏。"""
+        import src.tasks as tasks
+
+        def set_steps(steps, unfinished=True):
+            monkeypatch.setattr(tasks, "task_steps", lambda: steps)
+            monkeypatch.setattr(tasks, "has_unfinished", lambda: unfinished)
+
+        async def go():
+            app = self._fresh_chat_app()
+            async with app.run_test() as pilot:
+                await self._enter_chat(app, pilot)
+                s = app.screen
+                panel = s.query_one("#taskpanel")
+                # 3 步、有未完成 → 显示
+                set_steps([("✅", "一"), ("🔄", "二"), ("⬜", "三")])
+                s._refresh_task_panel()
+                await pilot.pause()
+                assert not panel.has_class("hidden")
+                assert "1/3" in str(panel.render()) and "二" in str(panel.render())
+                # 8 步 → 只显窗口 4 + 「还有 N」滑动指示，不全列
+                set_steps([("✅", f"步{i}") for i in range(3)]
+                          + [("🔄", "步3")] + [("⬜", f"步{i}") for i in range(4, 8)])
+                s._refresh_task_panel()
+                r = str(panel.render())
+                assert "↑" in r and "↓ 还有" in r and "步7" not in r  # 窗口化、尾部未全列
+                # 全做完(无未完成) → 收起，不赖着
+                set_steps([("✅", "一"), ("✅", "二")], unfinished=False)
+                s._refresh_task_panel()
+                await pilot.pause()
+                assert panel.has_class("hidden")
+                # 无步骤 → 收起
+                set_steps([], unfinished=False)
+                s._refresh_task_panel()
+                assert panel.has_class("hidden")
+
+        asyncio.run(go())
+
+    def test_at_file_autocomplete(self, monkeypatch):
+        """输入 @partial → 弹出匹配文件下拉；接受 → 回填 @path；无 @ → 隐藏。"""
+        async def go():
+            app = self._fresh_chat_app()
+            async with app.run_test() as pilot:
+                await self._enter_chat(app, pilot)
+                s = app.screen
+                s._ac_files_cache = ["src/tui.py", "src/tasks.py", "README.md"]  # 受控列表
+                popup = s.query_one("#ac_popup")
+                prompt = s.query_one("#prompt")
+                prompt.text = "看 @t"
+                s._ac_update(prompt.text)
+                await pilot.pause()
+                assert s._ac_active and not popup.has_class("hidden")
+                assert s._ac_options == ["src/tui.py", "src/tasks.py"]  # README 无 t、被排除
+                # ↓ 切换选中
+                assert s._ac_consume_key("down") and s._ac_index == 1
+                # 接受 → 回填 @选中路径 + 空格，关闭下拉
+                s._ac_index = 0
+                s._ac_accept()
+                assert prompt.text.startswith("看 @src/tui.py ")
+                assert not s._ac_active and popup.has_class("hidden")
+                # 无 @ → 隐藏
+                prompt.text = "没有引用"
+                s._ac_update(prompt.text)
+                assert not s._ac_active and popup.has_class("hidden")
+
+        asyncio.run(go())
+
+    def test_code_block_renders_as_fence(self):
+        """输出的 ```代码块渲染成 MarkdownFence（语法高亮载体；CSS 给它对比底色）。"""
+        async def go():
+            from textual.widgets import Markdown
+            from textual.widgets._markdown import MarkdownFence
+            app = self._fresh_chat_app()
+            async with app.run_test() as pilot:
+                await self._enter_chat(app, pilot)
+                t = app.screen.query_one("#transcript")
+                md = Markdown(classes="msg-body")
+                await t.mount(md)
+                await md.update("```python\ndef foo(x):\n    return x + 1\n```")
+                await pilot.pause()
+                assert len(list(app.screen.query(MarkdownFence))) >= 1, "```块应渲染成 MarkdownFence"
+
+        asyncio.run(go())
+
+    def test_slash_command_autocomplete(self, monkeypatch):
+        """打 / → 命令补全下拉(带描述)；接受 → 回填 /命令 ；完整命令名时 Enter 直接运行。"""
+        async def go():
+            app = self._fresh_chat_app()
+            async with app.run_test() as pilot:
+                await self._enter_chat(app, pilot)
+                s = app.screen
+                prompt = s.query_one("#prompt")
+                prompt.text = "/he"
+                s._ac_update(prompt.text)
+                await pilot.pause()
+                assert s._ac_active and s._ac_mode == "cmd"
+                assert "/help" in s._ac_options                       # 前缀匹配
+                assert any(lbl.startswith("/help ") for lbl in s._ac_labels)  # 标签带描述
+                s._ac_index = s._ac_options.index("/help")
+                s._ac_accept()
+                assert prompt.text == "/help " and not s._ac_active   # 回填 + 关闭
+                # 纯 / → 列全部命令
+                prompt.text = "/"
+                s._ac_update(prompt.text)
+                assert s._ac_active and len(s._ac_options) > 3
+
+        asyncio.run(go())
+
+    def test_at_file_autocomplete_windows_many(self, monkeypatch):
+        """匹配数 > 一屏 → 窗口化，↓ 滑动，显示『还有 N 个』。"""
+        async def go():
+            app = self._fresh_chat_app()
+            async with app.run_test() as pilot:
+                await self._enter_chat(app, pilot)
+                s = app.screen
+                s._ac_files_cache = [f"src/mod{i:02d}.py" for i in range(30)]  # 30 个都含 mod
+                popup = s.query_one("#ac_popup")
+                prompt = s.query_one("#prompt")
+                prompt.text = "@mod"
+                s._ac_update(prompt.text)
+                await pilot.pause()
+                assert len(s._ac_options) == 30        # 存全部（≤50），不再只 10
+                first = str(popup.render())
+                assert "↓ 还有" in first and "↑ 还有" not in first  # 在顶部，只有下方更多
+                for _ in range(29):                    # 一路 ↓ 到底
+                    s._ac_consume_key("down")
+                assert s._ac_index == 29
+                assert "↑ 还有" in str(popup.render())  # 滑到底，上方有更多
 
         asyncio.run(go())
 
@@ -343,8 +742,8 @@ class TestChatScreen:
                     await pilot.pause(0.05)
                 assert s._interrupted is False
                 assert seen and "改用中文" in seen[0], seen
-                # 用户那条按 markdown 回显(classes=user)，source 即原文
-                assert any(getattr(u, "source", "") == "改用中文" for u in s.query(".msg-body"))
+                # 用户那条按 › 前缀块(.user-msg)回显
+                assert any("改用中文" in str(u.render()) for u in s.query(".user-msg"))
 
         asyncio.run(go())
 

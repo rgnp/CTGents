@@ -1,0 +1,9 @@
+name: ad-method-audit
+version: "1.0"
+description: >
+  自动驾驶方法审计——逐条对照 AD 六不动点，审计方法的闭环合理性、
+  时序一致性、开环→闭环 warrant、长尾覆盖、资源约束和证据时效。
+
+axes: []
+
+always_load: []

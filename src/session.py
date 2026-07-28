@@ -1,8 +1,33 @@
+from __future__ import annotations
+
+import contextlib
 import json
 import os
+import tempfile
 from datetime import datetime
 
 from .config import SESSION_DIR
+
+
+def _atomic_write_text(path: str, text: str) -> None:
+    """原子写：先写同目录临时文件（flush+fsync 落盘）再 os.replace 换名。
+
+    os.replace 在 Windows / POSIX 都是原子操作——读取方永远看到「旧完整」或
+    「新完整」，绝不会撞上写到一半的截断 JSON。杜绝「autosave 每工具循环高频写盘，
+    某次写到一半崩溃/断电 → messages.json 半截损坏 → 下次打不开」这一失败类。
+    """
+    d = os.path.dirname(path) or "."
+    fd, tmp = tempfile.mkstemp(dir=d, prefix=".tmp-", suffix=".json")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            f.write(text)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp, path)
+    except Exception:
+        with contextlib.suppress(Exception):
+            os.unlink(tmp)
+        raise
 
 
 def list_sessions() -> list[str]:
@@ -59,16 +84,61 @@ def list_session_names(session_ids: list[str]) -> dict[str, str]:
 
 
 
-def get_sessions_info(session_ids: list[str]) -> dict[str, dict]:
-    """批量获取会话信息：名字 + 格式化的日期/时间。
+def _session_preview(session_id: str, limit: int = 54) -> str:
+    """一句话预览：summary.txt 首行优先，无则回退 messages.json 首条 user 消息。
 
-    返回 {sid: {"name": str, "date": str, "time": str}}
+    让存档列表从"一堵时间戳墙"变成"一眼认出是哪次对话"。
+    """
+    try:
+        with open(os.path.join(_session_path(session_id), "summary.txt"), encoding="utf-8") as f:
+            line = f.read().strip().split("\n", 1)[0].strip()
+            if line:
+                return line[:limit]
+    except Exception:
+        pass
+    try:
+        for m in load_session(session_id):
+            if m.get("role") == "user":
+                c = (m.get("content") or "").strip()
+                for mark in ("── 用户问题 ──", "【用户消息】"):
+                    if mark in c:
+                        c = c.split(mark, 1)[1].strip()
+                c = c.split("\n", 1)[0].strip()
+                if c:
+                    return c[:limit]
+    except Exception:
+        pass
+    return ""
+
+
+def save_session_name(session_id: str, name: str) -> None:
+    """给会话命名（写进 meta.json，原子写）。空名视为清除。"""
+    sess_dir = _session_path(session_id)
+    os.makedirs(sess_dir, exist_ok=True)
+    meta: dict = {}
+    try:
+        with open(_meta_path(session_id), encoding="utf-8") as f:
+            meta = json.load(f)
+    except Exception:
+        pass
+    name = name.strip()
+    if name:
+        meta["name"] = name
+    else:
+        meta.pop("name", None)
+    _atomic_write_text(_meta_path(session_id), json.dumps(meta, ensure_ascii=False, indent=2))
+
+
+def get_sessions_info(session_ids: list[str]) -> dict[str, dict]:
+    """批量获取会话信息：名字 + 格式化的日期/时间 + 一句话预览。
+
+    返回 {sid: {"name": str, "date": str, "time": str, "preview": str}}
     date 为空串表示"今天"，date 非空表示"月-日"。
     """
     now = datetime.now()
     result: dict[str, dict] = {}
     for sid in session_ids:
-        info: dict[str, str] = {"name": sid, "date": "", "time": ""}
+        info: dict[str, str] = {"name": sid, "date": "", "time": "", "preview": ""}
         # 名字：从 meta.json 读取
         try:
             with open(_meta_path(sid), encoding="utf-8") as f:
@@ -76,6 +146,7 @@ def get_sessions_info(session_ids: list[str]) -> dict[str, dict]:
                 info["name"] = meta.get("name", sid)
         except Exception:
             pass
+        info["preview"] = _session_preview(sid)
         # 时间：从 session ID（时间戳）解析
         try:
             dt = datetime.strptime(sid, "%Y-%m-%d-%H%M%S")
@@ -134,8 +205,8 @@ def save_session(messages: list[dict], session_id: str | None = None) -> str:
     # 过滤掉运行时注入的易变消息（环境上下文等）
     persist = [m for m in messages if not m.get("_volatile")]
 
-    with open(_messages_path(session_id), "w", encoding="utf-8") as f:
-        json.dump(_sanitize_surrogates(persist), f, ensure_ascii=False, indent=2)
+    text = json.dumps(_sanitize_surrogates(persist), ensure_ascii=False, indent=2)
+    _atomic_write_text(_messages_path(session_id), text)
 
     return session_id
 
@@ -168,8 +239,7 @@ def save_prefix(session_id: str, prefix_msgs: list[dict]) -> None:
                 return  # 未变化，跳过写盘
     except Exception:
         pass
-    with open(path, "w", encoding="utf-8") as f:
-        f.write(data)
+    _atomic_write_text(path, data)
 
 
 def load_prefix(session_id: str) -> list[dict] | None:

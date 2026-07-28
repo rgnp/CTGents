@@ -1,0 +1,18 @@
+name: design-tests
+version: "1.0"
+description: 将代码改动风险映射为测试层次、用例和诊断性断言
+
+axes:
+  - id: operation
+    name: 测试操作
+    default: design
+    values:
+      - id: design
+        label: 设计新测试
+      - id: review
+        label: 审查现有测试
+      - id: triage
+        label: 定位失败测试
+
+always_load: []
+on_demand: []

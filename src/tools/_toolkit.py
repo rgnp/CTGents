@@ -56,6 +56,7 @@ class Toolkit:
         *,
         label: str | None = None,
         params: dict[str, str] | None = None,
+        group: str = "",
         parallel_safe: bool = False,
         skip_compress: bool = False,
         dedup_blacklist: bool = False,
@@ -72,6 +73,8 @@ class Toolkit:
             description = doc.split("\n", 1)[0].strip() if doc else name
             properties, required = self._derive_params(fn, params)
             meta: dict = {"label": label or name}
+            if group:
+                meta["group"] = group
             if parallel_safe:
                 meta["parallel_safe"] = True
             if skip_compress:

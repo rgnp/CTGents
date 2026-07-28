@@ -2,18 +2,24 @@
 用于研究探索——快速获取开源代码库。
 """
 
+from __future__ import annotations
+
+import os
 import subprocess
 from pathlib import Path
 
 # ── 默认存放目录 ──
-DEFAULT_REPO_ROOT = Path(r"D:\git")
+# 不放进 agent 自己的项目目录——外部克隆的仓库跟自身代码混在一起，
+# 之前导致过一次误删自身工作区数据的风险。默认落在用户主目录下，
+# 跨平台都能写；可用 CTG_REPO_ROOT 覆盖。
+DEFAULT_REPO_ROOT = Path(os.environ.get("CTG_REPO_ROOT", str(Path.home() / "ctgents-repos")))
 
 
 # ── 工具定义 ──
 
 TOOLS_REPO = [
     {
-        "_meta": {"label": "克隆仓库", "dedup_blacklist": True},
+        "_meta": {"label": "克隆仓库", "dedup_blacklist": True, "group": "repo"},
         "type": "function",
         "function": {
             "name": "repo_clone",
@@ -42,7 +48,7 @@ TOOLS_REPO = [
         },
     },
     {
-        "_meta": {"label": "仓库状态", "parallel_safe": True},
+        "_meta": {"label": "仓库状态", "parallel_safe": True, "group": "repo"},
         "type": "function",
         "function": {
             "name": "repo_status",

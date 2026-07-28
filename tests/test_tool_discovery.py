@@ -19,6 +19,25 @@ def test_discovers_real_tool_modules():
         assert tools_attr.startswith("TOOLS_")
         assert exec_attr == "execute"
 
+def test_delegate_registered_with_right_meta():
+    """Delegate 自动注册；必须串行（嵌套 run_conversation 不能进 eager 线程池）+ 不去重。"""
+    from src.tools._tool_meta import DEDUP_BLACKLIST, PARALLEL_SAFE
+    names = {t["function"]["name"] for t in get_tools()}
+    assert "delegate" in names
+    assert "delegate" not in PARALLEL_SAFE
+    assert "delegate" in DEDUP_BLACKLIST
+
+
+def test_get_tools_subset_bypasses_groups_and_caches():
+    """子集按名取、无视可选组开关；同 names 返回同一对象（worker 前缀字节稳定）。"""
+    names = frozenset({"search_web", "rag_search"})
+    sub = tools_pkg.get_tools_subset(names)
+    got = {t["function"]["name"] for t in sub}
+    assert got == {"search_web", "rag_search"}   # rag_search 在默认未启用的 research 组
+    assert all("_meta" not in t for t in sub)
+    assert tools_pkg.get_tools_subset(frozenset({"search_web", "rag_search"})) is sub
+
+
 def test_skips_underscore_and_helper_files():
     """私有文件（_ 前缀）与无 TOOLS_* 的辅助文件不入清单。"""
     stems = {p for p, _, _ in _tool_meta._discover_builtin_modules()}

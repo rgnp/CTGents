@@ -91,6 +91,9 @@ def test_pure_append_no_system_tail_by_default(monkeypatch):
 
     对话末尾即"输入结束位置",下轮首请求可靠命中缓存单元(见 [[ctgents-context-cache]])。
     """
+    # 隔离纯追加基线：关掉"开工前强制思考"（它会追加一条 _force_plan system 提示到 log——
+    # 那是永久追加、非 send() 易变挂尾，与终止门/审计 nudge 同类，单独在 test_llm 覆盖）。
+    monkeypatch.setenv("CTG_FORCE_PLAN", "0")
     ctx = _prefix_ctx()
     n_prefix = len(ctx.prefix)
     _mock_llm(monkeypatch,
@@ -127,19 +130,26 @@ def test_send_wellformed_no_orphan_tool(monkeypatch):
             assert m.get("tool_call_id") in seen, "孤儿 tool 消息 → API 会 400"
 
 
-# ── 固定 stance 已搬前缀，缓存零成本 ──────────────────────────
+# ── 工作人格已从前缀迁入常驻 general psyche（迁移不叠加）──────────
 
-def test_evidence_stance_lives_in_prefix(monkeypatch):
-    """信心要匹配证据的提醒在缓存前缀中, 常量文本放前缀缓存零成本。
+def test_work_persona_migrated_out_of_prefix():
+    """行为人格（认知姿态/证据分层/出活准则/语气）从 AGENTS.md 前缀迁出。
 
-    原挂尾靠 recency, 同思考牙: 搬进前缀后 send() 仍含此提醒, 零 miss。
+    实验（2026-06-24）：测"通用姿态写成人格 vs 写成前缀规则"。迁移不叠加——
+    AGENTS.md 不再含这套 stance 散文（避免两份竞争），改由常驻 general psyche 承载。
     """
+    agents = main._make_agents_message()["content"]
+    assert "不替 plausible" not in agents, "工作人格 stance 应已迁出 AGENTS.md 前缀"
+
+
+def test_work_persona_injected_by_base_psyche():
+    """工作人格由 general psyche 常驻注入 → send() 中含证据分层提醒。"""
+    from src.psyche_bridge import ensure_base_psyche
     ctx = _prefix_ctx()
-    _mock_llm(monkeypatch, ("好", []))
-    _drive_turn(ctx, "随便说点")
+    ensure_base_psyche(ctx)
     api = ctx.send()
-    prefix_text = "\n".join(m.get("content") or "" for m in api if m["role"] == "system")
-    assert "证据" in prefix_text, "证据提醒应在前缀中"
+    api_text = "\n".join(m.get("content") or "" for m in api if m["role"] == "system")
+    assert "证据" in api_text, "工作人格（证据分层）应由 general psyche 注入、在 send() 中"
 
 
 # 建任务建议(maybe_suggest_task_nudge 挂尾)随挂尾机制整体删除,对应的

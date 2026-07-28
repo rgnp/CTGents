@@ -66,8 +66,9 @@ class TestMetaStripping:
         names = {t["function"]["name"] for t in tools}
         # 下限而非精确值：开发期常加工具，精确计数每加一个就误红（反"更好维护"）。
         # 下限防"派生塌陷/批量掉工具",具体存在性靠点名 + 无重名结构不变量。
-        # 下限 40：默认 ~44（research 可选组 load-on-demand、默认不挂，见 test_tool_discovery）。
-        assert len(tools) >= 40, f"工具数异常偏低，实际 {len(tools)}"
+        # 下限 30：默认 31（core 组），git/files-mutate/memory-mutate/research/rag/repo
+        # 为可选组、默认不挂。具体存在性见 test_tool_discovery。
+        assert len(tools) >= 30, f"工具数异常偏低，实际 {len(tools)}"
         assert len(names) == len(tools), "存在重名工具"
         for n in ("read_file", "write_file", "self", "run_async", "poll"):
             assert n in names
@@ -124,6 +125,12 @@ class TestDispatchContract:
                 f"{ex.__module__} 的 execute 截胡了外来工具名，返回 {result!r}；"
                 f"不归自己的名字必须返回 None 以交还责任链"
             )
+
+    def test_removed_lint_tools_leave_no_empty_executor(self):
+        """TOOLS_LINT 为空后，lint 不应继续占据每次工具调用的责任链。"""
+        from src.tools import _EXECUTORS
+
+        assert all(ex.__module__ != "src.tools.lint" for ex in _EXECUTORS)
 
     def test_self_routes_to_self_module_not_rag(self):
         """路由 self 工具到 self 模块，而非被 rag 吞成错误串。"""

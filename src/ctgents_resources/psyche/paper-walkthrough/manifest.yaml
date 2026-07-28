@@ -1,0 +1,15 @@
+id: paper-walkthrough
+version: "0.4"
+kind: mode
+core: 核心/paper-walkthrough-core.md
+requires: [research]
+scope_default: task
+summary: 保持论文叙事顺序的逐步带读与理解构建
+judgment_delta:
+  - 从一次性分析切换为同步、渐进的陪读节奏
+  - 先建立理解再进行论证审计
+skills: [paper-walkthrough]
+conflicts: [paper-co-read]
+exit_checks:
+  - 是否基于原文而不是既有记忆带读？
+  - 是否保持当前阅读阶段而没有提前摊牌？

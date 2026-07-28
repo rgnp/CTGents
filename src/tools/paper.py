@@ -1,14 +1,88 @@
-"""论文工具：read_paper —— 解析 PDF 正文。"""
+"""论文工具：read_paper 解析 PDF 正文；fetch_paper 下载；transcribe_paper 转写落盘。
 
+fetch_paper / transcribe_paper 是 paper-pipeline 阶段 1/2 的"去利刃"版：原先 skill
+指导 agent 用 run_python 即兴写 requests/fitz 代码——有人会话里能跑，但无人期
+（heartbeat worker）白名单刻意不给 run_python（任意代码=无边界）。把这两步机械
+动作沉淀成窄工具：下载只进 knowledge/ 且校验 PDF 魔数/大小，转写只从项目内 PDF
+到 knowledge/ 下 .md——两种模式共用，有人会话也不必再即兴写下载代码。
+"""
+
+from __future__ import annotations
+
+import re
+import urllib.error
+import urllib.request
 from pathlib import Path
 
 import pymupdf
 
+from ..paths import KNOWLEDGE_DIR, resolve_runtime_path
+
 MAX_CHARS = 30_000  # 单次返回最大字符数，超出截断
 PAGE_SEP = "\n\n--- 第 {page} 页 ---\n\n"
 
+_PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
+_ARXIV_ID_RE = re.compile(r"^\d{4}\.\d{4,5}(v\d+)?$")
+_MIN_PDF_BYTES = 50_000          # 小于此值多半是错误页/占位页，不是论文
+_MAX_PDF_BYTES = 80 * 1024 * 1024
+_DOWNLOAD_TIMEOUT = 90.0
+_UA = "Mozilla/5.0 (compatible; ResearchBot/1.0)"
+
 
 TOOLS_PAPER = [
+    {
+        "_meta": {"label": "下载论文", "group": "research", "dedup_blacklist": True},
+        "type": "function",
+        "function": {
+            "name": "fetch_paper",
+            "description": (
+                "下载论文 PDF 到 knowledge/ 下（自动校验是有效 PDF）。"
+                "source 支持 arXiv ID（如 2401.12345）或 https:// 的 PDF 直链。"
+                "下载后用 read_paper 读取或 transcribe_paper 转写。"
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "source": {
+                        "type": "string",
+                        "description": "arXiv ID（如 2401.12345）或 https PDF 直链",
+                    },
+                    "dest": {
+                        "type": "string",
+                        "description": "项目内目标路径，须在 knowledge/ 下且以 .pdf 结尾，"
+                                       "如 knowledge/paper/<slug>/paper.pdf",
+                    },
+                },
+                "required": ["source", "dest"],
+            },
+        },
+    },
+    {
+        "_meta": {"label": "转写论文", "group": "research", "dedup_blacklist": True},
+        "type": "function",
+        "function": {
+            "name": "transcribe_paper",
+            "description": (
+                "把项目内的论文 PDF 全文转写成 Markdown 落盘（逐页，页头 '## Page N'）。"
+                "paper-pipeline 阶段 2 的机械转写步骤。"
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "src": {
+                        "type": "string",
+                        "description": "项目内 PDF 路径，如 knowledge/paper/<slug>/paper.pdf",
+                    },
+                    "dest": {
+                        "type": "string",
+                        "description": "输出 Markdown 路径，须在 knowledge/ 下且以 .md 结尾，"
+                                       "如 knowledge/paper/<slug>/paper.md",
+                    },
+                },
+                "required": ["src", "dest"],
+            },
+        },
+    },
     {
         "_meta": {"label": "读论文", "parallel_safe": True, "group": "research"},
         "type": "function",
@@ -39,6 +113,85 @@ TOOLS_PAPER = [
         },
     },
 ]
+
+
+def _resolve_in_project(rel: str, *, root_dir: str, suffix: str) -> tuple[Path | None, str]:
+    """把虚拟相对路径解析进个人知识库，校验后缀。返回 (path, 错误文案)。"""
+    try:
+        target = resolve_runtime_path(rel, _PROJECT_ROOT)
+        target.relative_to(KNOWLEDGE_DIR)
+    except (ValueError, OSError):
+        return None, f"❌ 路径必须位于个人 workspace 的 {root_dir}/ 下，收到 {rel!r}。"
+    parts = Path(rel).parts
+    if not parts or parts[0] != root_dir:
+        return None, f"❌ 路径必须位于 {root_dir}/ 下，收到 {rel!r}。"
+    if target.suffix.lower() != suffix:
+        return None, f"❌ 路径必须以 {suffix} 结尾，收到 {rel!r}。"
+    return target, ""
+
+
+def _download(url: str) -> bytes:
+    """按 UA/超时下载，读到大小上限即止。独立函数便于测试打桩。"""
+    req = urllib.request.Request(url, headers={"User-Agent": _UA})
+    with urllib.request.urlopen(req, timeout=_DOWNLOAD_TIMEOUT) as resp:  # noqa: S310  https-only 由调用方校验
+        return resp.read(_MAX_PDF_BYTES + 1)
+
+
+def fetch_paper(source: str, dest: str) -> str:
+    """下载论文 PDF 到 knowledge/ 下；校验 https 来源、PDF 魔数与大小。"""
+    src = (source or "").strip()
+    if _ARXIV_ID_RE.match(src):
+        url = f"https://arxiv.org/pdf/{src}.pdf"
+    elif src.startswith("https://"):
+        url = src
+    else:
+        return "❌ source 需为 arXiv ID（如 2401.12345）或 https:// 的 PDF 直链。"
+
+    target, err = _resolve_in_project(dest, root_dir="knowledge", suffix=".pdf")
+    if err:
+        return err + " 推荐 knowledge/paper/<slug>/paper.pdf。"
+
+    try:
+        data = _download(url)
+    except (urllib.error.URLError, TimeoutError, OSError) as exc:
+        return f"❌ 下载失败: {exc}（可稍后重试；连续失败按 pipeline 规则记 download_error）"
+    if len(data) > _MAX_PDF_BYTES:
+        return f"❌ 文件超过 {_MAX_PDF_BYTES // (1024 * 1024)}MB 上限，拒绝落盘: {url}"
+    if len(data) < _MIN_PDF_BYTES or not data.startswith(b"%PDF"):
+        return (f"❌ 下载内容不是有效 PDF（{len(data)} 字节，魔数 {data[:5]!r}）——"
+                "可能是错误页/被拦截，不落盘。")
+
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_bytes(data)
+    return f"✅ 已下载 {url} → {dest}（{len(data) // 1024} KB）。可用 read_paper 读取或 transcribe_paper 转写。"
+
+
+def transcribe_paper(src: str, dest: str) -> str:
+    """PDF 全文逐页转写成 Markdown 落盘（页头 '## Page N'），返回行数/页数统计。"""
+    pdf_path, err = _resolve_in_project(src, root_dir="knowledge", suffix=".pdf")
+    if err:
+        return err
+    if not pdf_path.exists():
+        return f"❌ PDF 不存在: {src}"
+    target, err = _resolve_in_project(dest, root_dir="knowledge", suffix=".md")
+    if err:
+        return err + " 推荐 knowledge/paper/<slug>/paper.md。"
+
+    try:
+        doc = pymupdf.open(str(pdf_path))
+    except Exception as exc:  # noqa: BLE001  pymupdf 异常类型不稳定，统一转人话
+        return f"❌ 打开 PDF 失败: {src} — {exc}"
+    try:
+        pages = [f"## Page {page.number + 1}\n\n{page.get_text()}" for page in doc]
+    finally:
+        doc.close()
+
+    text = "\n\n".join(pages)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(text, encoding="utf-8")
+    n_lines = text.count("\n") + 1
+    return (f"✅ 已转写 {src} → {dest}（{len(pages)} 页，{n_lines} 行，{len(text)} 字符）。"
+            "质量检查（行数/Abstract/Introduction/Conclusion）由你按 pipeline 清单核对。")
 
 
 def read_paper(path: str, start_page: int | None = None, end_page: int | None = None) -> str:
@@ -117,4 +270,8 @@ def execute(name: str, args: dict) -> str | None:
             args.get("start_page"),
             args.get("end_page"),
         )
+    if name == "fetch_paper":
+        return fetch_paper(args["source"], args["dest"])
+    if name == "transcribe_paper":
+        return transcribe_paper(args["src"], args["dest"])
     return None

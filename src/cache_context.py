@@ -14,6 +14,8 @@
     session.save(ctx.all)               # prefix + log 用于持久化
 """
 
+from __future__ import annotations
+
 import hashlib as _hashlib
 import json
 import logging
@@ -33,14 +35,14 @@ def _compute_msg_hash(msgs: list[dict]) -> str:
     return _hashlib.sha256(safe.encode()).hexdigest()[:16]
 
 
-def _stub_tool_content(content: str) -> str:
-    """把陈旧大工具结果折成一行：保留首行信号 + 原长度 + 取回指引。
+def _stub_tool_content(content: str, tool_call_id: str = "") -> str:
+    """把陈旧大工具结果折成一行：保留首行信号 + 原长度。
 
     首行常含关键信号（"已写入: path" / "退出码:..." / read 的文件头），留它让
-    模型知道这步干了啥；原文不丢（在 self.log 里，落盘 + 可 recall）。
+    模型知道这步干了啥；折叠只动发送副本，原文不丢（在 self.log 里、随会话落盘）。
     """
     head = content.split("\n", 1)[0].strip()[:160]
-    return f"{head} … 〔旧工具结果已折叠·原 {len(content)} 字·原文见 session / 可 recall〕"
+    return f"{head} … 〔旧工具结果已折叠·原 {len(content)} 字·原文在会话存档〕"
 
 
 class PrefixIntegrityError(RuntimeError):
@@ -67,6 +69,10 @@ class CacheContext:
         self.log: list[dict] = list(log_msgs or [])
         self.scratch: list[dict] = []
         self._prefix_hash: str = _compute_msg_hash(self.prefix)
+        # Psyche 的运行时单一真相源。事件仍写入 log 做持久化；加载旧会话时由
+        # psyche_bridge 首次访问一次性归约，之后不再每轮扫描整段历史。
+        self.psyche_stack: dict[str, dict] = {}
+        self._psyche_stack_synced: bool = False
         # 循环控制信号：agent 调 task_done/need_user 时由 run_conversation 置位（取代
         # "不调工具=结束"的隐式判断）。续跑/主干据此决定停或继续。见 tools/control.py。
         self.control_signal: str | None = None
@@ -129,8 +135,8 @@ class CacheContext:
 
         prefix 段：不可变系统消息（会话级冻结、哈希锁死）。
         log 段：只追加对话（user/assistant/tool），丢弃 volatile system。
-        尾段：游离态挂尾——阅后即焚，不进 self.log，利用近因效应聚焦当前任务步骤。
-        前缀缓存不受影响（prefix + log 序列不变，尾段是临时追加的易失消息）。
+        不存在游离态挂尾；任何需要模型看到的新上下文都必须先 append 到 log。
+        因而一次请求的完整 payload 可以成为下一次请求的字节前缀。
 
         Args:
             validate: 是否校验 prefix 完整性，默认 True。
@@ -155,29 +161,13 @@ class CacheContext:
         cleaned = [self._clean_log_msg(m) for m in kept]
         # 中段视图变换：折叠陈旧大工具结果（不动 self.log，原文照常落盘/可 recall）
         cleaned = self._collapse_stale_tool_results(cleaned)
-        api.extend(self._repair_tool_pairing(cleaned))
+        api.extend(cleaned)
 
-        # ── 游离态挂尾注入（阅后即焚，不进 self.log）──
-        try:
-            from .tasks import read_current_active_step
-            _active = read_current_active_step()
-            if _active:
-                api.append({
-                    "role": "system",
-                    "content": (
-                        "【系统最高指令 / 当前操作台】\n"
-                        "无论上方的历史对话多么冗长，你当前必须且只能聚焦于以下任务切片：\n"
-                        f"👉 当前执行步骤：\n{_active}\n\n"
-                        "🛡️ 核心纪律强制刷新：\n"
-                        "1. 你无权修改 IMMUTABLE_FILES（不可变安全核）。\n"
-                        "2. 写代码（edit_file_lines）之前必须确保你已重新阅读了该文件获取最新行号。\n"
-                        "3. 请立即执行当前步骤，若遇到任何审计拦截（Audit），优先自我纠正！"
-                    ),
-                })
-        except Exception:
-            pass
-
-        return api
+        # ── 协议不变式终强制（唯一一层）：tool 结果必须**紧邻**其 assistant 之后 ──
+        # DeepSeek 的校验是紧邻性不是存在性：assistant(tool_calls) 与 tool 结果之间
+        # 插任何消息（实测 system 也算）都 400"insufficient tool messages"。此前的
+        # 存在性补占位/位置校验都拦不住这类，已合并为这一层邻接强制。
+        return self._enforce_tool_pairing(api)
 
     def _validate_prefix(self) -> None:
         """校验前缀完整性。不匹配则抛 PrefixIntegrityError。"""
@@ -201,74 +191,119 @@ class CacheContext:
         return clean
 
     @staticmethod
-    def _collapse_stale_tool_results(msgs: list[dict]) -> list[dict]:
-        """中段视图变换：把不在最近 N 个 user 轮内的大工具结果折成一行 stub。
-
-        log→document 转向（缓存命中不再是约束、文字稿洁净优先）的第一刀，A 方案：
-        只折 role==tool 的大结果、只动发出去的副本（msgs 已是 _clean_log_msg 产物），
-        self.log 原文不动 → 照常落盘、可 recall（"驱逐到磁盘不销毁"）。配对完整性
-        不受影响（消息还在、只缩 content），一个开关全关、完全可逆。对话轮不碰。
-        """
-        from .params import CONTEXT
-        if not CONTEXT.stale_tool_collapse_enabled:
-            return msgs
-        keep_turns = CONTEXT.stale_tool_keep_turns
-        threshold = CONTEXT.stale_tool_collapse_threshold
-
-        # 新鲜窗口边界：从尾部数 keep_turns 个 user 消息，其位置之前为陈旧区。
-        # 数不够 keep_turns 个（短会话）→ fresh_start=0 → 全部新鲜、一律不折。
-        fresh_start = 0
+    def _nth_user_from_end(msgs: list[dict], n: int) -> int:
+        """从尾部数第 n 个 user 消息的位置；不足 n 个（短会话）→ 0（全部算新鲜）。"""
         seen = 0
         for i in range(len(msgs) - 1, -1, -1):
             if msgs[i].get("role") == "user":
                 seen += 1
-                if seen >= keep_turns:
-                    fresh_start = i
-                    break
+                if seen >= n:
+                    return i
+        return 0
 
+    @staticmethod
+    def _collapse_stale_tool_results(msgs: list[dict]) -> list[dict]:
+        """中段视图变换：把陈旧大工具结果折成一行 stub。压力自适应——离上限越近折得越狠。
+
+        log→document（缓存命中不再约束、文字稿洁净优先）：只折 role==tool 的大结果、
+        只动发出去的副本（msgs 已是 _clean_log_msg 产物），self.log 原文不动 → 照常落盘（"驱逐
+        到磁盘不销毁"）。配对完整、一个开关全关、完全可逆。
+
+        三档舒适区（pre-fold 体积，//4 估，自含、不调 _live_context_tokens 防递归）：
+          < comfort_zone_low      宽松：不折，全保真（在舒适区下方、有空间，无需折叠）；
+          [low, high)             正常：keep_turns / threshold（routinely 折过气信息，稳住）；
+          ≥ comfort_zone_high     紧逼：squeeze_keep_turns / squeeze_threshold（更狠），把 live
+                                   拉回舒适区。spike 那轮大读在热区不折、下一轮过气即折 → 1-2 轮归位。
+        stub 始终是省最多的那刀（不退让到 head+tail——那会留更多、省更少，反令 live 更高）。
+        """
+        from .params import CONTEXT
+        if not CONTEXT.stale_tool_collapse_enabled:
+            return msgs
+
+        # 折叠量按 pre-fold 体积估（与 stats 同口径 //4）；自含、绝不调 _live_context_tokens
+        # （后者会调 send()→本函数，递归）。绝对 token 对齐「15-25w」心智、与 MAX 解耦。
+        approx_tokens = sum(len(m.get("content") or "") for m in msgs) // 4
+        if approx_tokens < CONTEXT.comfort_zone_low:
+            return msgs
+        if approx_tokens >= CONTEXT.comfort_zone_high:
+            keep_turns = CONTEXT.stale_tool_squeeze_keep_turns
+            threshold = CONTEXT.stale_tool_squeeze_threshold
+        else:
+            keep_turns = CONTEXT.stale_tool_keep_turns
+            threshold = CONTEXT.stale_tool_collapse_threshold
+
+        fresh_start = CacheContext._nth_user_from_end(msgs, keep_turns)
         out: list[dict] = []
         for idx, m in enumerate(msgs):
             content = m.get("content")
             if (idx < fresh_start and m.get("role") == "tool"
                     and isinstance(content, str) and len(content) > threshold):
-                out.append({**m, "content": _stub_tool_content(content)})
+                out.append({**m, "content": _stub_tool_content(content, m.get("tool_call_id", ""))})
             else:
                 out.append(m)
         return out
 
     @staticmethod
-    def _repair_tool_pairing(msgs: list[dict]) -> list[dict]:
-        """焊死 OpenAI/DeepSeek 协议不变量，防 400 卡死整个会话。
+    def _enforce_tool_pairing(msgs: list[dict]) -> list[dict]:
+        """焊死 OpenAI/DeepSeek 协议不变量：tool 结果必须**紧邻**其 assistant 之后。
 
-        协议要求：带 tool_calls 的 assistant 消息后必须紧跟每个 tool_call_id
-        对应的 tool 结果消息。工具执行中途被中断（KeyboardInterrupt 不被 llm.py
-        的 except Exception 捕获）、异常、或进程崩溃，都可能在 log 里留下"光杆
-        tool_calls"（缺结果），落盘后每轮重发都 400、重启加载也照炸——会话彻底卡死。
+        协议校验是紧邻性不是存在性（实测 2026-07-03）：assistant(tool_calls) 与
+        tool 结果之间插任何消息（system 也算）→ 400 "insufficient tool messages
+        following tool_calls message"。会破坏紧邻性的真实来源：
+          - 工具循环内往 log append 非 tool 消息（如 load_psyche 注入，根因已修
+            ——挪到结果写完后；此处是防同类回归的咽喉兜底）；
+          - 中断/异常/崩溃留下光杆 tool_calls（缺结果）；
+          - 压缩/摘要/加载旧会话导致的乱序（结果跑到 assistant 之前）。
 
-        这里在唯一咽喉 send() 处兜底：缺失的 tool 结果补占位消息（紧跟 assistant
-        之后）。健康 log 不增不删、字节不变（零缓存影响），只有坏 log 被修复。
-        （只补缺失结果，不动孤儿 tool 消息——后者是另一类、非中断所致，不在此处臆测处理。）
+        算法：每个 assistant(tool_calls) 之后按声明顺序紧邻放置其 tool 结果
+        （从原位前移/后移），缺失的补占位；被搬走的结果在原位跳过。健康 log
+        输出与输入完全一致（同对象同顺序，零缓存影响）。孤儿 tool 消息
+        （没有任何 assistant 声明它）不动——另一类问题，不在此臆测处理。
         """
-        has_result = {m.get("tool_call_id") for m in msgs if m.get("role") == "tool"}
+        claimed: set[str] = {
+            tc.get("id")
+            for m in msgs if m.get("role") == "assistant"
+            for tc in (m.get("tool_calls") or []) if tc.get("id")
+        }
+        if not claimed:
+            return msgs
+        # tool_call_id → 首个结果消息（重复 id 的后续出现留在原位，不参与搬运）
+        result_by_id: dict[str, dict] = {}
+        for m in msgs:
+            if m.get("role") == "tool":
+                tcid = m.get("tool_call_id")
+                if tcid and tcid not in result_by_id:
+                    result_by_id[tcid] = m
+
+        emitted: set[str] = set()
         out: list[dict] = []
         for m in msgs:
+            if m.get("role") == "tool":
+                tcid = m.get("tool_call_id")
+                if tcid in claimed and result_by_id.get(tcid) is m:
+                    continue  # 在其 assistant 之后的紧邻位发出（见下）
             out.append(m)
             if m.get("role") == "assistant" and m.get("tool_calls"):
                 for tc in m["tool_calls"]:
                     tcid = tc.get("id")
-                    if tcid and tcid not in has_result:
-                        out.append({
-                            "role": "tool",
-                            "tool_call_id": tcid,
-                            "content": json.dumps(
-                                {"error": "工具结果缺失（中断/异常/崩溃），已占位"},
-                                ensure_ascii=False),
-                        })
+                    if not tcid or tcid in emitted:
+                        continue
+                    emitted.add(tcid)
+                    result = result_by_id.get(tcid)
+                    out.append(result if result is not None else {
+                        "role": "tool",
+                        "tool_call_id": tcid,
+                        "content": json.dumps(
+                            {"error": "工具结果缺失（中断/异常/崩溃），已占位"},
+                            ensure_ascii=False),
+                    })
         return out
 
     def clear_log(self) -> None:
         """清空 log，保持 prefix 不变。"""
         self.log.clear()
+        self.psyche_stack.clear()
+        self._psyche_stack_synced = True
 
     def clear_scratch(self) -> None:
         """清空 scratch。"""

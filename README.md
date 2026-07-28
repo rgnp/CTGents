@@ -1,6 +1,6 @@
 <p align="center">
   <img src="https://img.shields.io/badge/python-3.11+-blue?style=flat-square" alt="Python 3.11+">
-  <img src="https://img.shields.io/badge/tests-883%20passed-22c55e?style=flat-square" alt="883 tests">
+  <img src="https://img.shields.io/badge/tests-1100%2B-22c55e?style=flat-square" alt="1100+ tests">
   <img src="https://img.shields.io/badge/license-MIT-8b5cf6?style=flat-square" alt="MIT">
   <img src="https://img.shields.io/badge/status-active-06b6d4?style=flat-square" alt="Active">
 </p>
@@ -28,10 +28,10 @@
 写文件限工作目录、读后才让改、不可变核心文件 agent 根本动不了、提交前 lint 强制检查——不是"希望你别做"，是"你做不了"。
 
 **第二层：越用越有用，不是每次从零开始。**
-跨会话的用户理解、项目知识、失败教训自动收割。同类错误第二次会被提前拦住。
+跨会话记忆显式写入（`remember`，非自动收割）。失败教训命中同类场景时尾部提醒，同类错误第二次会被提前拦住。
 
 **第三层：自进化工具。**
-49 个工具按需挂载——文献研究工具组默认不占前缀上下文，只有真做科研时才加载。
+36 个常驻工具 + 按需研究工具组；不用的能力不占前缀上下文。
 
 ---
 
@@ -41,15 +41,17 @@
 git clone https://github.com/rgnp/CTGents.git
 cd CTGents
 
-pip install -r requirements.txt
+pip install -e ".[dev]"
 cp .env.example .env              # 填入 DeepSeek API key + Tavily API key
 python scripts/install_hooks.py   # 安装 Git 提交钩子
 python src/main.py                # 启动（自动检测 TUI/行式 REPL）
 ```
 
 > 需要至少一个 DeepSeek API key 和一个 Tavily API key。支持 Tavily 多 key 轮换（逗号分隔）。
+> 个人数据默认写到 `~/.ctgents`；可在 `.env` 设置 `CTG_WORKSPACE_DIR`。
 
 输入 `/help` 查看指令列表，`/tools load research` 挂载文献研究工具。
+核心项目与个人积累的边界见 [`docs/workspace.md`](docs/workspace.md)。
 
 ---
 
@@ -71,11 +73,10 @@ python src/main.py                # 启动（自动检测 TUI/行式 REPL）
 └────────────────────────────────────┘
 ```
 
-`send()` 组装消息时不只做 `prefix + log` 的简单拼接，而是三层变换：
+`send()` 组装消息时执行两层协议修复：
 
 1. **中段折叠** — 超出 N 轮前的超长工具结果自动折成一行 stub（原文在 self.log 不动，落盘+可 recall），减少 API token。阈值和轮数由 `params.py` 控制，一个开关全关，完全可逆。
 2. **配对修复** — 工具执行中断/崩溃会在 log 里留下"光杆 tool_calls"（缺结果），每轮重发都 400，会话卡死。`send()` 对这些缺失的工具结果补占位消息，保配对完整性。
-3. **游离态挂尾** — 从 `tasks.read_current_active_step()` 读取当前执行步骤，作为临时 system 消息挂在 API 消息尾（不进 self.log，阅后即焚），利用近因效应让模型聚焦当前任务。
 
 ### 单模型缓存优先
 
@@ -86,7 +87,6 @@ python src/main.py                # 启动（自动检测 TUI/行式 REPL）
 ```
 用户输入 → _drive_turn（LLM 调用 + 工具循环）
          → 若推进了任务则 run_task_continuation（自主续跑后续步骤）
-         → _run_post_turn_audits（④可信审计：谎报完成/绕提交门/质量缺失）
          → 落盘会话 + 冻结前缀
 ```
 
@@ -102,7 +102,19 @@ python src/main.py                # 启动（自动检测 TUI/行式 REPL）
 
 ### 记忆 → 行为闭环
 
-检测 → 收割 → 存储 → 下次匹配 → 上下文注入 → 防复发。失败模式四指纹检测，下回自动注入经验提醒。同 fingerprint 的记忆自动合并（不散成 N 条），旧记忆按时间衰减降权。
+`remember` 显式写入 → fingerprint 去重合并 → 关键词/bigram 检索（`recall`，非语义/无 embedding）→
+显式 `adopt_asset` → 任务结果关联。同 fingerprint 的记忆自动合并（不散成 N 条），旧记忆按时间衰减降权。
+已有任务结果后可用 `feedback_asset` 显式记录 helpful/misleading 和理由。检索命中不等于采用，
+任务通过也不自动等于这条记忆有效；审计只报告证据与清理候选，不代替人的价值判断或自动删除。
+会话结束不再自动收割 user_model/project_model（2026-06-23 已整体移除）——记忆是用出来的，
+agent 要显式判断值得记才会写入。
+
+### 统一工作回执
+
+Task 与 Heartbeat 保留各自状态机，但共享不可变工作回执：工作 ID、验收证据哈希、工作区指纹、
+产物 SHA-256 和跨系统引用。Heartbeat 摘要送达后需要
+`/heartbeat accept|revise|reject` 显式处置；`/organs` 汇总待处置交还和版本化产物。
+设计边界见 [`docs/work-lifecycle.md`](docs/work-lifecycle.md)。
 
 ### 工具组按需加载（load-on-demand）
 
@@ -110,7 +122,7 @@ python src/main.py                # 启动（自动检测 TUI/行式 REPL）
 
 ---
 
-## 工具索引（49 个）
+## 工具索引（36 个默认，研究组按需加载）
 
 | 类 | 工具 |
 |---|---|
@@ -150,20 +162,6 @@ python src/main.py                # 启动（自动检测 TUI/行式 REPL）
 
 ---
 
-## 监控面板（dashboard）
-
-与 agent 进程完全解耦的只读 Web 面板。它读磁盘 artifact，不注入 agent 上下文、不碰前缀缓存、不参与 LLM 循环。
-
-```bash
-python -m dashboard.server          # 默认 127.0.0.1:8765
-```
-
-四视图：**总览**（命中率/Token/健康判定） · **安全门禁**（pre-commit/门审计） · **记忆教训** · **进化日志**（提交时间线/任务进度/工具性能分析）
-
-agent 随便重启，面板不受影响。
-
----
-
 ## 项目结构
 
 ```
@@ -176,7 +174,7 @@ src/
 ├── guard.py              # 文件分级（不可变/核心/自由）
 ├── task_loop.py          # 长任务自主续跑 + 动态重规划
 ├── tasks.py              # current.md 读写/创建/更新/归档
-├── tools/                # 19 个模块，49 个工具
+├── tools/                # 原子工具与安全调度
 │   ├── tool_guard.py     # 工具边界机械校验
 │   ├── file.py           # 文件读写 + 备份回滚
 │   ├── exec.py           # 命令执行 + Git 护栏
@@ -185,22 +183,27 @@ src/
 ├── tui.py                # Textual 全屏 TUI（默认界面）
 ├── status_bar.py         # 底部状态条
 ├── psyche_bridge.py      # Psyche 注入/卸载
-├── session_pins.py       # 会话关键约束持久化
+├── ctgents_resources/    # 可发布的内置 psyche/skills
+├── session.py            # 会话 JSON 持久化 + 冻结前缀存盘
 ├── organs.py             # 器官生命体征
 ├── params.py             # 所有可调行为旋钮
 └── config.py             # 密钥/模型/路径 + MultiKeyTavilyClient
-tests/                    # 883 个测试（129 个 @slow）
+tests/                    # 单元、契约与集成测试
 scripts/
 ├── git-hooks/pre-commit  # 提交钩子（ruff + 密钥扫描）
 └── install_hooks.py      # 钩子安装器
-psyche/                   # 领域认知框架
-knowledge/                # 研究知识库（论文/笔记卡片）
-tasks/                    # 长任务追踪（current.md + pending/ + archive/）
-memory/                   # 跨会话持久化记忆
-dashboard/                # 只读监控面板（零依赖，进程解耦）
 docs/                     # 架构/设计/变更日志
-sessions/                 # 会话 JSON 存档
-stats/                    # 缓存命中率统计
+```
+
+个人工作区是独立项目：
+
+```text
+<CTG_WORKSPACE_DIR>/
+├── memory/
+├── knowledge/
+├── sessions/
+├── tasks/
+└── stats/
 ```
 
 ---
@@ -225,7 +228,9 @@ stats/                    # 缓存命中率统计
 - **Tavily API key** — 网页搜索（必须，支持多 key 轮换）
 - **Semantic Scholar API key** — 论文检索（可选，`scan_conf` 用）
 
-安装：`pip install -r requirements.txt`
+安装核心开发环境：`pip install -e ".[dev]"`；需要本地语义检索和 PDF 论文工具时安装
+`.[research]`。其中 PyMuPDF 采用 AGPL 3.0 / 商业双许可证，不属于 CTGents 的 MIT
+许可；分发或部署前请确认你的使用方式符合其许可证要求。
 
 ---
 

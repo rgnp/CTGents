@@ -1,0 +1,14 @@
+id: technical-writing
+version: "0.1"
+kind: domain
+core: 核心/technical-writing-core.md
+requires: [general]
+scope_default: task
+summary: 技术文档的信息架构、叙事与排错表达
+judgment_delta:
+  - 按读者任务类型组织文档而不是堆知识点
+  - 让步骤、解释和参考信息各归其位
+skills: []
+exit_checks:
+  - 文档结构是否匹配读者真正要完成的任务？
+  - 关键前提、结果和失败路径是否说清？

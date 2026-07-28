@@ -108,28 +108,27 @@ def _run_turn(monkeypatch, *, requests=1, completion=100, miss=500):
 def test_footer_reports_time_output_requests(monkeypatch):
     footer = _run_turn(monkeypatch, requests=4, completion=1847, miss=5000)
     assert footer is not None
-    assert footer.strip().startswith("本轮")
     assert "输出 1,847 tok" in footer
     assert "请求 4" in footer
-    assert "miss 5.0k" in footer
     assert "耗时" in footer and "s" in footer  # 含耗时
+    # miss 是缓存内部指标，已移出 footer（需要时看 /context）
+    assert "miss" not in footer
 
 def test_footer_none_without_start():
     assert sb.note_turn_end() is None        # 没起点（set=False）
 
-# ── 突刺：per-turn miss 暴涨 ──
+# ── 突刺：per-turn miss 暴涨（不再进 footer，只记进 last_turn 供状态栏用）──
 
-def test_footer_spike_flagged(monkeypatch):
+def test_spike_flagged_in_state(monkeypatch):
     for _ in range(3):
         _run_turn(monkeypatch, miss=500)     # 建立平稳基线
-    footer = _run_turn(monkeypatch, miss=50000)
-    assert "突刺" in footer
+    _run_turn(monkeypatch, miss=50000)
+    assert sb._state["last_turn"]["spike"] is True
 
 def test_no_spike_on_steady(monkeypatch):
-    footer = None
     for _ in range(4):
-        footer = _run_turn(monkeypatch, miss=500)
-    assert "突刺" not in footer
+        _run_turn(monkeypatch, miss=500)
+    assert sb._state["last_turn"]["spike"] is False
 
 # ── 状态条 Δmiss 复用 last_turn ──
 

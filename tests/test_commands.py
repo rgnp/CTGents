@@ -82,3 +82,78 @@ class TestDispatch:
         assert "已压缩" in r.message
         assert len(ctx.log) < before
         assert any("归档" in (m.get("content") or "") for m in ctx.log)
+
+    def test_gap_without_action_lists_ledger(self, monkeypatch):
+        import src.gaps as gaps
+
+        monkeypatch.setattr(gaps, "format_gap_ledger", lambda: "gap ledger")
+        r = cmds.dispatch("/gap", self.ctx, None)
+        assert r.message == "gap ledger"
+
+    def test_gap_accept_updates_lifecycle(self, monkeypatch):
+        import src.gaps as gaps
+
+        calls = []
+        monkeypatch.setattr(
+            gaps,
+            "set_gap_status",
+            lambda reference, status, note: calls.append((reference, status, note)) or "✅ accepted",
+        )
+        r = cmds.dispatch("/gap accept abc123 值得修", self.ctx, None)
+        assert calls == [("abc123", "accepted", "值得修")]
+        assert r.save is True
+
+    def test_gap_verify_uses_detector_recheck(self, monkeypatch):
+        import src.gaps as gaps
+
+        monkeypatch.setattr(gaps, "verify_gap", lambda reference: f"verified {reference}")
+        r = cmds.dispatch("/gap verify abc123", self.ctx, None)
+        assert r.message == "verified abc123"
+
+    def test_heartbeat_delivery_disposition_routes_to_shared_receipt(self, monkeypatch):
+        import src.work_receipts as receipts
+
+        calls = []
+        monkeypatch.setattr(
+            receipts,
+            "resolve_latest_delivery",
+            lambda action, note: calls.append((action, note)) or "✅ 已接受",
+        )
+
+        r = cmds.dispatch("/heartbeat accept 证据充分", self.ctx, None)
+
+        assert calls == [("accept", "证据充分")]
+        assert r.save is True
+
+    def test_heartbeat_unknown_action_fails_with_usage(self):
+        r = cmds.dispatch("/heartbeat approve", self.ctx, None)
+        assert "用法" in r.message
+
+    def test_fix_accepts_gap_and_retries_with_prompt(self, monkeypatch):
+        import src.gaps as gaps
+        from src.gaps import Gap, GapReport
+
+        gap = Gap(
+            source="static",
+            gap_type="dead_code",
+            severity="high",
+            detail="unused",
+            affected_files=["src/a.py"],
+        )
+        accepted = []
+        monkeypatch.setattr(gaps, "get_last_report", lambda: GapReport(gaps=[gap]))
+        monkeypatch.setattr(gaps, "get_gap_by_index", lambda _index: gap)
+        monkeypatch.setattr(
+            gaps,
+            "set_gap_status",
+            lambda reference, status, note: accepted.append((reference, status, note)) or "✅ accepted",
+        )
+        monkeypatch.setattr(gaps, "_make_fix_prompt", lambda _gap, _index: "fix this")
+
+        r = cmds.dispatch("/fix 1", self.ctx, None)
+
+        assert accepted == [(gap.id, "accepted", "通过 /fix 1 接受")]
+        assert r.retry is True
+        assert r.save is True
+        assert self.ctx.log[-1] == {"role": "user", "content": "fix this"}
+        assert gap.id in r.message

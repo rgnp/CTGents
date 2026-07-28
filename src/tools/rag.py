@@ -9,15 +9,22 @@
   AI 在对话中自主判断是否需要检索代码，主动调用 rag_query() 进行搜索。
   不自动注入到 system prompt，避免破坏 DeepSeek 前缀缓存。
 
-设计原则：
+设计原则（代码索引 rag_index/rag_query）：
   - 零额外依赖（纯 Python + 标准库）
   - TF-IDF + 代码语义关键词加权，无需 embedding API
   - BM25 评分 + 驼峰/蛇形自动拆词
   - 按文件类型智能分块（函数/类/行数）
   - 增量更新：只重新索引变更的文件
+
+研究知识库索引（index_research_content/query_research）额外叠了一层可选的本地
+embedding 语义检索（见 embeddings.py），词面零重合但语义相关的笔记也能被召回；
+未装 sentence-transformers 或加载失败时自动退回纯 TF-IDF，行为和不加这层时一致。
 """
 
+from __future__ import annotations
+
 import fnmatch
+import hashlib
 import json
 import math
 import os
@@ -27,13 +34,16 @@ from collections import Counter
 from pathlib import Path
 
 from ..params import RAG
+from ..paths import KNOWLEDGE_DIR as _KNOWLEDGE_DIR
+from . import embeddings
 
 # ═══════════════════════════════════════════════════════════════
 # 配置
 # ═══════════════════════════════════════════════════════════════
 
-# 索引目录（存放在项目根目录）
-RAG_INDEX_DIR = ".rag-index"
+# 索引目录（存放在项目根目录）。单一真相源在 params.RAG.index_dir——embeddings.py 的
+# 向量索引共用此目录，别在别处再硬编码字面量（改一处会静默分裂）。
+RAG_INDEX_DIR = RAG.index_dir
 
 # 索引文件名
 RAG_INDEX_FILE = "index.json"
@@ -129,7 +139,7 @@ SOURCE_EXTENSIONS: dict[str, str] = {
 
 TOOLS_RAG = [
     {
-        "_meta": {"label": "RAG 索引", "dedup_blacklist": True},
+        "_meta": {"label": "RAG 索引", "dedup_blacklist": True, "group": "rag"},
         "type": "function",
         "function": {
             "name": "rag_index",
@@ -151,7 +161,7 @@ TOOLS_RAG = [
         },
     },
     {
-        "_meta": {"label": "RAG 搜索", "parallel_safe": True},
+        "_meta": {"label": "RAG 搜索", "parallel_safe": True, "group": "rag"},
         "type": "function",
         "function": {
             "name": "rag_query",
@@ -178,7 +188,7 @@ TOOLS_RAG = [
         },
     },
     {
-        "_meta": {"label": "RAG 状态", "parallel_safe": True},
+        "_meta": {"label": "RAG 状态", "parallel_safe": True, "group": "rag"},
         "type": "function",
         "function": {
             "name": "rag_status",
@@ -196,7 +206,7 @@ TOOLS_RAG = [
         },
     },
     {
-        "_meta": {"label": "研究搜索", "parallel_safe": True},
+        "_meta": {"label": "研究搜索", "parallel_safe": True, "group": "research"},
         "type": "function",
         "function": {
             "name": "rag_search",
@@ -215,6 +225,15 @@ TOOLS_RAG = [
                 },
                 "required": ["query"],
             },
+        },
+    },
+    {
+        "_meta": {"label": "知识审计", "parallel_safe": True, "group": "research"},
+        "type": "function",
+        "function": {
+            "name": "knowledge_audit",
+            "description": "审计知识源、索引新鲜度、空短文档、精确重复和 registry 断链；只报告不删除。",
+            "parameters": {"type": "object", "properties": {}, "required": []},
         },
     },
 ]
@@ -515,7 +534,7 @@ class CodeChunk:
         }
 
     @classmethod
-    def from_dict(cls, d: dict) -> "CodeChunk":
+    def from_dict(cls, d: dict) -> CodeChunk:
         return cls(**d)
 
 
@@ -803,7 +822,7 @@ class TfIdfIndex:
         }
 
     @classmethod
-    def from_dict(cls, d: dict) -> "TfIdfIndex":
+    def from_dict(cls, d: dict) -> TfIdfIndex:
         idx = cls()
         idx.documents = [CodeChunk.from_dict(doc) for doc in d["documents"]]
         idx.inverted_index = d["inverted_index"]
@@ -822,7 +841,7 @@ def _build_index(files: list[Path], project_root: Path) -> TfIdfIndex:
     index = TfIdfIndex()
     for file_path in files:
         try:
-            rel_path = str(file_path.relative_to(project_root))
+            rel_path = file_path.relative_to(project_root).as_posix()
         except ValueError:
             rel_path = str(file_path)
 
@@ -914,7 +933,7 @@ def index_project(path: str | None = None, force: bool = False) -> str:
         hash_cache: dict[str, str] = {}
         for f in files:
             try:
-                rel = str(f.relative_to(project_root))
+                rel = f.relative_to(project_root).as_posix()
             except ValueError:
                 rel = str(f)
             hash_cache[rel] = _get_file_hash(f)
@@ -951,7 +970,7 @@ def index_project(path: str | None = None, force: bool = False) -> str:
 
     for f in files:
         try:
-            rel = str(f.relative_to(project_root))
+            rel = f.relative_to(project_root).as_posix()
         except ValueError:
             rel = str(f)
         h = _get_file_hash(f)
@@ -985,7 +1004,7 @@ def index_project(path: str | None = None, force: bool = False) -> str:
     new_chunks: list[CodeChunk] = []
     for f in changed_files:
         try:
-            rel = str(f.relative_to(project_root))
+            rel = f.relative_to(project_root).as_posix()
         except ValueError:
             rel = str(f)
         lang = SOURCE_EXTENSIONS.get(f.suffix.lower(), "unknown")
@@ -997,7 +1016,7 @@ def index_project(path: str | None = None, force: bool = False) -> str:
     drop_paths = set(deleted_files)
     for f in changed_files:
         try:
-            drop_paths.add(str(f.relative_to(project_root)))
+            drop_paths.add(f.relative_to(project_root).as_posix())
         except ValueError:
             drop_paths.add(str(f))
 
@@ -1106,7 +1125,8 @@ def get_index_status(path: str | None = None) -> str:
         parts = ["📭 RAG 索引状态：代码索引未建立\n\n请运行 `rag_index()` 建立索引。"]
         if research_idx:
             n_docs = len(research_idx.get("documents", []))
-            parts.append(f"研究索引已存在 ({n_docs} 个文档块)。用 rag_search 搜索。")
+            embed_note = "语义+词面混合" if embeddings.available() else "仅词面（语义层未启用）"
+            parts.append(f"研究索引已存在 ({n_docs} 个文档块，{embed_note})。用 rag_search 搜索。")
         return "\n".join(parts)
 
     updated = meta.get("updated_at", 0)
@@ -1115,7 +1135,8 @@ def get_index_status(path: str | None = None) -> str:
     research_status = ""
     if research_idx:
         n_docs = len(research_idx.get("documents", []))
-        research_status = f"\n   📚 研究索引: {n_docs} 个文档块 (用 rag_search 搜索)"
+        embed_note = "语义+词面混合" if embeddings.available() else "仅词面（语义层未启用）"
+        research_status = f"\n   📚 研究索引: {n_docs} 个文档块，{embed_note} (用 rag_search 搜索)"
 
     return (
         f"📊 RAG 索引状态\n"
@@ -1148,11 +1169,15 @@ class DocChunk:
                 "content": self.content, "doc_type": self.doc_type}
 
     @classmethod
-    def from_dict(cls, d: dict) -> "DocChunk":
+    def from_dict(cls, d: dict) -> DocChunk:
         return cls(d["source"], d["title"], d["content"], d["doc_type"])
 
 
-def _index_doc_chunks(chunks: list[DocChunk], index_name: str) -> int:
+def _index_doc_chunks(
+    chunks: list[DocChunk],
+    index_name: str,
+    metadata: dict | None = None,
+) -> int:
     """用 TF-IDF 索引文档块。返回索引的块数。"""
     index_dir = Path(RAG_INDEX_DIR)
     index_dir.mkdir(exist_ok=True)
@@ -1192,8 +1217,14 @@ def _index_doc_chunks(chunks: list[DocChunk], index_name: str) -> int:
         "doc_count": doc_count,
         "created": time.time(),
     }
+    index_data.update(metadata or {})
     idx_path = index_dir / f"{index_name}.json"
     idx_path.write_text(json.dumps(index_data, ensure_ascii=False), encoding="utf-8")
+
+    # 语义层：词面索引永远优先落盘成功；embedding 只加分，失败不影响上面已经写好的 TF-IDF 索引。
+    texts = [f"{chunk.title} {chunk.content}" for chunk in chunks]
+    embeddings.try_build_index(index_name, texts)
+
     return doc_count
 
 
@@ -1207,8 +1238,12 @@ def _load_doc_index(index_name: str) -> dict | None:
         return None
 
 
-def _search_doc_index(index_data: dict, query: str, top_k: int = 5) -> list[dict]:
-    """在文档索引中搜索。"""
+def _search_doc_index(index_data: dict, query: str, top_k: int = 5, index_name: str = "research") -> list[dict]:
+    """在文档索引中搜索：词面 TF-IDF + 本地 embedding 语义混合。
+
+    embedding 层不可用（未装 sentence-transformers / 索引过期 / 加载失败）时，
+    自动退回纯词面检索——行为和加这层之前完全一致，不会因为语义层挂了就搜不到东西。
+    """
     query_lower = query.lower()
     query_words = [w for w in re.findall(r'\b\w+\b', query_lower) if len(w) >= 2]
     if not query_words:
@@ -1228,12 +1263,19 @@ def _search_doc_index(index_data: dict, query: str, top_k: int = 5) -> list[dict
     if q_norm > 0:
         q_vec = {w: v / q_norm for w, v in q_vec.items()}
 
-    # 余弦相似度
-    scores: list[tuple[int, float]] = []
-    for i, doc_vec in enumerate(vectors):
-        dot = sum(q_vec.get(t, 0) * doc_vec.get(t, 0) for t in q_vec)
-        if dot > 0:
-            scores.append((i, dot))
+    # 词面余弦相似度（每个 chunk 一个分数，含 0 分——混合评分需要对齐全部行）
+    lexical = [sum(q_vec.get(t, 0) * doc_vec.get(t, 0) for t in q_vec) for doc_vec in vectors]
+
+    embed_scores = embeddings.query_scores(index_name, query, len(vectors))
+
+    scores: list[tuple[int, float]]
+    if embed_scores is None:
+        scores = [(i, s) for i, s in enumerate(lexical) if s > 0]
+    else:
+        alpha = RAG.lexical_weight
+        combined = [alpha * lexical[i] + (1 - alpha) * max(float(embed_scores[i]), 0.0)
+                    for i in range(len(vectors))]
+        scores = [(i, s) for i, s in enumerate(combined) if s > 0]
 
     scores.sort(key=lambda x: -x[1])
     results = []
@@ -1245,6 +1287,47 @@ def _search_doc_index(index_data: dict, query: str, top_k: int = 5) -> list[dict
     return results
 
 
+def _iter_knowledge_files() -> list[Path]:
+    """研究知识库的 .md 文件（排除 sessions/——会话摘要归 search_sessions 专管，
+    双重索引只会让两个检索口互相污染结果）。
+    """
+    if not _KNOWLEDGE_DIR.exists():
+        return []
+    excluded_roots = {"sessions", "_retired"}
+    return sorted(
+        f
+        for f in _KNOWLEDGE_DIR.rglob("*.md")
+        if f.relative_to(_KNOWLEDGE_DIR).parts[0] not in excluded_roots
+    )
+
+
+def _knowledge_signature() -> str:
+    """Snapshot source paths and stat metadata so edits and deletions invalidate the index."""
+    digest = hashlib.sha256()
+    for f in _iter_knowledge_files():
+        try:
+            stat = f.stat()
+        except OSError:
+            continue
+        relative = f.relative_to(_KNOWLEDGE_DIR).as_posix()
+        digest.update(relative.encode("utf-8", errors="replace"))
+        digest.update(f"{stat.st_size}:{stat.st_mtime_ns}".encode())
+    return digest.hexdigest()
+
+
+def _clear_doc_index(index_name: str) -> None:
+    for path in (
+        Path(RAG_INDEX_DIR) / f"{index_name}.json",
+        Path(RAG_INDEX_DIR) / f"{index_name}.embeddings.npy",
+    ):
+        try:
+            path.unlink()
+        except FileNotFoundError:
+            pass
+        except OSError:
+            continue
+
+
 def index_research_content() -> str:
     """索引研究知识库：扫描 knowledge/ 目录中的 .md 文件建立语义索引。
 
@@ -1253,11 +1336,13 @@ def index_research_content() -> str:
     """
     chunks: list[DocChunk] = []
 
-    knowledge_dir = Path(__file__).parent.parent.parent / "knowledge"
+    knowledge_dir = _KNOWLEDGE_DIR
     if not knowledge_dir.exists():
+        _clear_doc_index("research")
         return "knowledge/ 目录不存在。先用 write_file 创建研究笔记，再用此工具索引。"
 
-    for md_file in knowledge_dir.rglob("*.md"):
+    source_files = _iter_knowledge_files()
+    for md_file in source_files:
         try:
             content = md_file.read_text(encoding="utf-8")
             if len(content) < 50:
@@ -1271,31 +1356,47 @@ def index_research_content() -> str:
                     continue
                 if len(buf) + len(para) > 800 and buf:
                     chunks.append(DocChunk(
-                        f"knowledge:{md_file.relative_to(knowledge_dir)}",
+                        f"knowledge:{md_file.relative_to(knowledge_dir).as_posix()}",
                         title, buf.strip(), "knowledge"))
                     buf = para
                 else:
                     buf += ("\n\n" if buf else "") + para
             if buf.strip():
                 chunks.append(DocChunk(
-                    f"knowledge:{md_file.relative_to(knowledge_dir)}",
+                    f"knowledge:{md_file.relative_to(knowledge_dir).as_posix()}",
                     title, buf.strip(), "knowledge"))
         except Exception:
             continue
 
+    source_signature = _knowledge_signature()
     if not chunks:
+        _clear_doc_index("research")
         return "knowledge/ 目录为空或文件内容不足（需 ≥50 字符）。先用 write_file 在 knowledge/ 下创建研究笔记。"
 
-    n = _index_doc_chunks(chunks, "research")
-    parts = [f"已索引 {n} 个文档块", f"{len(chunks)} 篇知识库文档"]
+    n = _index_doc_chunks(
+        chunks,
+        "research",
+        {
+            "source_signature": source_signature,
+            "source_files": len(source_files),
+        },
+    )
+    parts = [f"已索引 {n} 个文档块", f"{len(source_files)} 篇知识库文档"]
     return "（" + "、".join(parts) + "）。使用 rag_search(query) 搜索，rag_query(query) 搜代码。"
 
 
 def query_research(query: str, top_k: int = 5) -> str:
-    """搜索研究知识库（语义搜索，摘要级）。"""
+    """搜索研究知识库（语义搜索，摘要级）。
+
+    lazy 自动索引：索引缺失或落后于 knowledge/ 最新改动时，先自动重建再搜——
+    "先调 rag_index_research 再搜"的两步摩擦本身就是知识库不被读的原因之一。
+    """
     idx = _load_doc_index("research")
+    if idx is None or idx.get("source_signature") != _knowledge_signature():
+        index_research_content()
+        idx = _load_doc_index("research")
     if not idx:
-        return "研究索引未建立。先运行 rag_index_research。"
+        return "知识库为空（knowledge/ 下无可索引的 .md 文件）。"
 
     results = _search_doc_index(idx, query, top_k)
     if not results:
@@ -1309,7 +1410,151 @@ def query_research(query: str, top_k: int = 5) -> str:
         lines.append(f"{icon} [{src}] {r['title'][:80]}  (相关度 {r['score']})")
         lines.append(f"   {r['content'][:150]}")
         lines.append("用 read_file 查看详细内容")
+    try:
+        from ..asset_usage import record_retrieval
+
+        record_retrieval("knowledge", [result["source"] for result in results], query)
+    except Exception:
+        pass
+    lines.append(
+        "若其中某条实质影响后续判断或动作，请调用 adopt_asset，"
+        "asset_kind=knowledge，asset_id 原样使用方括号内的 source 路径。"
+    )
     return "\n".join(lines)
+
+
+def _registry_paths(value) -> list[str]:
+    paths: list[str] = []
+    if isinstance(value, dict):
+        for key, child in value.items():
+            if key == "path" and isinstance(child, str):
+                paths.append(child)
+            else:
+                paths.extend(_registry_paths(child))
+    elif isinstance(value, list):
+        for child in value:
+            paths.extend(_registry_paths(child))
+    return paths
+
+
+def knowledge_audit() -> str:
+    """Report lifecycle problems while keeping source-document decisions explicit."""
+    files = _iter_knowledge_files()
+    short: list[str] = []
+    hashes: dict[str, list[str]] = {}
+    for path in files:
+        relative = path.relative_to(_KNOWLEDGE_DIR).as_posix()
+        try:
+            content = path.read_bytes()
+        except OSError:
+            continue
+        if len(content.strip()) < 50:
+            short.append(relative)
+        digest = hashlib.sha256(content).hexdigest()
+        hashes.setdefault(digest, []).append(relative)
+    duplicates = [paths for paths in hashes.values() if len(paths) > 1]
+
+    broken_registry: list[str] = []
+    registry_dir = _KNOWLEDGE_DIR / "_registry"
+    if registry_dir.is_dir():
+        for registry in sorted(registry_dir.glob("*.json")):
+            try:
+                payload = json.loads(registry.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError):
+                broken_registry.append(f"{registry.name}: registry 无法解析")
+                continue
+            for reference in _registry_paths(payload):
+                target = Path(reference)
+                if not target.is_absolute():
+                    target = _KNOWLEDGE_DIR.parent / target
+                if not target.exists():
+                    broken_registry.append(f"{registry.name}: {reference}")
+
+    index = _load_doc_index("research")
+    signature = _knowledge_signature()
+    index_state = (
+        "缺失"
+        if index is None
+        else "当前"
+        if index.get("source_signature") == signature
+        else "过期"
+    )
+    lines = [
+        "知识资产审计",
+        f"- 源文档: {len(files)}",
+        f"- Research 索引: {index_state}",
+        f"- 空/短文档候选（<50 bytes）: {len(short)}",
+        f"- 精确重复组: {len(duplicates)}",
+        f"- Registry 断链/损坏: {len(broken_registry)}",
+    ]
+    for label, items in (
+        ("空/短文档候选", short),
+        ("Registry 问题", broken_registry),
+    ):
+        if items:
+            lines.append(f"\n{label}:")
+            lines.extend(f"- {item}" for item in items[:30])
+    if duplicates:
+        lines.append("\n精确重复候选:")
+        lines.extend(f"- {' = '.join(paths)}" for paths in duplicates[:20])
+    lines.append(
+        "\n审计不修改原文；更新用 replace_in_file，退役优先 move_file 到 knowledge/_retired/，"
+        "确认无价值后再删除。"
+    )
+    try:
+        from ..asset_usage import format_usage_summary
+
+        lines.append(format_usage_summary("knowledge"))
+    except Exception:
+        pass
+    return "\n".join(lines)
+
+
+# ═══════════════════════════════════════════════════════════════
+# 知识库存在性索引（进前缀）
+# ═══════════════════════════════════════════════════════════════
+
+
+def knowledge_toc() -> str | None:
+    """knowledge/ 的主题目录（进前缀，会话开始建一次）。
+
+    只列"有什么"（目录名 + 篇名），详情靠 rag_search / read_file——同记忆索引的
+    「按名搜→认得」两级结构。不放内容：前缀散文不驱动行为，存在性指针才驱动检索。
+    """
+    if not _KNOWLEDGE_DIR.exists():
+        return None
+    lines: list[str] = []
+    top_files: list[str] = []
+    for entry in sorted(_KNOWLEDGE_DIR.iterdir()):
+        if entry.name.startswith(("_", ".")) or entry.name == "sessions":
+            continue
+        if entry.is_file() and entry.suffix == ".md":
+            top_files.append(entry.stem)
+        elif entry.is_dir():
+            # 通用文件名（README/analysis…）不是锚，真正的主题在它的目录名上
+            # （knowledge/paper/<论文名>/analysis.md → 锚是 <论文名>）。去重保序。
+            generic = {"readme", "analysis", "index", "notes", "progress", "main"}
+            stems: list[str] = []
+            for f in sorted(entry.rglob("*.md")):
+                if f.name.startswith("_"):
+                    continue
+                stem = f.stem
+                if stem.lower() in generic and f.parent != entry:
+                    stem = f.parent.name
+                if stem not in stems:
+                    stems.append(stem)
+            if not stems:
+                continue
+            shown = "、".join(stems[:6])
+            more = f" …共{len(stems)}个主题" if len(stems) > 6 else ""
+            lines.append(f"  {entry.name}: {shown}{more}")
+    if top_files:
+        lines.append("  （根目录）: " + "、".join(top_files))
+    if not lines:
+        return None
+    header = ("知识库 knowledge/ 主题目录——回答涉及以下主题时，先 rag_search 检索、"
+              "read_file 读原文再作答，不要凭参数记忆硬答：")
+    return header + "\n" + "\n".join(lines)
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -1345,4 +1590,6 @@ def execute(name: str, args: dict) -> str | None:
             query=args["query"],
             top_k=args.get("top_k", 5),
         )
+    elif name == "knowledge_audit":
+        return knowledge_audit()
     return None

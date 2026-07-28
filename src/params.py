@@ -19,6 +19,8 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 
+from .paths import RAG_INDEX_DIR
+
 # 与 config 同源、幂等：保证读 env 前 .env 已加载（无论谁先 import）。
 load_dotenv(Path(__file__).parent.parent / ".env")
 
@@ -38,6 +40,11 @@ def _env_bool(key: str, default: bool) -> bool:
     return raw == "1" if raw is not None else default
 
 
+def _env_str(key: str, default: str) -> str:
+    raw = os.getenv(key)
+    return raw if raw is not None else default
+
+
 @dataclass(frozen=True)
 class ContextParams:
     """上下文窗口与压缩/清理相关旋钮。"""
@@ -49,10 +56,13 @@ class ContextParams:
     max_context_tokens: int = _env_int("CTG_MAX_CONTEXT_TOKENS", 500_000)
     # 工具循环硬顶：用量达此比例即停止本轮，提示开新会话
     tool_loop_threshold: float = _env_float("CTG_TOOL_LOOP_THRESHOLD", 0.95)
-    # 滑窗压缩触发比例：超过即驱逐旧对话换摘要
-    compact_threshold: float = _env_float("CTG_COMPACT_THRESHOLD", 0.65)
+    # 有损 compaction 触发线已改用绝对舒适区上界 comfort_zone_high（见下），旧的
+    # compact_threshold 比例旋钮已删——它当时是 0.65×MAX 的悬崖，现在被舒适区取代。
     # 压缩后保留最近多少比例的消息
     compact_keep_ratio: float = _env_float("CTG_COMPACT_KEEP_RATIO", 0.50)
+    # 防抖重新武装：连续低效压缩停掉后，用量再涨 MAX 的此比例 → 解防抖再试一次。
+    # 治"单向锁"——清零原本只在有效压缩里发生，被跳过后永不复位 = 自动压缩永久关闭。
+    compact_rearm_growth: float = _env_float("CTG_COMPACT_REARM_GROWTH", 0.10)
 
     # ── 中段陈旧工具结果折叠（send() 视图变换，不动 self.log）──
     # 文字稿洁净优先于缓存命中：把不在最近 N 轮内的大工具结果折成一行 stub，
@@ -62,6 +72,17 @@ class ContextParams:
     stale_tool_keep_turns: int = _env_int("CTG_STALE_TOOL_KEEP_TURNS", 3)
     # 工具结果超过多少字符才折叠（小结果折了没意义、还丢信号）
     stale_tool_collapse_threshold: int = _env_int("CTG_STALE_TOOL_COLLAPSE_THRESHOLD", 600)
+
+    # ── 舒适区自适应折叠：让 live 长期稳定在 [comfort_low, comfort_high]（绝对 token，
+    # 对齐心智「15-25w」、与 MAX 解耦）。离上限越近折得越狠，都仍无损可 fetch。──
+    # 折叠量按 pre-fold 体积估（与 stats 同口径 //4，自含、不调 _live_context_tokens 防递归）。
+    # < comfort_zone_low：不折，全保真（在舒适区下方、有空间，零 fetch 摩擦）。
+    comfort_zone_low: int = _env_int("CTG_COMFORT_ZONE_LOW", 150_000)
+    # ≥ comfort_zone_high：紧逼档，狠折把 live 拉回舒适区（spike 读了很多后 1-2 轮归位）。
+    comfort_zone_high: int = _env_int("CTG_COMFORT_ZONE_HIGH", 250_000)
+    # 紧逼档：更少轮内保留（更早折）+ 更小阈值（小结果也折）。
+    stale_tool_squeeze_keep_turns: int = _env_int("CTG_STALE_TOOL_SQUEEZE_KEEP_TURNS", 1)
+    stale_tool_squeeze_threshold: int = _env_int("CTG_STALE_TOOL_SQUEEZE_THRESHOLD", 300)
 
 
 CONTEXT = ContextParams()
@@ -85,6 +106,14 @@ class RagParams:
     weight_identifier: float = _env_float("CTG_RAG_WEIGHT_IDENTIFIER", 1.5)
     # 超过此大小（字节）的文件跳过索引
     max_file_size: int = _env_int("CTG_RAG_MAX_FILE_SIZE", 512 * 1024)
+    # 索引落盘目录（cwd 相对）。rag.py 的词面索引与 embeddings.py 的向量索引共用此目录——
+    # 单一真相源，两处曾各自硬编码 ".rag-index"，改一处会静默分裂到两个位置。
+    index_dir: str = _env_str("CTG_RAG_INDEX_DIR", str(RAG_INDEX_DIR))
+    # 本地 embedding 语义检索（knowledge/ 研究文档索引专用，代码索引不受影响）
+    embed_enabled: bool = _env_bool("CTG_RAG_EMBED_ENABLED", True)
+    embed_model: str = _env_str("CTG_RAG_EMBED_MODEL", "paraphrase-multilingual-MiniLM-L12-v2")
+    embed_max_chars: int = _env_int("CTG_RAG_EMBED_MAX_CHARS", 2000)
+    lexical_weight: float = _env_float("CTG_RAG_LEXICAL_WEIGHT", 0.4)  # 向量权重 = 1 - 此值
 
 
 RAG = RagParams()
@@ -99,6 +128,11 @@ class RuntimeParams:
     max_retries: int = _env_int("CTG_MAX_RETRIES", 3)
     # 重试退避基数（秒），实际延迟 = base * 2**(attempt-1)
     retry_base_delay: float = _env_float("CTG_RETRY_BASE_DELAY", 1.0)
+    # LLM 请求超时（秒）。给 OpenAI 客户端一个显式读超时——SDK 默认 600s，流式时若
+    # DeepSeek 连接中途卡住（无新 chunk），`for chunk in stream` 会阻塞在 socket 读上、
+    # 长达 10 分钟且期间 Esc 监听都插不进来（整个 UI 冻死）。显式超时把"卡死"转成
+    # APITimeoutError → 命中已有的 RETRYABLE 重试 → 再不行才干净报错。
+    llm_timeout: float = _env_float("CTG_LLM_TIMEOUT", 120.0)
     # run_python 代码执行超时（秒）
     max_exec_timeout: int = _env_int("CTG_MAX_EXEC_TIMEOUT", 5)
     # 单轮工具循环最大 API 请求数（成本熔断：失控循环唯一的钱闸）
@@ -136,6 +170,9 @@ class RuntimeParams:
     # 去重后，poll 立即返回"运行中"会让 agent ~1s 一次忙等长任务——每次 poll = 一整个
     # LLM 往返、重发上下文烧前缀缓存。内部阻塞把上百次往返塌成十来次；不超过作业剩余超时。
     poll_wait_seconds: int = _env_int("CTG_POLL_WAIT_SECONDS", 15)
+    # 后台作业 TTL（秒）：超时后自动杀进程回收。默认 3600（1 小时），CTG_JOB_TTL_SECONDS 覆盖。
+    # 原来 600s 对一些长任务（pip install / 模型推理）太短。
+    job_ttl_seconds: int = _env_int("CTG_JOB_TTL_SECONDS", 3600)
 
 
 RUNTIME = RuntimeParams()
@@ -180,3 +217,74 @@ class TaskParams:
 
 
 TASK = TaskParams()
+
+
+@dataclass(frozen=True)
+class SummaryParams:
+    """会话摘要（跨会话记忆的生产侧）+ 前缀情景索引旋钮。"""
+
+    # 会话结束用 LLM(Flash) 生成语义摘要（话题/脉络/未竟事项），失败自动退回规则提取。
+    # 与被删的「LLM 收割」不同：这是 append-only 导航索引，不重写既有记忆断言。
+    use_llm: bool = _env_bool("CTG_SUMMARY_LLM", True)
+    # 喂给摘要 LLM 的对话文字稿字符上限（超出保头尾、中间标记省略）
+    digest_max_chars: int = _env_int("CTG_SUMMARY_DIGEST_MAX_CHARS", 12000)
+    # 前缀会话索引：最多列最近多少场
+    index_sessions: int = _env_int("CTG_SUMMARY_INDEX_SESSIONS", 5)
+    # 前缀会话索引：最近多少场附带未竟事项（"接着做"的钩子，全带太占前缀）
+    index_unfinished: int = _env_int("CTG_SUMMARY_INDEX_UNFINISHED", 8)
+
+
+SUMMARY = SummaryParams()
+
+
+@dataclass(frozen=True)
+class DelegateParams:
+    """delegate 调研子代理旋钮（worker 隔离上下文 + 机械出处闸，见 tools/delegate.py）。"""
+
+    enabled: bool = _env_bool("CTG_DELEGATE_ENABLED", True)
+    # worker 单次任务的 API 请求预算（钱闸：不继承主轮 180 的全局熔断）
+    worker_max_requests: int = _env_int("CTG_DELEGATE_WORKER_MAX_REQUESTS", 40)
+    # 出处闸打回后，每轮重试的请求预算（补 read_page/重写产出，用不了多少步）
+    retry_max_requests: int = _env_int("CTG_DELEGATE_RETRY_MAX_REQUESTS", 15)
+    # 出处闸不过时最多打回 worker 重试几次（之后 fail-closed 标记未通过返回）
+    gate_retries: int = _env_int("CTG_DELEGATE_GATE_RETRIES", 1)
+    # 产出文件最少字符数（低于视为未交付）
+    min_output_chars: int = _env_int("CTG_DELEGATE_MIN_OUTPUT_CHARS", 200)
+    # worker 可用工具子集（逗号分隔工具名；不含 delegate 自身防递归，不含 control 工具）
+    worker_tools: str = os.getenv(
+        "CTG_DELEGATE_WORKER_TOOLS",
+        "search_web,read_page,read_file,list_files,write_file,rag_search,think",
+    )
+
+
+DELEGATE = DelegateParams()
+
+
+@dataclass(frozen=True)
+class HeartbeatParams:
+    """心跳旋钮：无人期自主推进探索前沿（tasks/frontier.md），见 heartbeat.py。"""
+
+    enabled: bool = _env_bool("CTG_HEARTBEAT_ENABLED", True)
+    # 每次心跳醒来的 API 请求预算（一次领一项活跃项，到额收尾落盘）
+    worker_max_requests: int = _env_int("CTG_HEARTBEAT_WORKER_MAX_REQUESTS", 25)
+    # 出处闸打回后的重试预算（补 read_page/改标注，用不了多少步）
+    retry_max_requests: int = _env_int("CTG_HEARTBEAT_RETRY_MAX_REQUESTS", 12)
+    # 无人期硬加载的领域 psyche（冷启动开放判断塌的实测解药，不能靠散文提醒）
+    psyche: str = _env_str("CTG_HEARTBEAT_PSYCHE", "research")
+    # 连续多少次心跳没推进 frontier 就自暂停（frontier 被人改动后自动恢复）
+    stall_limit: int = _env_int("CTG_HEARTBEAT_STALL_LIMIT", 2)
+    # 每日心跳次数上限（成本兜底；调度间隔本身由 schtasks/--loop 决定）
+    max_runs_per_day: int = _env_int("CTG_HEARTBEAT_MAX_RUNS_PER_DAY", 16)
+    # 无人期工具白名单：只读/可逆 + 科研工具 + write_file（产出落 knowledge/frontier）
+    # + psyche/skill 运行时（load_psyche/activate_skill 让 worker 能跑 paper-pipeline 等
+    # 成套流程）+ fetch_paper/transcribe_paper（pipeline 阶段 1/2 的窄工具，替代 run_python）。
+    # 刻意不含 run_command/run_python/git_*/delete_file/remember——无人期不动系统状态。
+    worker_tools: str = os.getenv(
+        "CTG_HEARTBEAT_WORKER_TOOLS",
+        "search_web,read_page,read_file,list_files,write_file,rag_search,think,learn,"
+        "scan_papers,scan_conf,read_papers,read_paper,fetch_paper,transcribe_paper,"
+        "psyche_catalog,load_psyche,activate_skill",
+    )
+
+
+HEARTBEAT = HeartbeatParams()

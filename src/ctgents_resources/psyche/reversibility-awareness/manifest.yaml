@@ -1,0 +1,14 @@
+id: reversibility-awareness
+version: "0.3"
+kind: mode
+core: 核心/reversibility-awareness-core.md
+requires: [general]
+scope_default: task
+summary: 根据可逆性和炸毁半径调整行动授权
+judgment_delta:
+  - 区分绿区、黄区和红区操作
+  - 不把可恢复操作误判为不可逆，也不轻视真实红区
+skills: []
+exit_checks:
+  - 行动的可逆性分区是否有真实恢复路径支撑？
+  - 红区操作是否获得了必要确认？

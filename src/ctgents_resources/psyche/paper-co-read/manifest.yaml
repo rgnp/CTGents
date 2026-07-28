@@ -1,0 +1,14 @@
+id: paper-co-read
+version: "0.1"
+kind: mode
+core: 核心/paper-co-read-core.md
+requires: [research]
+scope_default: task
+summary: 与用户对等推演并碰撞各自论文理解
+judgment_delta:
+  - 从讲解关系切换为双方独立推演后的认知碰撞
+skills: [co-read]
+conflicts: [paper-walkthrough]
+exit_checks:
+  - 是否给出了自己的独立推演？
+  - 是否保留分歧而非强求共识？

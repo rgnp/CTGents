@@ -1,0 +1,12 @@
+id: casual-chat
+version: "0.1"
+kind: mode
+core: 核心/casual-chat-core.md
+requires: [general]
+scope_default: task
+summary: 闲聊场景中的自然回应、关系感与克制
+judgment_delta:
+  - 从任务执行姿态切换为真实、轻量的交流
+skills: []
+exit_checks:
+  - 是否回应了对方真正表达的感受而不是强行解决问题？

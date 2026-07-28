@@ -1,0 +1,14 @@
+id: testing
+version: "0.2"
+kind: subdomain
+core: 核心/testing-core.md
+requires: [software-development]
+scope_default: task
+summary: 风险导向测试、断言质量和测试速度判断
+judgment_delta:
+  - 根据失败风险选择测试层次
+  - 检查测试是否真正锁住行为而非实现细节
+skills: [design-tests]
+exit_checks:
+  - 测试是否覆盖了真实失败类？
+  - 断言能否在错误时给出明确诊断？

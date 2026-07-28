@@ -8,11 +8,13 @@ import threading
 import time
 import traceback
 from collections.abc import Callable
+from datetime import datetime
 from pathlib import Path
 from typing import TYPE_CHECKING
 
 from .cache_context import CacheContext
 from .commands import dispatch as dispatch_cmd
+from .paths import SESSIONS_DIR
 from .session import list_sessions, load_prefix, load_session, save_prefix, save_session
 
 # 重模块（llm→openai/tools ~1.1s、tools._tool_meta→trafilatura/tavily）延迟到使用处 import，
@@ -27,12 +29,42 @@ logging.basicConfig(
 )
 
 # ═══════════════════════════════════════════════════════════════
-# Esc 打断监听（Windows msvcrt 后台线程）
+# Esc 打断监听（后台线程，Windows msvcrt / POSIX termios 双实现）
 # ═══════════════════════════════════════════════════════════════
 
 _esc_listener_active = False
-# TUI 模式下 Textual 自己管 stdin / Esc，msvcrt 后台线程会和它抢键 → 由 TUI 置位禁用。
+# TUI 模式下 Textual 自己管 stdin / Esc，后台线程会和它抢键 → 由 TUI 置位禁用。
 _under_tui = False
+
+
+def _listen_esc_windows(request_interrupt: Callable[[], None]) -> None:
+    import msvcrt  # Windows 专用
+
+    while _esc_listener_active:
+        if msvcrt.kbhit():
+            key = msvcrt.getch()
+            if key == b'\x1b':  # Esc 键
+                request_interrupt()
+                return
+        time.sleep(0.05)  # 50ms 轮询，不忙等
+
+
+def _listen_esc_posix(request_interrupt: Callable[[], None]) -> None:
+    import select
+    import termios
+    import tty
+
+    fd = sys.stdin.fileno()
+    old_settings = termios.tcgetattr(fd)
+    try:
+        tty.setcbreak(fd)  # 单字符可读、不等回车（对应 msvcrt.kbhit 的语义）
+        while _esc_listener_active:
+            ready, _, _ = select.select([sys.stdin], [], [], 0.05)  # 50ms 轮询，不忙等
+            if ready and sys.stdin.read(1) == "\x1b":  # Esc 键
+                request_interrupt()
+                return
+    finally:
+        termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
 
 
 def _start_esc_listener() -> None:
@@ -40,24 +72,16 @@ def _start_esc_listener() -> None:
     global _esc_listener_active
     if _under_tui:
         return
-
-    import msvcrt  # Windows 专用
+    if not sys.stdin.isatty():
+        return  # 非交互终端（管道/重定向）无法监听按键
 
     from .llm import clear_interrupt, request_interrupt
 
     _esc_listener_active = True
     clear_interrupt()
 
-    def _listen():
-        while _esc_listener_active:
-            if msvcrt.kbhit():
-                key = msvcrt.getch()
-                if key == b'\x1b':  # Esc 键
-                    request_interrupt()
-                    return
-            time.sleep(0.05)  # 50ms 轮询，不忙等
-
-    t = threading.Thread(target=_listen, daemon=True)
+    listen = _listen_esc_windows if os.name == "nt" else _listen_esc_posix
+    t = threading.Thread(target=listen, args=(request_interrupt,), daemon=True)
     t.start()
 
 
@@ -68,8 +92,11 @@ def _stop_esc_listener() -> None:
 
 
 # 本进程是否真跑过一轮（产生过新内容）。空会话 / 加载后未改动的会话退出时
-# 不触发反思/摘要/收割（那是白烧 LLM）。加载/清空会话时复位。
-_session_state = {"turn_ran": False, "task_reminded": False}
+# 不触发摘要或状态更新。加载/清空会话时复位。
+_session_state = {"turn_ran": False, "task_reminded": False,
+                  "base_psyche_ensured": False, "gate_checked": False}
+_STATE_FILE = SESSIONS_DIR / "_state.md"
+_ERRORS_FILE = SESSIONS_DIR / "_errors.md"
 
 
 def _make_memory_context() -> dict | None:
@@ -81,6 +108,24 @@ def _make_memory_context() -> dict | None:
     return {"role": "system", "content": ctx_str, "_volatile": True, "_label": "记忆索引"}
 
 
+def _make_sessions_index() -> dict | None:
+    """最近会话的存在性索引（跨会话情景记忆的触发环：认得聊过 → search_sessions 取详情）。"""
+    from .session_summary import build_sessions_index
+    txt = build_sessions_index()
+    if not txt:
+        return None
+    return {"role": "system", "content": txt, "_volatile": True, "_label": "会话索引"}
+
+
+def _make_knowledge_index() -> dict | None:
+    """知识库主题目录（存在性索引：知道有货才会去读，rag_search/read_file 取详情）。"""
+    from .tools.rag import knowledge_toc
+    txt = knowledge_toc()
+    if not txt:
+        return None
+    return {"role": "system", "content": txt, "_volatile": True, "_label": "知识库索引"}
+
+
 logger = logging.getLogger(__name__)
 
 
@@ -90,43 +135,63 @@ def _make_agents_message() -> dict:
     return {"role": "system", "content": content, "_volatile": True, "_label": "AGENTS.md"}
 
 
+def _make_state_message() -> dict | None:
+    """跨会话任务状态：上次要点、活跃任务、已知未知、行为纠正记录。
+
+    自动注入到每次会话的 prefix 中，不需 agent 手动 recall——agent 启动即感知
+    上次中断在哪、有什么遗留缺口。文件不存在时静默跳过。
+    """
+    if not _STATE_FILE.exists():
+        return None
+    content = _STATE_FILE.read_text(encoding="utf-8")
+    if not content.strip():
+        return None
+    return {"role": "system", "content": content, "_volatile": True, "_label": "跨会话状态"}
+
+
+def _make_errors_message() -> dict | None:
+    """错误日志：跨会话积累的错误模式（幻觉/跳过验证/方案不匹配/边界遗漏/过度准备）。
+
+    自动注入到每次会话的 prefix 中，让 agent 启动即感知历史错误模式，
+    不再需要主动 recall。文件不存在或为空时静默跳过。
+    """
+    if not _ERRORS_FILE.exists():
+        return None
+    content = _ERRORS_FILE.read_text(encoding="utf-8")
+    if not content.strip():
+        return None
+    return {"role": "system", "content": content, "_volatile": True, "_label": "错误日志"}
+
+
 # _make_mechanisms_message（自动派生「每轮注入的运行时机制」索引）已删除：它索引的
 # 是 _inject_* / _append_volatile_context 这些挂尾注入器，随挂尾机制整体删除已无对象可索引。
-
-
-def _make_ambitions_message() -> dict | None:
-    """长期目标（tasks/ambitions.md）放进缓存前缀——它 session 稳定、是弱方向参考。
-
-    曾在挂尾(make_task_context_message)，但任何挂尾内容都让"对话"不再是请求的输入结束
-    位置，轮首只能命中脆弱内部单元、空闲~40s 即被服务端淘汰、整段对话重 miss。挪进前缀
-    (会话开始建一次、冻结)后对话重新成为可靠的输入结束单元。见 [[ctgents-context-cache]]。
-    """
-    from .tasks import has_ambitions, read_ambitions
-    if not has_ambitions():
-        return None
-    content = ("📋 你们共同的长期目标（tasks/ambitions.md），所有决策的弱方向参考：\n\n"
-               + read_ambitions())
-    return {"role": "system", "content": content, "_volatile": True, "_label": "长期目标"}
 
 
 def _make_prefix_msgs() -> list[dict]:
     """缓存前缀的不可变系统消息（会话开始构建一次，会话内哈希锁死、不变）。
 
     缓存命中已判定为 DeepSeek 服务端问题、不再是约束（见 [[ctgents-context-cache]]），
-    故把 session 稳定的器官接回前缀：AGENTS.md + 记忆索引(轴①越用越懂你) + 长期目标 ambitions。
+    故把 session 稳定的器官接回前缀：AGENTS.md + 记忆索引(轴①越用越懂你)
+    + 会话索引/知识库索引（存在性指针：触发点从"回忆"降为"识别"，详情靠
+    search_sessions / rag_search 工具取——同 4891865 派生索引验证过的两级结构）。
     这些都在会话边界产生/会话内不变，放冻结前缀里既送达模型、又不破坏纯追加（per-turn
     动态的任务上下文/审计不在这里，走 append-only）。
-    每个 _make_* 缺数据时返回 None，按序过滤——空记忆/无任务的会话前缀自动退回只剩 AGENTS.md。
+    每个 _make_* 缺数据时返回 None，按序过滤——空记忆的会话前缀自动退回只剩 AGENTS.md。
 
-    「被动进化反思」(reflect_on_session 检出的工具耗时/失败/调用量异常) 已于 2026-06-23 移出
-    前缀：它测的是工具墙钟时间（run_command/git_commit 等被外部进程主导）、对接近 0ms 的值算
-    倍数产出荒谬比率（0→0=3.2x、git_commit 因提交门 833x），对 agent 无可行动性、纯噪声稀释
-    前缀。reflect_on_session 仍写 stats/*_reflection.json（dashboard 可看），只是不再每轮注入。
+    长期目标 ambitions 曾在此注入，已于 2026-06-25 移出前缀（用户减负）：它无主动消费者、
+    作为前缀散文对行为≈零效（见 rule-placement-three-layers）。/ambition 命令仍可查看管理。
+
+    「被动进化反思」曾把工具耗时/失败/调用量异常写入独立 reflection 文件。前缀注入于
+    2026-06-23 删除，剩余 Dashboard 专属产物链于 2026-07-27 一并退役；Gap 继续直接消费
+    tracker 原始事件和异常检测，不依赖这份重复快照。
     """
     makers = (
         _make_agents_message,
+        _make_state_message,
+        _make_errors_message,
         _make_memory_context,
-        _make_ambitions_message,
+        _make_sessions_index,
+        _make_knowledge_index,
     )
     return [m for m in (make() for make in makers) if m]
 
@@ -152,10 +217,10 @@ def _apply_prefix(ctx: CacheContext, session_id: str | None) -> None:
     ctx.rebuild_prefix(saved if saved else _make_prefix_msgs())
 
 
-# 旧的"挂尾"注入器（_append_volatile_context / _inject_* 把 volatile system 消息摆在
-# payload 末尾）已整体删除——那是破坏前缀缓存的根因。④可信审计已按 append-only 重新接回
-# （见 _run_post_turn_audits：nudge 追加进永久 log、不挂尾）。记忆触发逻辑当时连同测试
-# 一起删除，未重建。详见 [[ctgents-context-cache]]。
+# 旧的"挂尾"注入器（_append_volatile_context / _inject_*）已整体删除——破坏前缀缓存的根因。
+# ④可信"轮末审计追加"（_run_post_turn_audits）一度按 append-only 接回，又于 2026-06-25 整体移除：
+# 判断型 nudge 一直弹、无明显效果、还拖累客观审计可信度（用户决定）。completion 取证逻辑在 git
+# 历史里，需要"谎报完成"客观检查可单独捞回。详见 [[ctgents-context-cache]]。
 
 
 def process_turn(
@@ -219,55 +284,14 @@ def _drive_turn(ctx: CacheContext, user_input: str, disp, sid: list) -> None:
         disp.on_footer(footer)
 
 
-def _run_post_turn_audits(ctx: CacheContext, disp) -> None:
-    """④可信：轮末取证自检（谎报完成 / 编造引用 / 不读就改）。
-
-    append-only：命中的 nudge 作为**非 volatile** system 消息追加进 log——send() 只丢
-    volatile system、保留它，故下一轮模型看得到、能自纠；永不挂尾、永不原地改历史。
-    去重：按 _audit_id（类型标识，如 "completion"）去重，不按文本比对——
-    审计消息可能含动态内容（如引用的文件名列表），文本比对会被绕过导致复读机刷屏。
-    """
-    from .completion_audit import (
-        audit_completion,
-        audit_memory_consult,
-        audit_quality_check,
-        audit_read_before_write,
-    )
-
-    log = ctx.all
-    # 按审计类型 ID 去重，不按文本——文本可能含动态内容（文件名等）
-    existing_ids = {m.get("_audit_id") for m in ctx.log if m.get("_audit_id")}
-    # citation_audit 已于 2026-06-24 从轮末审计摘除：反引号 snake_case 标识符那支
-    # 分不清"提议新名字"和"引用现有代码"，在设计/提议密集的工作流里持续误报=喊狼
-    # （训练人/agent 无视提示）。模块 citation_audit.py 保留休眠——若要恢复，建议只挂
-    # 高精度的 path:line 支（你不会凭空编行号），不要整支反引号标识符。
-    audits = [
-        ("completion", audit_completion),
-        ("read_before_write", audit_read_before_write),
-        ("memory_consult", audit_memory_consult),
-        ("quality_check", audit_quality_check),
-    ]
-    fresh = []
-    for audit_id, audit_fn in audits:
-        if audit_id in existing_ids:
-            continue
-        nudge = audit_fn(log)
-        if nudge:
-            fresh.append(nudge)
-            ctx.log.append({
-                "role": "system", "content": nudge,
-                "_audit": True, "_audit_id": audit_id,
-            })
-    if fresh:
-        disp.on_status("\n\n".join(fresh))
-
-
 def run_agent_turn(ctx: CacheContext, user_input: str,
                    session_id: str | None, *, display=None) -> str | None:
     """主干：一次 agent 驱动。所有入口都走这里，保证不管从哪进、循环都是同一圈。
 
     一轮 = 一次 _drive_turn（对话）+ 任务自主续跑（若这轮真推进了 current.md，自主驱动
-    后续步骤直到 agent 自己停）+ 轮末 ④可信审计（append-only）。
+    后续步骤直到 agent 自己停）。轮末"反思追加"审计已整体移除（2026-06-25，用户：一直弹、
+    无明显效果——判断型 nudge 是误报机、还拖累客观审计的可信度；completion 取证逻辑在
+    git 历史里，需要"谎报完成"客观检查时可单独捞回）。
 
     display: 输出去向（默认 stdout=REPL；TUI 传写进 widget 的 Display）。循环不变。
     """
@@ -277,6 +301,20 @@ def run_agent_turn(ctx: CacheContext, user_input: str,
     disp = display or _stdout_display()
     sid = [session_id]
 
+    # 心跳摘要回灌：无人期心跳（heartbeat.py）攒下的合并汇报，回到主会话时一次性
+    # append-only 注入（缓存安全）。每轮开头查一次 pending 文件，无摘要零成本。
+    from .heartbeat import consume_digest
+    digest = consume_digest()
+    if digest:
+        digest_msg = (
+            "【心跳汇报】你不在时心跳自主推进了探索前沿（tasks/frontier.md），"
+            "以下是合并摘要（产出细节在 knowledge/ 对应文件，引用前先 read_file 核对）。"
+            "检查后用 /heartbeat accept、revise 或 reject 记录交还结果：\n\n"
+            + digest
+        )
+        ctx.log.append({"role": "system", "content": digest_msg, "_heartbeat_digest": True})
+        disp.on_status(digest_msg)
+
     # 可恢复：会话首轮若有未完成长任务，append-only 注入一次提醒（恢复跨会话/重启后的"注意力"）。
     if not _session_state["task_reminded"]:
         _session_state["task_reminded"] = True
@@ -285,6 +323,25 @@ def run_agent_turn(ctx: CacheContext, user_input: str,
         if rem:
             ctx.log.append({"role": "system", "content": rem, "_resume": True})
             disp.on_status(rem)
+
+    # 门通行证审计：会话首轮核对 HEAD 树在不在质量门通过记录里——有人 --no-verify 绕门 → 拍肩。
+    # 原挂在 dormant 的 make_task_context_message 下（随挂尾删除已断），改 append-only 接回活路径。
+    if not _session_state["gate_checked"]:
+        _session_state["gate_checked"] = True
+        from .gate_audit import head_gate_notice
+        gate_notice = head_gate_notice()
+        if gate_notice:
+            ctx.log.append({"role": "system", "content": gate_notice, "_gate_notice": True})
+            disp.on_status(gate_notice)
+
+    # 通用人格常驻：会话首轮注入基础工作人格（AGENTS.md 的 <bias>+<tone> 迁来，从前缀删除）。
+    if not _session_state["base_psyche_ensured"]:
+        _session_state["base_psyche_ensured"] = True
+        from .psyche_bridge import ensure_base_psyche, resync_system_context
+        base_note = ensure_base_psyche(ctx)
+        resync_system_context(ctx)  # 兜底：同步 registry，self 等工具靠它认 psyche
+        if base_note:
+            disp.on_status(base_note)
 
     before_task = read_current()
     _drive_turn(ctx, user_input, disp, sid)
@@ -299,7 +356,6 @@ def run_agent_turn(ctx: CacheContext, user_input: str,
             on_status=disp.on_status,
         )
 
-    _run_post_turn_audits(ctx, disp)
     return sid[0]
 
 
@@ -345,7 +401,15 @@ def _on_tool(name: str, args: dict) -> None:
 
 
 def _render_turn_error(e: BaseException) -> tuple[list[str], bool]:
-    """分类一轮对话的残余异常。"""
+    """分类一轮对话的残余异常。
+
+    能归因的外部失败（网络/超时/限流/鉴权）→ 给一句人话提示，不甩 traceback；
+    其余未知异常仍打印精简调用栈（那是真 bug、需要栈定位）。会话都不中断。
+    """
+    from .llm import humanize_llm_error
+    friendly = humanize_llm_error(e)
+    if friendly is not None:
+        return [f"\n{friendly}\n"], False
     if isinstance(e, Exception):
         lines = [f"\n💥 错误: {type(e).__name__}: {e}"]
         lines += [f"   {ln.strip()}" for ln in traceback.format_exception(type(e), e, e.__traceback__)[-5:]]
@@ -441,13 +505,60 @@ def _reload_dispatch():
     return True, f"已热加载：{'、'.join(loaded_items)}。"
 
 
+# ── 跨会话状态自动维护 ──
+
+def _update_state_on_finalize() -> None:
+    """会话结束时自动更新 _state.md：时间戳 + 活跃任务状态。
+
+    只改这两项——"上次会话要点""已知未知""行为记录"由 agent 在会话中手动写，
+    不在此覆盖。文件不存在 → 静默跳过。
+    """
+    if not _STATE_FILE.exists():
+        return
+
+    content = _STATE_FILE.read_text(encoding="utf-8")
+    lines = content.splitlines(keepends=True)
+
+    # 1) 更新时间戳行
+    now = datetime.now().strftime("%Y-%m-%d %H:%M")
+    ts_tag = "last updated: "
+    for i, line in enumerate(lines):
+        if ts_tag in line:
+            # 保留 `# 跨会话状态 (last updated: ...)` 格式
+            lines[i] = f"# 跨会话状态 ({ts_tag}{now})\n"
+            break
+
+    # 2) 替换 活跃任务 section
+    from .tasks import read_current
+    current = read_current()
+    if current:
+        task_section = f"## 活跃任务\n{current}\n"
+    else:
+        task_section = "## 活跃任务\n_当前 tasks/current.md 为空——未开始具体任务。_\n"
+
+    new_lines: list[str] = []
+    skip = False
+    for line in lines:
+        if line.startswith("## 活跃任务"):
+            new_lines.append(task_section)
+            skip = True
+        elif skip and line.startswith("## "):
+            new_lines.append(line)
+            skip = False
+        elif skip:
+            continue  # 跳过旧的 活跃任务 内容
+        else:
+            new_lines.append(line)
+
+    _STATE_FILE.write_text("".join(new_lines), encoding="utf-8")
+
+
 # ── 主入口 ──
 
 def _finalize_session(ctx: CacheContext, session_id: str | None) -> list[str]:
-    """会话收尾：落盘 → 反思。
+    """会话收尾：落盘 → 摘要 → 跨会话状态。
 
-    本进程没真跑过一轮（空会话 / 加载后未改动就退出）则直接退出，不触发任何
-    反思——那是 LLM 调用，对没新内容的会话纯属白烧。
+    本进程没真跑过一轮（空会话 / 加载后未改动就退出）则直接退出，不生成派生产物。
 
     会话关闭时的「收割」（lesson / 用户档案 / 项目知识 LLM 重写）已于 2026-06-23 整体
     删除：记忆改为「用出来的」靠 agent 显式 remember，不靠每次关闭自动收割（曾烧 LLM +
@@ -469,11 +580,15 @@ def _finalize_session(ctx: CacheContext, session_id: str | None) -> list[str]:
         session_id = _timed("保存", lambda: _save_ctx(ctx, session_id))
         lines.append(f"会话已保存: [{session_id}]")
         try:
-            from .tracker import reflect_on_session
-            if _timed("反思", lambda: reflect_on_session(session_id)):
-                lines.append("已写入会话反思。")
+            from .session_summary import summarize_session
+            if _timed("摘要", lambda: summarize_session(ctx.all, session_id)):
+                lines.append("已写入会话摘要。")
         except Exception as e:
-            logger.warning("会话反思失败: %s", e)
+            logger.warning("会话摘要失败: %s", e)
+        try:
+            _timed("状态", lambda: _update_state_on_finalize())
+        except Exception as e:
+            logger.warning("跨会话状态更新失败: %s", e)
     if timings:
         slow = sorted(timings, key=lambda kv: kv[1], reverse=True)
         brief = " ".join(f"{k}{v:.1f}s" for k, v in slow if v >= 0.05)
@@ -494,6 +609,15 @@ def _ensure_git_hooks() -> None:
 
 
 def main() -> None:
+    # 服务器 locale 未必是 UTF-8（精简 Docker 镜像常默认 C/POSIX locale），届时 print()
+    # 中英文/emoji 会 UnicodeEncodeError。显式钉死 stdout/stderr 编码、不依赖系统 locale——
+    # 与文件 I/O 全程显式 encoding="utf-8" 是同一原则。
+    for _stream in (sys.stdin, sys.stdout, sys.stderr):
+        if hasattr(_stream, "reconfigure"):
+            _stream.reconfigure(encoding="utf-8", errors="replace")
+    from .paths import ensure_workspace
+
+    ensure_workspace()
     _ensure_git_hooks()
     sessions = list_sessions()
     session_id: str | None = None
@@ -595,31 +719,49 @@ def _run_line_repl(ctx: CacheContext, session_id: str | None) -> str | None:
                 print(msg)
                 continue
 
-            r = dispatch_cmd(user_input, ctx, session_id)
+            try:
+                r = dispatch_cmd(user_input, ctx, session_id)
+            except Exception as e:  # noqa: BLE001  指令内部出错不该崩掉整个 REPL（与 TUI 一致）
+                print(f"⚠️ 指令出错: {type(e).__name__}: {e}")
+                continue
             if r.message:
                 print(r.message)
             if r.save:
                 session_id = _save_ctx(ctx, session_id)
                 print(f"会话已保存: [{session_id}]")
             if r.load:
+                try:
+                    loaded_msgs = load_session(r.load)
+                except Exception as e:  # noqa: BLE001  存档损坏/缺失 → 提示并保持当前会话
+                    print(f"⚠️ 存档 [{r.load}] 打不开（{type(e).__name__}），已保持当前会话。")
+                    continue
                 ctx.clear_log()
-                loaded_msgs = load_session(r.load)
                 ctx.log.extend(loaded_msgs)
                 _apply_prefix(ctx, r.load)  # 复用该会话冻结前缀，重载不塌命中
                 session_id = r.load
                 from . import status_bar
                 status_bar.reset()  # 切会话复位 Δmiss 基线
+                from .llm import reset_compaction_state
+                reset_compaction_state()  # 切会话重置压缩防抖锁，不带进新会话
+                from .psyche_bridge import resync_system_context
+                resync_system_context(ctx)  # 重置 system_context 注册表，按新会话 log 里实际的 psyche 重新登记
                 _session_state["turn_ran"] = False  # 加载未改动则退出不收割
                 _session_state["task_reminded"] = False  # 切会话→新会话首轮重提醒未完成任务
+                _session_state["base_psyche_ensured"] = False  # 新会话首轮重新确保基础人格
+                _session_state["gate_checked"] = False  # 新会话首轮重新核对门通行证
                 print(f"已加载会话 [{r.load}]，共 {len(ctx)} 条消息")
                 _print_recent(ctx.all)
             if r.clear:
                 ctx.clear_log()
                 ctx.rebuild_prefix(_make_prefix_msgs())
+                _session_state["base_psyche_ensured"] = False  # 清空 log → 基础人格没了，下轮重注入
+                _session_state["gate_checked"] = False  # 清空 log → 门审计提醒没了，下轮重核对
+                from .llm import reset_compaction_state
+                reset_compaction_state()  # 清空会话重置压缩防抖锁
+                from . import system_context
+                system_context.reset()  # 清空会话 → log 里没有 psyche 了，注册表也清空
                 if r.save:
                     session_id = None
-                    from .tasks import reset_gaps_cache
-                    reset_gaps_cache()
                     from . import status_bar
                     status_bar.reset()  # 清空会话复位 Δmiss 基线
                     _session_state["turn_ran"] = False  # 清空后空会话退出不收割

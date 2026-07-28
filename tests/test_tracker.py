@@ -7,11 +7,10 @@ from src.tracker import (
     _read_session,
     detect_anomalies,
     flush,
+    get_anomaly_signal_window,
     get_cross_session_baseline,
-    get_latest_reflections,
     get_session_aggregates,
     record_tool_call,
-    reflect_on_session,
     set_session,
 )
 
@@ -170,34 +169,28 @@ class TestAnomalyDetection:
         anomalies = detect_anomalies("short")
         assert [a for a in anomalies if a["type"] == "high_volume"] == []
 
-
-class TestReflection:
-    def test_reflect_on_session_no_anomalies(self, tmp_path, monkeypatch):
+    def test_signal_window_counts_only_eligible_sessions(self, tmp_path, monkeypatch):
         monkeypatch.setattr("src.tracker._STATS_DIR", tmp_path)
-        sid = "clean-session"
-        set_session(sid)
-        for _ in range(3):
+        for sid, failures in [("clean-1", 0), ("bad", 5), ("clean-2", 0)]:
+            set_session(sid)
+            for index in range(5):
+                record_tool_call("write_file", 10, index >= failures)
+            flush()
+        set_session("not-exposed")
+        for _ in range(5):
             record_tool_call("read_file", 10, True)
         flush()
-        result = reflect_on_session(sid)
-        assert result is None
 
-    def test_reflect_on_session_with_anomalies(self, tmp_path, monkeypatch):
-        monkeypatch.setattr("src.tracker._STATS_DIR", tmp_path)
-        sid = "bad-session"
-        set_session(sid)
-        for _ in range(8):
-            record_tool_call("write_file", 50, False, error="Err")
-        flush()
-        result = reflect_on_session(sid)
-        assert result is not None
-        assert len(result["anomalies"]) > 0
+        window = get_anomaly_signal_window(
+            "write_file",
+            "high_failure",
+            since="2020-01-01T00:00:00+00:00",
+            limit=3,
+        )
 
-    def test_get_latest_reflections_empty(self, tmp_path, monkeypatch):
-        monkeypatch.setattr("src.tracker._STATS_DIR", tmp_path)
-        refs = get_latest_reflections(limit=3)
-        assert refs == []
-
+        assert window["sessions_observed"] == 3
+        assert window["occurrences"] == 1
+        assert window["occurrence_rate"] == pytest.approx(1 / 3, abs=0.001)
 
 class TestInternal:
     def test_read_session(self, tmp_path, monkeypatch):

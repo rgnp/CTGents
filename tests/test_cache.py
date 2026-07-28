@@ -15,6 +15,14 @@ def setup_function():
     llm._ineffective_compression_count = 0
 
 
+def _force_compaction(monkeypatch):
+    """把 compaction 触发线压到 1 token（舒适区上界 comfort_zone_high），让小上下文也触发。"""
+    import dataclasses
+
+    import src.params as params
+    monkeypatch.setattr(llm, "CONTEXT", dataclasses.replace(params.CONTEXT, comfort_zone_high=1))
+
+
 class TestCompactContext:
     """_compact_context：滑窗压缩（超阈值驱旧，短上下文不动）。"""
 
@@ -41,7 +49,7 @@ class TestCompactContext:
         """含"算了/换个"等口语词照常压缩——关键词换话题已删除。"""
         monkeypatch.setattr(llm, "_make_brief_summary",
                             lambda msgs, max_len=500, previous_summary=None: "测试摘要")
-        monkeypatch.setattr(llm, "_COMPACT_THRESHOLD", 0.001)
+        _force_compaction(monkeypatch)
 
         big = "X" * 5000
         msgs = self._make_compaction_messages(5, big)
@@ -78,7 +86,7 @@ class TestCompactContext:
         """大型上下文触发滑窗压缩：旧消息被驱替为摘要。"""
         monkeypatch.setattr(llm, "_make_brief_summary",
                             lambda msgs, max_len=500, previous_summary=None: "测试摘要")
-        monkeypatch.setattr(llm, "_COMPACT_THRESHOLD", 0.001)
+        _force_compaction(monkeypatch)
 
         big = "X" * 5000
         msgs = self._make_compaction_messages(5, big)
@@ -108,6 +116,68 @@ class TestCompactContext:
         # 摘要里不该混入 psyche 正文（psyche 不进 to_summarize）
         assert "认知框架核心内容" not in next(
             (m["content"] for m in ctx.log if "⏪" in m.get("content", "")), "")
+
+    def test_inactive_psyche_is_not_rescued_by_compaction(self, monkeypatch):
+        """已停用的旧 core 可被驱逐，不能因 `_psyche_meta` 永久钉住。"""
+        monkeypatch.setattr(
+            llm, "_make_brief_summary",
+            lambda msgs, max_len=500, previous_summary=None: "摘要",
+        )
+        from src.cache_context import CacheContext
+
+        activation = {
+            "type": "activate", "id": "testing", "name": "testing",
+            "version": "0.1", "scope": "task", "activation_id": "a1",
+        }
+        log = [
+            {
+                "role": "system", "content": "旧 testing core",
+                "_psyche_event": activation,
+                "_psyche_meta": {"name": "testing", "version": "0.1"},
+            },
+            {
+                "role": "system", "content": "testing stopped",
+                "_psyche_event": {
+                    "type": "deactivate", "id": "testing", "name": "testing",
+                    "version": "0.1", "scope": "task", "activation_id": "a1",
+                },
+            },
+        ]
+        big = "X" * 5000
+        for i in range(6):
+            log.append({"role": "user", "content": f"问题{i} " + big})
+            log.append({"role": "assistant", "content": f"回答{i} " + big})
+        ctx = CacheContext(prefix_msgs=[{"role": "system", "content": "sys"}], log_msgs=log)
+
+        llm._compact_cache_context(ctx, "继续", force=True)
+
+        assert not any(m.get("_psyche_meta", {}).get("name") == "testing" for m in ctx.log)
+
+    def test_active_skill_is_rescued_by_compaction(self, monkeypatch):
+        """Owner 仍 active 时，Skill 指令不能被滑窗静默驱逐。"""
+        monkeypatch.setattr(
+            llm, "_make_brief_summary",
+            lambda msgs, max_len=500, previous_summary=None: "摘要",
+        )
+        from src.cache_context import CacheContext
+        from src.psyche_bridge import inject_psyche
+        from src.skill_bridge import activate_skill, loaded_skills
+
+        ctx = CacheContext(prefix_msgs=[{"role": "system", "content": "sys"}])
+        inject_psyche(ctx, "paper-walkthrough", source="agent", reason="需要渐进建立理解")
+        activate_skill(ctx, "paper-walkthrough", reason="执行标准带读")
+        big = "X" * 5000
+        for i in range(6):
+            ctx.log.append({"role": "user", "content": f"问题{i} " + big})
+            ctx.log.append({"role": "assistant", "content": f"回答{i} " + big})
+
+        llm._compact_cache_context(ctx, "继续", force=True)
+
+        assert [event["name"] for event in loaded_skills(ctx)] == ["paper-walkthrough"]
+        assert any(
+            message.get("_skill_event", {}).get("type") == "activate"
+            for message in ctx.log
+        )
 
 
 class TestCompressToolResult:

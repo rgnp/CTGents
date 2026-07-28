@@ -1,5 +1,7 @@
 """Git 操作工具：状态查看、变更对比、提交、推送、PR、日志。"""
 
+from __future__ import annotations
+
 import re
 import subprocess
 from pathlib import Path
@@ -8,7 +10,7 @@ from pathlib import Path
 
 TOOLS_GIT = [
     {
-        "_meta": {"label": "Git 状态", "parallel_safe": True},
+        "_meta": {"group": "git", "label": "Git 状态", "parallel_safe": True},
         "type": "function",
         "function": {
             "name": "git_status",
@@ -26,7 +28,7 @@ TOOLS_GIT = [
         },
     },
     {
-        "_meta": {"label": "Git 差异", "parallel_safe": True},
+        "_meta": {"group": "git", "label": "Git 差异", "parallel_safe": True},
         "type": "function",
         "function": {
             "name": "git_diff",
@@ -52,7 +54,7 @@ TOOLS_GIT = [
         },
     },
     {
-        "_meta": {"label": "Git 日志", "parallel_safe": True},
+        "_meta": {"group": "git", "label": "Git 日志", "parallel_safe": True},
         "type": "function",
         "function": {
             "name": "git_log",
@@ -74,7 +76,7 @@ TOOLS_GIT = [
         },
     },
     {
-        "_meta": {"label": "Git 审查"},
+        "_meta": {"group": "git", "label": "Git 审查"},
         "type": "function",
         "function": {
             "name": "git_review",
@@ -92,7 +94,7 @@ TOOLS_GIT = [
         },
     },
     {
-        "_meta": {"label": "Git 提交", "dedup_blacklist": True},
+        "_meta": {"group": "git", "label": "Git 提交", "dedup_blacklist": True},
         "type": "function",
         "function": {
             "name": "git_commit",
@@ -118,7 +120,7 @@ TOOLS_GIT = [
         },
     },
     {
-        "_meta": {"label": "Git 推送", "dedup_blacklist": True},
+        "_meta": {"group": "git", "label": "Git 推送", "dedup_blacklist": True},
         "type": "function",
         "function": {
             "name": "git_push",
@@ -148,7 +150,7 @@ TOOLS_GIT = [
         },
     },
     {
-        "_meta": {"label": "Git 分支", "parallel_safe": True},
+        "_meta": {"group": "git", "label": "Git 分支", "parallel_safe": True},
         "type": "function",
         "function": {
             "name": "git_branch",
@@ -170,7 +172,7 @@ TOOLS_GIT = [
         },
     },
     {
-        "_meta": {"label": "Git 还原", "dedup_blacklist": True},
+        "_meta": {"group": "git", "label": "Git 还原", "dedup_blacklist": True},
         "type": "function",
         "function": {
             "name": "git_restore",
@@ -714,6 +716,14 @@ def git_push(remote: str = "origin", branch: str | None = None,
     # 获取当前分支
     if not branch:
         branch = _get_current_branch(path)
+
+    # 专用 git_push 不经过 run_command 的 tool_guard；这里必须重复守住同一条 P2
+    # 不变量。兼容 main / refs/heads/main / HEAD:main 等常见 refspec 写法。
+    target = branch.lstrip("+").rsplit(":", 1)[-1]
+    if target.startswith("refs/heads/"):
+        target = target.removeprefix("refs/heads/")
+    if force and target in {"main", "master"}:
+        return "⛔ P2 拒绝：禁止 force-push 到 main/master（会重写主干历史）。"
 
     # 构建推送命令
     args = ["push", remote, branch]

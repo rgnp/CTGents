@@ -7,7 +7,7 @@ def test_params_scope_lists_all_domains():
     out = build_self_portrait("params")
     for domain in ("CONTEXT", "RAG", "RUNTIME"):
         assert domain in out
-    assert "compact_threshold = 0.65" in out
+    assert "comfort_zone_high = 250000" in out
     assert "compact_keep_ratio = 0.5" in out
     assert "default_top_k = 5" in out
     assert "max_retries = 3" in out
@@ -18,9 +18,9 @@ def test_params_scope_shows_no_override_by_default():
 
 def test_params_scope_reports_env_override(monkeypatch):
     """设了 CTG_* 后，params 视图把它列入『env 覆盖中』。"""
-    monkeypatch.setenv("CTG_COMPACT_THRESHOLD", "0.5")
+    monkeypatch.setenv("CTG_COMFORT_ZONE_HIGH", "222000")
     out = build_self_portrait("params")
-    assert "CTG_COMPACT_THRESHOLD" in out
+    assert "CTG_COMFORT_ZONE_HIGH" in out
 
 def test_full_scope_includes_params():
     out = build_self_portrait("full")

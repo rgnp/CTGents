@@ -2,6 +2,7 @@
 
 
 
+import src.llm as llm
 from src.llm import _PARALLEL_SAFE, _execute_tool_batch
 
 
@@ -24,9 +25,7 @@ class TestParallelSafeWhitelist:
             assert tool in _PARALLEL_SAFE, f"{tool} 应在并行白名单中"
 
     def test_project_tools_in_whitelist(self):
-        """项目扫描类工具应在白名单中（check_project/docs_sync_check/generate_agents_md
-        已于 2026-06-23 移除——零调用的维护元工具）。
-        """
+        """仍注册的项目扫描工具应在白名单中。"""
         for tool in ("scan_project", "analyze_code"):
             assert tool in _PARALLEL_SAFE, f"{tool} 应在并行白名单中"
 
@@ -130,6 +129,26 @@ class TestExecuteToolBatch:
         results = _execute_tool_batch(approved)
         assert results == ["跳过1", "跳过2"]
 
+    def test_precomputed_result_inside_safe_batch_not_reexecuted(self, monkeypatch):
+        """SAFE 批中夹 eager 结果时，后续工具只能执行一次。"""
+        calls: list[str] = []
+
+        def fake_execute(tc):
+            calls.append(tc.function.arguments)
+            return tc.function.arguments
+
+        monkeypatch.setattr(llm, "_tracked_execute_tool", fake_execute)
+        approved = [
+            (None, "read_file", {}, self.make_tc("read_file", '{"path":"a"}'), None),
+            (None, "read_file", {}, self.make_tc("read_file", '{"path":"b"}'), "eager-b"),
+            (None, "read_file", {}, self.make_tc("read_file", '{"path":"c"}'), None),
+        ]
+
+        results = _execute_tool_batch(approved)
+
+        assert results == ['{"path":"a"}', "eager-b", '{"path":"c"}']
+        assert sorted(calls) == ['{"path":"a"}', '{"path":"c"}']
+
     def test_empty_batch(self):
         """空批次应返回空列表。"""
         results = _execute_tool_batch([])
@@ -211,3 +230,68 @@ class TestStormThreadSafety:
         # 窗口应有 9 个（窗口上限 64，9 条不触发淘汰）
         from src.tools.storm import get_storm_stats
         assert get_storm_stats()["window_size"] == 9
+
+
+class TestEagerOrdering:
+    """Eager 只能执行不跨越串行依赖的 SAFE 前缀。"""
+
+    class _Info:
+        name = "test"
+        supports_tools = True
+
+    class _Future:
+        def __init__(self, result):
+            self._result = result
+
+        def result(self, timeout=None):
+            return self._result
+
+    class _Executor:
+        def __init__(self, submitted):
+            self.submitted = submitted
+
+        def submit(self, fn, tc):
+            self.submitted.append(tc.function.name)
+            return TestEagerOrdering._Future(fn(tc))
+
+    def test_safe_read_after_write_is_not_eager(self, monkeypatch):
+        submitted: list[str] = []
+
+        class Backend:
+            info = TestEagerOrdering._Info()
+
+            def chat_stream(self, _messages, _on_token, _tools, on_tool_ready=None, **_kwargs):
+                on_tool_ready(0, "write_file", '{"path":"a","content":"new"}')
+                on_tool_ready(1, "read_file", '{"path":"a"}')
+                return "", []
+
+        monkeypatch.setattr(llm, "_get_eager_executor", lambda: self._Executor(submitted))
+        monkeypatch.setattr(llm, "_tracked_execute_tool", lambda tc: tc.function.name)
+
+        _, _, pre_results = llm._invoke_llm_eager(
+            Backend(), [], lambda _t: None, tools=[], track_stats=False,
+        )
+
+        assert submitted == []
+        assert pre_results == {}
+
+    def test_leading_safe_tools_still_eager(self, monkeypatch):
+        submitted: list[str] = []
+
+        class Backend:
+            info = TestEagerOrdering._Info()
+
+            def chat_stream(self, _messages, _on_token, _tools, on_tool_ready=None, **_kwargs):
+                on_tool_ready(0, "read_file", '{"path":"a"}')
+                on_tool_ready(1, "grep_code", '{"pattern":"needle"}')
+                return "", []
+
+        monkeypatch.setattr(llm, "_get_eager_executor", lambda: self._Executor(submitted))
+        monkeypatch.setattr(llm, "_tracked_execute_tool", lambda tc: tc.function.name)
+
+        _, _, pre_results = llm._invoke_llm_eager(
+            Backend(), [], lambda _t: None, tools=[], track_stats=False,
+        )
+
+        assert submitted == ["read_file", "grep_code"]
+        assert pre_results == {0: "read_file", 1: "grep_code"}

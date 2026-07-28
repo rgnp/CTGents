@@ -1,5 +1,7 @@
 """工具系统：注册、调度、热加载。"""
 
+from __future__ import annotations
+
 import importlib
 import json
 import logging
@@ -75,7 +77,7 @@ _tools_cache: list[dict] | None = None
 # 领域专用工具（如文献研究）默认不挂常驻 prefix——省 token、不做该领域时不背着它们。
 # 组名标在工具 _meta["group"] 上；这里列哪些组默认关。做该领域时用 /tools load <组> 挂上，
 # 或开会话前设 CTG_TOOL_GROUPS=research。改前缀缓存不是约束（已判服务端问题）。
-_OPTIONAL_GROUPS: frozenset[str] = frozenset({"research"})
+_OPTIONAL_GROUPS: frozenset[str] = frozenset({"research", "rag", "repo", "git", "memory-mutate", "files-mutate"})
 _enabled_groups: set[str] = set()
 
 
@@ -141,6 +143,29 @@ def get_tools() -> list[dict]:
 
     _tools_cache = tools
     return tools
+
+
+_tools_subset_cache: dict[frozenset[str], list[dict]] = {}
+
+
+def get_tools_subset(names: frozenset[str]) -> list[dict]:
+    """按名取工具 schema 子集（剥 _meta）——供 delegate worker 等隔离调用方拼自己的工具单。
+
+    刻意绕过 _enabled_groups 过滤：组机制只决定"挂不挂进主会话 prefix"（省 token），
+    execute_tool 派发不看组——worker 拿到 schema 就能用（如默认关闭的 research 组里的
+    rag_search）。结果按 names 缓存，保证同一子集每次返回同一 list 对象、字节稳定。
+    """
+    cached = _tools_subset_cache.get(names)
+    if cached is not None:
+        return cached
+    subset = [
+        {k: v for k, v in t.items() if k != "_meta"}
+        for src in _TOOL_SOURCES
+        for t in src
+        if t["function"]["name"] in names
+    ]
+    _tools_subset_cache[names] = subset
+    return subset
 # ── 工具执行 ──
 # ── 会话级工具调用缓存 ──
 #

@@ -17,9 +17,10 @@ import atexit
 import json
 import threading
 from datetime import UTC, datetime
-from pathlib import Path
 
-_STATS_DIR = Path(__file__).resolve().parent.parent / "stats"
+from .paths import STATS_DIR
+
+_STATS_DIR = STATS_DIR
 _TOOLS_SUFFIX = "_tools.jsonl"
 _BUFFER_FLUSH_LIMIT = 50
 
@@ -33,6 +34,11 @@ def set_session(session_id: str | None) -> None:
     global _current_session_id
     flush()
     _current_session_id = session_id or ""
+
+
+def current_session() -> str:
+    """当前追踪会话 id（delegate 等嵌套调用后用于恢复）。"""
+    return _current_session_id
 
 
 def record_tool_call(
@@ -283,55 +289,75 @@ def detect_anomalies(session_id: str, baseline: dict | None = None) -> list[dict
     return anomalies
 
 
-# ═══════════════════════════════════════════════════════════════
-# 会话后反思（分析层入口，由 session.save_session 调用）
-# ═══════════════════════════════════════════════════════════════
+def get_anomaly_signal_window(
+    tool: str,
+    anomaly_type: str,
+    *,
+    since: str | None = None,
+    limit: int = 5,
+) -> dict:
+    """Measure one anomaly signal across eligible sessions.
 
-_REFLECTION_SUFFIX = "_reflection.json"
-
-
-def reflect_on_session(session_id: str) -> dict | None:
-    """会话结束后自动反思：异常检测 + 基线对比。
-
-    写入 stats/{session_id}_reflection.json。
-    返回反思结果（供程序化使用），无发现则返回 None。
+    A session is eligible only when it contains enough exposure to the tool for
+    the detector to make a meaningful decision. Sessions where the tool was not
+    used are not counted as evidence that a fix worked.
     """
-    flush()
-    anomalies = detect_anomalies(session_id)
-    if not anomalies:
-        return None
+    try:
+        since_at = datetime.fromisoformat(since) if since else None
+    except ValueError:
+        since_at = None
+    if since_at is not None and since_at.tzinfo is None:
+        since_at = since_at.replace(tzinfo=UTC)
 
     baseline = get_cross_session_baseline()
-
-    reflection = {
-        "session_id": session_id,
-        "timestamp": datetime.now(UTC).isoformat(),
-        "anomalies": anomalies,
-        "baseline_sessions": baseline.get("sessions_analyzed", 0),
-    }
-
-    try:
-        _STATS_DIR.mkdir(parents=True, exist_ok=True)
-        path = _STATS_DIR / f"{session_id}{_REFLECTION_SUFFIX}"
-        path.write_text(json.dumps(reflection, ensure_ascii=False, indent=2), encoding="utf-8")
-    except OSError:
-        pass
-
-    return reflection
-
-
-def get_latest_reflections(limit: int = 5) -> list[dict]:
-    """获取最近的会话反思，供 agent 在启动时读取。"""
-    if not _STATS_DIR.exists():
-        return []
-    reflections: list[dict] = []
-    for f in sorted(_STATS_DIR.iterdir(), reverse=True):
-        if f.name.endswith(_REFLECTION_SUFFIX):
+    candidates: list[tuple[datetime, str, int]] = []
+    for session_id in _discover_sessions():
+        records = _read_session(session_id)
+        timestamps: list[datetime] = []
+        for record in records:
             try:
-                data = json.loads(f.read_text(encoding="utf-8"))
-                reflections.append(data)
-            except (OSError, json.JSONDecodeError):
-                pass
-            if len(reflections) >= limit:
-                break
-    return reflections
+                timestamp = datetime.fromisoformat(record["timestamp"])
+            except (KeyError, TypeError, ValueError):
+                continue
+            if timestamp.tzinfo is None:
+                timestamp = timestamp.replace(tzinfo=UTC)
+            timestamps.append(timestamp)
+        if not timestamps:
+            continue
+        ended_at = max(timestamps)
+        if since_at is not None and ended_at <= since_at:
+            continue
+
+        aggregates = get_session_aggregates(session_id)
+        tool_stats = aggregates["tools"].get(tool)
+        if not tool_stats:
+            continue
+        count = tool_stats["count"]
+        if anomaly_type == "high_failure":
+            eligible = count >= ANOMALY_MIN_CALLS
+        elif anomaly_type == "slow":
+            eligible = aggregates["total_calls"] >= ANOMALY_MIN_CALLS
+        elif anomaly_type == "high_volume":
+            eligible = count > 0
+        else:
+            eligible = count > 0
+        if not eligible:
+            continue
+
+        present = any(
+            anomaly["tool"] == tool and anomaly["type"] == anomaly_type
+            for anomaly in detect_anomalies(session_id, baseline)
+        )
+        candidates.append((ended_at, session_id, int(present)))
+
+    candidates.sort(key=lambda item: item[0])
+    window = candidates[-max(1, limit):]
+    occurrences = sum(item[2] for item in window)
+    return {
+        "tool": tool,
+        "anomaly_type": anomaly_type,
+        "sessions_observed": len(window),
+        "occurrences": occurrences,
+        "occurrence_rate": round(occurrences / len(window), 3) if window else None,
+        "sessions": [item[1] for item in window],
+    }

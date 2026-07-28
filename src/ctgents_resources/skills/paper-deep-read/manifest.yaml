@@ -1,0 +1,87 @@
+# paper-deep-read skill manifest
+# 版本: 1.0 | 创建: 2026-07-03 | 设计参照: nature-skills manifest pattern
+
+name: paper-deep-read
+version: "1.0"
+description: >
+  单篇论文结构化深度阅读。从快速扫描到逐行论证审计，
+  根据论文类型、阅读深度、研究领域自动匹配操作指令。
+
+# ── 轴声明 ──
+
+axes:
+  - id: depth
+    name: 阅读深度
+    description: 投入时间与输出粒度
+    default: normal
+    values:
+      - id: skim
+        label: 快速扫描
+        description: 5 分钟第一遍（Keshav 第一遍法）
+      - id: normal
+        label: 标准深读
+        description: 完整论证审计 + 领域定位
+      - id: deep
+        label: 逐行精读
+        description: 逐公式/逐 warrant/逐引用，接近审稿人审计
+
+  - id: paper_type
+    name: 论文类型
+    description: 论文的论证结构类型
+    default: research
+    values:
+      - id: research
+        label: 实验研究型
+        description: 有明确方法-实验-结果链的实证论文
+      - id: survey
+        label: 综述
+        description: 文献综述/调查
+      - id: theory
+        label: 理论型
+        description: 以数学推导或理论分析为主
+      - id: position
+        label: 立场/观点型
+        description: 提出新视角或批评现有范式的论文
+
+  - id: domain
+    name: 研究领域
+    description: 论文所属领域，决定领域特有判断准则
+    default: general-ml
+    values:
+      - id: autonomous-driving
+        label: 自动驾驶
+        description: 加载自主驾驶领域的五筛子、算力约束、baseline 知识
+      - id: general-ml
+        label: 通用机器学习
+        description: 标准 ML 评估准则
+      - id: cv
+        label: 计算机视觉
+        description: 视觉领域特有实验范式
+      - id: nlp
+        label: 自然语言处理
+        description: NLP 领域特有评估标准
+      - id: robotics
+        label: 机器人
+        description: 机器人领域仿真/实物实验规范
+
+# ── always_load：每次读论文必载的核心指令 ──
+
+always_load:
+  - static/core/stance.md
+  - static/core/workflow.md
+
+# ── on_demand：按需打开的大块参考 ──
+
+on_demand:
+  - id: toulmin-full
+    file: references/toulmin-full.md
+    description: Toulmin 论证模型完整版
+    load_when: 需要回溯 Toulmin 术语定义或进行深度 warrant 审计时
+  - id: keshav-three-pass
+    file: references/keshav-three-pass.md
+    description: Keshav 三遍法全文
+    load_when: 需要回顾三遍法完整细节时
+  - id: dissatisfaction-patterns
+    file: references/dissatisfaction-patterns.md
+    description: 常见不满模式库——反推动机时对照用
+    load_when: D0 步骤激活或需要判断论文建设性不满属于哪类时

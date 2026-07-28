@@ -1,0 +1,14 @@
+id: learning-method
+version: "0.3"
+kind: subdomain
+core: 核心/learning-method-core.md
+requires: [psyche-building]
+scope_default: task
+summary: 深度学习项目和论文并沉淀可复用理解
+judgment_delta:
+  - 从浏览信息切换为结构、因果和可复述理解
+  - 将学习结果连接到知识库和未来任务
+skills: []
+exit_checks:
+  - 是否读到了入口、主流程和关键机制？
+  - 是否能用自己的结构解释而非复述原文？

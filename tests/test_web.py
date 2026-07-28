@@ -57,7 +57,7 @@ class TestWebCache:
 
         # 手动让缓存过期
         import json
-        key = f'search_web:{json.dumps({"query": "fresh"}, sort_keys=True, ensure_ascii=False)}'
+        key = f'search_web:{json.dumps({"query": "fresh", "depth": "fast"}, sort_keys=True, ensure_ascii=False)}'
         _web_cache[key]["t"] = time.time() - _CACHE_TTL_SEARCH - 1
 
         search_web("fresh")
@@ -152,7 +152,9 @@ class TestWebCache:
 
         # 手动让短缓存过期
         import json
-        key = f'read_page:{json.dumps({"url": "https://slow.example.com"}, sort_keys=True, ensure_ascii=False)}'
+        args_key = json.dumps({"url": "https://slow.example.com", "offset": 0},
+                              sort_keys=True, ensure_ascii=False)
+        key = f"read_page:{args_key}"
         _web_cache[key]["t"] = time.time() - _CACHE_TTL_ERROR - 1
 
         read_page("https://slow.example.com")
@@ -177,7 +179,7 @@ class TestPageTruncation:
 
         result = read_page("https://example.com/big")
         assert len(result) <= _PAGE_MAX_CHARS + 200
-        assert "[已压缩" in result
+        assert "续读请用" in result
 
     def test_short_page_not_truncated(self, monkeypatch):
         """短页面不被截断。"""
@@ -194,7 +196,7 @@ class TestPageTruncation:
 
         result = read_page("https://example.com/small")
         assert "Hello world" in result
-        assert "[已压缩" not in result
+        assert "续读请用" not in result
 
 
 class TestCacheEviction:

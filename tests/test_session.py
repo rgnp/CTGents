@@ -1,15 +1,19 @@
 """session.py 测试 — 会话保存/加载/删除。"""
 
+import contextlib
 import json
 import os
 
 from src.session import (
     _sanitize_surrogates,
+    _session_preview,
     delete_session,
     get_session_name,
+    get_sessions_info,
     list_sessions,
     load_session,
     save_session,
+    save_session_name,
 )
 
 
@@ -92,3 +96,77 @@ class TestSessionIO:
             json.dump({"name": "My Session"}, f)
         name = get_session_name("named")
         assert name == "My Session"
+
+
+class TestNameAndPreview:
+    def test_rename_roundtrips(self, tmp_path, monkeypatch):
+        monkeypatch.setattr("src.session.SESSION_DIR", str(tmp_path))
+        save_session([{"role": "user", "content": "hi"}], session_id="s")
+        save_session_name("s", "世界模型讨论")
+        assert get_session_name("s") == "世界模型讨论"
+        assert get_sessions_info(["s"])["s"]["name"] == "世界模型讨论"
+
+    def test_rename_empty_clears(self, tmp_path, monkeypatch):
+        monkeypatch.setattr("src.session.SESSION_DIR", str(tmp_path))
+        save_session([{"role": "user", "content": "hi"}], session_id="s")
+        save_session_name("s", "临时名")
+        save_session_name("s", "  ")           # 空 → 清除，回退 sid
+        assert get_session_name("s") == "s"
+
+    def test_preview_falls_back_to_first_user_msg(self, tmp_path, monkeypatch):
+        monkeypatch.setattr("src.session.SESSION_DIR", str(tmp_path))
+        save_session([
+            {"role": "system", "content": "注入"},
+            {"role": "user", "content": "世界模型评测基准有哪些？"},
+        ], session_id="s")
+        assert "世界模型评测基准" in _session_preview("s")
+
+    def test_preview_prefers_summary(self, tmp_path, monkeypatch):
+        monkeypatch.setattr("src.session.SESSION_DIR", str(tmp_path))
+        save_session([{"role": "user", "content": "原始问题"}], session_id="s")
+        with open(os.path.join(str(tmp_path), "s", "summary.txt"), "w", encoding="utf-8") as f:
+            f.write("这次聊了世界模型仿真\n更多细节")
+        assert _session_preview("s") == "这次聊了世界模型仿真"
+
+
+class TestAtomicWrite:
+    """save_session 原子写：写盘中途崩溃绝不留下截断的 messages.json。"""
+
+    def test_crash_mid_write_keeps_old_intact(self, tmp_path, monkeypatch):
+        """os.replace 崩溃（模拟换名前进程死）→ 原有完整存档不被破坏。"""
+        import src.session as sess
+        monkeypatch.setattr(sess, "SESSION_DIR", str(tmp_path))
+        save_session([{"role": "user", "content": "good"}], session_id="s")
+
+        def boom(*a, **k):
+            raise RuntimeError("simulated crash before rename")
+
+        monkeypatch.setattr(sess.os, "replace", boom)
+        with contextlib.suppress(RuntimeError):
+            save_session([{"role": "user", "content": "new-but-crashes"}], session_id="s")
+        # 旧存档仍然完整可读，绝无截断
+        msgs = load_session("s")
+        assert msgs == [{"role": "user", "content": "good"}]
+
+    def test_no_tmp_files_left_after_success(self, tmp_path, monkeypatch):
+        import src.session as sess
+        monkeypatch.setattr(sess, "SESSION_DIR", str(tmp_path))
+        save_session([{"role": "user", "content": "x"}], session_id="s")
+        leftovers = [p for p in os.listdir(os.path.join(str(tmp_path), "s"))
+                     if p.startswith(".tmp-")]
+        assert leftovers == []
+
+    def test_crash_leaves_no_tmp_file(self, tmp_path, monkeypatch):
+        import src.session as sess
+        monkeypatch.setattr(sess, "SESSION_DIR", str(tmp_path))
+        save_session([{"role": "user", "content": "good"}], session_id="s")
+
+        def boom(*a, **k):
+            raise RuntimeError("crash before rename")
+
+        monkeypatch.setattr(sess.os, "replace", boom)
+        with contextlib.suppress(RuntimeError):
+            save_session([{"role": "user", "content": "y"}], session_id="s")
+        leftovers = [p for p in os.listdir(os.path.join(str(tmp_path), "s"))
+                     if p.startswith(".tmp-")]
+        assert leftovers == []

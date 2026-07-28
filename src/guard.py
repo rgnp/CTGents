@@ -15,6 +15,8 @@
 机械拦截在 file.py 的 write/edit/delete 工具里，不靠 LLM 自觉。
 """
 
+from __future__ import annotations
+
 from pathlib import Path
 
 _GUARD_FILE = Path(__file__).resolve()
@@ -24,7 +26,7 @@ _PROJECT_ROOT = _SRC_DIR.parent
 # ── 不可变安全核：连 agent 都不能改（改了=安全变摆设）──
 IMMUTABLE_FILES: frozenset[str] = frozenset({
     str(_GUARD_FILE),                                              # guard.py（分级表本身）
-    str(_SRC_DIR / "tool_guard.py"),                              # 工具拦截层
+    str(_SRC_DIR / "tools" / "tool_guard.py"),                  # 工具拦截层
     str(_SRC_DIR / "gate_audit.py"),                              # 门通行证审计
     # pre-commit 已移入 CORE_FILES——太重导致 git 不可用，简化后走安全带
 })
@@ -33,14 +35,13 @@ IMMUTABLE_FILES: frozenset[str] = frozenset({
 CORE_FILES: frozenset[str] = frozenset({
     str(_SRC_DIR / "main.py"),                  # 主循环入口
     str(_SRC_DIR / "commands.py"),              # 指令派发
-    str(_SRC_DIR / "validate.py"),              # 验证流水线
     str(_SRC_DIR / "cache_context.py"),         # 缓存上下文
     str(_SRC_DIR / "llm.py"),                   # LLM 调用
     str(_SRC_DIR / "tools" / "__init__.py"),    # 工具注册表
     str(_PROJECT_ROOT / "scripts" / "git-hooks" / "pre-commit"),  # 提交钩子（简化后走安全带）
 })
 
-# 向后兼容：旧语义"受保护"=硬锁=现在的不可变核（dashboard 风险面板复用此名）。
+# 向后兼容：旧语义"受保护"=硬锁=现在的不可变核。
 PROTECTED_FILES: frozenset[str] = IMMUTABLE_FILES
 
 

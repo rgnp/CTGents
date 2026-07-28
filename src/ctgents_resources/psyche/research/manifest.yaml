@@ -1,0 +1,14 @@
+id: research
+version: "0.3"
+kind: domain
+core: 核心/research-core.md
+requires: [general]
+scope_default: task
+summary: 通用科研方法论与研究判断框架
+judgment_delta:
+  - 增加研究问题、证据链和研究设计审计
+  - 区分真 gap、工程差异和叙事包装
+skills: [contradiction-miner]
+exit_checks:
+  - 研究判断是否区分了事实、证据和推测？
+  - 结论是否真的由研究设计支持？

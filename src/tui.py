@@ -11,7 +11,8 @@
 - 复用唯一咽喉 run_agent_turn（注入 ui.Display），不另起 agent 循环。
 - agent 一轮跑线程 worker，只往线程安全 deque 推事件；UI 线程 set_interval 排空、
   在主线程改 widget。
-- TUI 下置 main._under_tui=True 禁 msvcrt Esc 监听（Textual 自管 stdin）。
+- TUI 下置 main._under_tui=True 禁后台 Esc 监听线程（Windows msvcrt / POSIX termios 皆同，
+  Textual 自管 stdin）。
 
 启动失败由 main 兜底回退行式 REPL。
 """
@@ -23,6 +24,7 @@ import time
 from collections import deque
 from typing import TYPE_CHECKING
 
+from rich.text import Text
 from textual import work
 from textual.app import App, ComposeResult
 from textual.binding import Binding
@@ -36,6 +38,7 @@ from textual.widgets import (
     ListItem,
     ListView,
     Markdown,
+    Rule,
     Static,
     TextArea,
 )
@@ -51,9 +54,9 @@ DARK_THEME = Theme(
     secondary="#7a88a6",    # 海雾灰（辅助文字）
     accent="#d4875e",       # 赤陶（用户，暖色对比像远处灯火）
     foreground="#dee4ed",   # 月光白（正文，带一丁点蓝）
-    background="#0a101c",   # 深海蓝黑
-    surface="#111827",      # 表面（输入框）
-    panel="#182233",        # 面板（状态栏/代码块）
+    background="#0a101c",   # 深海蓝黑（最深）
+    surface="#162231",      # 深海蓝（输入框，bg→surface +17 亮度）
+    panel="#223548",        # 浅海蓝灰（状态栏/代码块，surface→panel +18 亮度）
     success="#4caf7a",      # 海藻绿
     warning="#d4a843",      # 金盏黄
     error="#e06c6c",        # 珊瑚红
@@ -205,81 +208,80 @@ def _banner_plain(text: str) -> str:
 
 
 # ── 纯函数辅助 ──
+def _shorten(text: str, limit: int) -> str:
+    """单行截断预览：折叠换行、超长加省略号。用于排队/回执类一行提示。"""
+    one_line = " ".join(text.split())
+    return one_line if len(one_line) <= limit else one_line[: limit - 1] + "…"
+
+
 def _fmt_tool(name: str, args: dict) -> tuple[str, str]:
-    """工具调用 → (标签, 参数摘要)。每个工具只显示关键信息，不 dump 全部参数。"""
+    """工具调用 → (标签, 参数摘要)。每个工具只显示关键信息，不 dump 全部参数。
+
+    版式纪律：不使用装饰性 emoji（🔍📄🐍…）——状态由行首 ⏺ 的颜色承载，参数一律
+    用「 · 」分隔的素文本。命令的 $ 是约定俗成的文本记号（非 emoji），保留。
+    """
     from .tools._tool_meta import TOOL_LABELS
     label = TOOL_LABELS.get(name, name)
 
     if name == "grep_code":
         pat = args.get("pattern", "")
         path = args.get("path", "")
-        detail = f"🔍 {pat}"
-        if path:
-            detail += f"  📁 {path}"
+        detail = f"{pat} · {path}" if path else pat
     elif name == "read_file":
-        detail = f"📄 {args.get('path', '')}"
+        detail = args.get("path", "")
         start = args.get("start_line")
         end = args.get("end_line")
         if start is not None and end is not None:
-            detail += f"  L{start}-L{end}"
+            detail += f" · L{start}-L{end}"
         elif start is not None:
-            detail += f"  L{start}-"
+            detail += f" · L{start}-"
     elif name in ("write_file", "replace_in_file", "delete_file"):
-        detail = f"📄 {args.get('path', '')}"
+        detail = args.get("path", "")
     elif name == "find_files":
-        detail = f"🔍 {args.get('pattern', '')}"
+        detail = args.get("pattern", "")
         p = args.get("path", "")
         if p:
-            detail += f"  📁 {p}"
+            detail += f" · {p}"
     elif name == "list_files":
-        p = args.get("path", "")
-        detail = f"📁 {p}" if p else "📁 ."
+        detail = args.get("path", "") or "."
     elif name in ("move_file", "copy_file"):
-        detail = f"{args.get('src', '')}  →  {args.get('dst', '')}"
+        detail = f"{args.get('src', '')} → {args.get('dst', '')}"
     elif name == "run_command":
-        cmd = args.get("command", "")
-        # 提炼命令意图，不暴露完整指令
-        if "pytest" in cmd or "test" in cmd:
-            detail = "▶ 运行测试"
-        elif "ruff" in cmd or "lint" in cmd:
-            detail = "▶ 代码检查"
-        elif "git" in cmd:
-            detail = "▶ Git 操作"
-        else:
-            detail = "▶ 执行"
+        cmd = args.get("command", "").strip().replace("\n", " ")
+        detail = f"$ {cmd[:100]}{'…' if len(cmd) > 100 else ''}"
     elif name == "run_python":
-        code = args.get("code", "")
-        first = code.strip()[:30].replace("\n", " ")
-        detail = f"🐍 {first}{'…' if len(code) > 30 else ''}…"
+        code = args.get("code", "").strip().replace("\n", " ")
+        detail = f"{code[:80]}{'…' if len(code) > 80 else ''}"
     elif name == "search_web":
-        detail = f"🔍 {args.get('query', '')}"
+        detail = args.get("query", "")
     elif name == "read_page":
-        detail = f"🌐 {args.get('url', '')}"
+        detail = args.get("url", "")
     elif name == "scan_papers":
         q = args.get("queries", "")
-        detail = f"🔬 {q[:100]}" if q else "扫描论文"
+        detail = q[:100] if q else "扫描论文"
     elif name in ("learn",):
-        detail = f"📚 {args.get('topic', '')}"
+        detail = args.get("topic", "")
     elif name in ("remember",):
-        detail = f"💾 {args.get('name', '')}"
+        detail = args.get("name", "")
     elif name in ("recall",):
-        detail = f"🔍 {args.get('query', '')}"
+        detail = args.get("query", "")
     elif name in ("analyze_paper", "cross_validate"):
-        detail = f"📄 {args.get('title', '')[:100]}"
+        detail = args.get("title", "")[:100]
     elif name in ("git_status", "git_diff", "git_log", "git_branch"):
-        detail = f"📊 {name.replace('git_', '')}"
+        detail = name.replace("git_", "")
     elif name == "git_commit":
         msg = args.get("message", "")
-        detail = f"💾 {msg[:80]}" if msg else "提交"
+        detail = msg[:80] if msg else "提交"
     elif name == "git_push":
-        detail = f"⬆ {args.get('branch', '当前分支')}"
+        detail = args.get("branch", "当前分支")
     elif name == "run_async":
         cmd = args.get("command", "")
-        detail = f"⏳ $ {cmd[:120]}{'…' if len(cmd) > 120 else ''}"
+        detail = f"$ {cmd[:120]}{'…' if len(cmd) > 120 else ''}"
     elif name == "make_dir":
-        detail = f"📁 {args.get('path', '')}"
+        detail = args.get("path", "")
     elif name == "think":
-        detail = "💭"
+        thought = (args.get("thought") or args.get("content") or "").strip().replace("\n", " ")
+        detail = f"{thought[:80]}{'…' if len(thought) > 80 else ''}" if thought else ""
     else:
         parts = []
         for k, v in args.items():
@@ -300,6 +302,41 @@ def _strip_user_wrappers(content: str) -> str:
     if "【用户消息】" in content:
         content = content.split("【用户消息】", 1)[1].strip()
     return content
+
+
+def _expand_file_mentions(text: str) -> tuple[str, list[str]]:
+    """把消息里的 @<path> 展开成附带文件内容的块（Claude Code 式文件引用）。
+
+    返回 (展开后的消息, 已附文件路径)。只展开真实存在的文件；单文件截到 400 行/20k 字。
+    展开内容追加在原消息后（原文里的 @path 保留，用户回显与 agent 输入都看得见引用了啥）。
+    """
+    import re
+    from pathlib import Path
+    blocks: list[str] = []
+    attached: list[str] = []
+    seen: set[str] = set()
+    for raw in re.findall(r'(?<![\w@])@([^\s@]+)', text):
+        raw = raw.rstrip(".,;:，。；：")   # 去掉粘在路径尾的标点
+        if not raw or raw in seen:
+            continue
+        p = Path(raw)
+        if not p.is_file():
+            continue
+        try:
+            content = p.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+        seen.add(raw)
+        attached.append(raw)
+        lines = content.splitlines()
+        truncated = len(lines) > 400 or len(content) > 20000
+        if truncated:
+            content = "\n".join(lines[:400])[:20000]
+        note = "（截断前 400 行）" if truncated else ""
+        blocks.append(f"### 引用文件 {raw}{note}\n```\n{content}\n```")
+    if not blocks:
+        return text, []
+    return text + "\n\n" + "\n\n".join(blocks), attached
 
 
 def _status_line(ctx, session_id: str) -> str:
@@ -335,10 +372,7 @@ def _status_line(ctx, session_id: str) -> str:
         pt = t.get("prompt_tokens", 0)
         if pt > 0:
             hit = t.get("cache_hit_tokens", 0) / pt * 100
-            bars = min(5, max(1, round(hit / 20)))
-            bar = "▓" * bars + "░" * (5 - bars)
-            color = "green" if hit > 70 else "yellow"
-            segs.append(f"⚡[{color}]{bar}[/] {hit:.0f}%")
+            segs.append(f"⚡{hit:.0f}%命中")
     except Exception:
         pass
     try:
@@ -381,7 +415,7 @@ class SplashScreen(Screen):
     SplashScreen { align: center middle; background: $background; }
     #logo_area { width: auto; height: auto; }
     #logo_area > Static { width: auto; height: 1; }
-    #buttons { width: auto; height: auto; margin-top: 4; }
+    #buttons { width: auto; height: 3; min-height: 3; margin-top: 4; }
     #buttons Button {
         width: 16; height: 1; border: none; margin: 0 12; text-style: bold;
         background: transparent; color: $primary;
@@ -475,12 +509,15 @@ class SaveSelectScreen(Screen):
         background: $surface;
     }
     #saves { height: auto; max-height: 16; background: $surface; }
-    #saves > ListItem { padding: 0 1; min-height: 1; }
+    #saves > ListItem { padding: 0 1; min-height: 1; height: auto; }
     #saves > ListItem:even { background: $panel; }
     #saves > ListItem:odd { background: $surface; }
     #saves > ListItem.--highlight {
         background: $primary; color: $background; text-style: bold;
     }
+    /* 一句话预览：弱色第二行；选中时反白保持可读 */
+    .save-preview { color: $primary-darken-1; text-style: none; }
+    #saves > ListItem.--highlight .save-preview { color: $background; }
     #newbtn {
         width: 100%; border: none; background: transparent;
         color: $success; text-style: bold;
@@ -507,7 +544,7 @@ class SaveSelectScreen(Screen):
         max_name = max((len(infos.get(s, {}).get("name", s)) for s in sessions), default=20)
         items: list[ListItem] = []
         for i, sid in enumerate(sessions):
-            info = infos.get(sid, {"name": sid, "date": "", "time": ""})
+            info = infos.get(sid, {"name": sid, "date": "", "time": "", "preview": ""})
             name = info["name"]
             time_text = f"{info['date']} {info['time']}".strip()
             prefix = "● " if i == 0 else "  "
@@ -517,13 +554,18 @@ class SaveSelectScreen(Screen):
                 text = prefix + name + " " * max(pad, 1) + time_text
             else:
                 text = prefix + name
-            items.append(ListItem(Label(text), name=sid))
+            preview = info.get("preview", "")
+            rows: list = [Label(text, markup=False)]
+            if preview:
+                rows.append(Label(f"    {preview}", classes="save-preview", markup=False))
+            # 直接把行作为 ListItem 子节点堆叠——不套 Vertical（其默认 1fr 会撑出大片空白）
+            items.append(ListItem(*rows, name=sid))
         with Vertical(id="selectwrap"):
-            yield Static("◆ SELECT  SAVE ◆", id="savetitle")
+            yield Static("◆ SELECT  SAVE ◆", id="savetitle", markup=False)
             with Vertical(id="savebox"):
                 yield ListView(*items, id="saves")
                 yield Button("+ NEW GAME", id="newbtn")
-            yield Static("↑↓ 选择  Enter 进入  d 删除  Ctrl+Q 退出", id="hint")
+            yield Static("↑↓ 选择  Enter 进入  d 删除  Ctrl+Q 退出", id="hint", markup=False)
 
     def on_mount(self) -> None:
         self.query_one("#saves", ListView).focus()
@@ -572,38 +614,100 @@ class SaveSelectScreen(Screen):
 # ═══════════════════════════════════════════════════════
 # 聊天
 # ═══════════════════════════════════════════════════════
+class PromptArea(TextArea):
+    """输入框：@ 文件补全激活时，把 ↑↓/Tab/Esc 交给 ChatScreen（拦在光标移动之前）。
+
+    Enter 是 ChatScreen 的 priority 绑定、在本控件按键之前触发，故由 action_submit_prompt
+    自查补全态处理；这里只拦非 priority 的导航键。
+    """
+
+    def on_key(self, event) -> None:
+        screen = self.screen
+        if (getattr(screen, "_ac_active", False)
+                and event.key in ("up", "down", "tab", "escape")
+                and screen._ac_consume_key(event.key)):
+            event.prevent_default()
+            event.stop()
+
+
 class ChatScreen(Screen):
     CSS = """
-    ChatScreen { background: $background; border: heavy #1a202c; }
-    #transcript { padding: 0 2; }
+    ChatScreen { background: $background; }
+    #transcript { padding: 0 1; }
     #transcript > * { width: 100%; }
-    /* ── 消息左粗条 ── */
-    .msg-header {
-        border-left: heavy transparent; padding: 0 0 0 1;
-        text-style: bold; margin-bottom: 1;
+    /* ── 用户输入：❯ 前缀，暖色（冷暖对比里的"暖"）── */
+    .user-msg { color: $accent; text-style: bold; margin: 1 0 0 0; padding: 0 0 0 1; }
+    /* ── agent 标记：◆ CTGents，冷色；每个用户轮只一次，思考/工具/输出全归其下 ── */
+    .agent-name { color: $primary; text-style: bold; margin: 1 0 0 0; padding: 0 0 0 1; }
+    /* ── 输出正文：中性偏暖月光白（不再蓝调平铺，让蓝=结构、橙=强调都跳得出来）+ 阅读列缩进 ── */
+    .msg-body { margin: 0 0 1 0; padding: 0 0 0 3; color: #dad7d0; }
+    /* 段落之间留一行呼吸（"字体观感"的核心可调项之一） */
+    .msg-body MarkdownParagraph { margin: 0 0 1 0; }
+    /* 结构冷、强调暖：标题冷色、列表符/加粗暖色点睛 */
+    .msg-body MarkdownH1 { color: $primary-lighten-1; text-style: bold;
+        background: transparent; border: none; margin: 1 0 0 0; padding: 0; }
+    .msg-body MarkdownH2 { color: $primary-lighten-1; text-style: bold;
+        background: transparent; border: none; margin: 1 0 0 0; padding: 0; }
+    .msg-body MarkdownH3 { color: $primary; text-style: bold; margin: 1 0 0 0; }
+    .msg-body MarkdownBullet { color: $accent; }
+    .msg-body MarkdownBlockQuote {
+        border-left: thick $primary-darken-2; background: $surface;
+        color: $secondary; padding: 0 1; margin: 1 0;
     }
-    .msg-header.user { color: $accent; border-left: heavy $accent; }
-    .msg-header.agent { color: $primary; border-left: heavy $primary; }
-    .msg-header .time { color: $secondary; text-style: dim; }
-    .msg-body { margin: 0 0 1 0; padding: 0 0 0 2; }
-    .msg-body.user-body { margin: 0 0 0 0; }  /* 用户消息底边归零，与 agent 回复贴紧 */
-    /* ── 轮次分隔 ── */
-    .turn-sep { color: $primary-darken-3; height: 1; margin: 1 0; }
-    /* ── 折叠区（思考/工具）─ */
-    Collapsible { margin: 0 0 0 2; border: none; background: transparent; }
+    /* 行内：加粗=暖强调，斜体=柔白，行内代码=海藻绿 */
+    MarkdownBlock > .strong { color: $accent; text-style: bold; }
+    MarkdownBlock > .em { color: #dad7d0; text-style: italic; }
+    MarkdownBlock > .code_inline { color: $success; background: $panel; }
+    /* ── 代码块：给对比底色 + 左色条，让语法高亮在深海 bg 上跳出来
+       （默认 black 10% 叠在 #0a101c 上几乎不可见，高亮等于白做）── */
+    MarkdownFence {
+        background: $surface;
+        border-left: thick $primary-darken-1;
+        margin: 1 0;
+    }
+    /* ── 思考折叠区：缩进在 CTGents 之下，左竖线 ── */
+    Collapsible { margin: 0 0 0 3; border: none; background: transparent; }
     .collapsible-chat {
-        margin: 0 0 1 2; border-left: vkey $primary-darken-3;
+        margin: 0 0 0 3; border-left: vkey $primary-darken-3;
         padding: 0 0 0 1; background: transparent;
     }
+    .thinking { color: $secondary; }
+    /* ── 工具调用：⏺ 行 + ⎿ 结果，缩进；进行中琥珀、完成蓝 ── */
+    .tool-call { color: $primary-lighten-2; margin: 0 0 0 3; }
+    .tool-call.running { color: $warning; }
+    .tool-call.done { color: $secondary; }   /* 完成的无展开工具行：弱色退到背景，不抢戏 */
+    .tool-result { color: $secondary; margin: 0 0 0 5; text-style: dim; }
+    /* ── 可折叠工具结果：标题=结论(弱色可点)，展开=全文 ── */
+    .tool-result-box { margin: 0 0 0 3; border: none; background: transparent; }
+    .tool-result-box CollapsibleTitle { color: $secondary; background: transparent; }
+    .tool-result-box CollapsibleTitle:hover { color: $primary-lighten-1; }
+    /* ── 长任务 live TODO 面板（顶部常驻，无任务时隐藏）── */
+    #taskpanel {
+        dock: top; height: auto; padding: 0 1;
+        background: $panel; color: $secondary;
+        border-bottom: solid $primary-darken-2;
+    }
+    #taskpanel.hidden { display: none; }
+    /* ── @ 文件补全下拉（输入框上方）── */
+    #ac_popup {
+        height: auto; max-height: 14; padding: 0 1;
+        background: $panel; border: round $primary-darken-1;
+    }
+    #ac_popup.hidden { display: none; }
+    /* ── 滚上去看历史时，底部来新内容的提示 ── */
+    #newmsg {
+        height: 1; color: $warning; background: $surface;
+        content-align: center middle; text-style: bold;
+        border-top: solid $warning;
+    }
+    #newmsg.hidden { display: none; }
+    /* ── 轮次分隔 ── */
+    .turn-sep { color: $primary-darken-3; height: 1; margin: 1 0; }
     /* ── 元消息 ── */
     .meta { color: $secondary; margin: 0; }
-    .tool-meta { color: $primary-darken-2; margin: 0; text-style: dim; }
     .sys-meta { color: $secondary; margin: 0; text-style: dim; }
     .err  { color: $error; margin: 0; }
-    .thinking { }  /* 折叠态标题由 Textual Collapsible 内置样式处理；展开后内容继承 $foreground */
     .brk  { color: $warning; text-style: bold; content-align: center middle; margin: 1 0; }
-    /* ── 顶部氛围光 ── */
-    #topglow { dock: top; width: 100%; height: 1; background: #1a202c; }
     /* ── 底部栏 ── */
     #bottombar { dock: bottom; height: auto; }
     #prompt {
@@ -613,11 +717,16 @@ class ChatScreen(Screen):
         min-height: 1; max-height: 30vh; padding: 0 1;
     }
     #prompt:focus { border-top: solid $primary; border-bottom: solid $primary; }
-    #prompt.has-text { border-top: solid $success; }
+    #prompt.has-text { border-top: solid $primary; }
     #status {
         height: 1; color: $primary; background: $panel; padding: 0 1;
     }
     #status.interrupted { color: $warning; text-style: bold; background: $surface; }
+    /* ── 快捷键提示条（最底一行，弱色，让隐藏操作可被发现）── */
+    #keyhints {
+        height: 1; color: $primary-darken-1; background: $background;
+        padding: 0 1; text-style: dim;
+    }
     """
 
     BINDINGS = [
@@ -628,66 +737,96 @@ class ChatScreen(Screen):
         Binding("ctrl+l", "clear_screen", "清屏", show=False),
         Binding("ctrl+up", "arrow_up", "上一条", show=False),
         Binding("ctrl+down", "arrow_down", "下一条", show=False),
+        Binding("ctrl+r", "show_history", "回看全部历史", show=False),
+        Binding("ctrl+y", "copy_code", "复制代码块", show=False),
         Binding("enter", "submit_prompt", "发送", show=False, priority=True),
     ]
+
+    # 流式重渲节流：攒 token 仍每 30ms(便宜),但整段 markdown/思考重渲最多 ~10fps。
+    # 否则长回复时每帧重解析整段 markdown(33fps×越来越长)→ 越往后越卡。收尾必全渲。
+    _LIVE_RENDER_INTERVAL = 0.10
+    _SPINNER = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"   # 运行中工具行的转圈帧（10fps 循环）
+    _AC_WINDOW = 10              # @ 文件补全下拉每屏可见行数（其余靠 ↑↓ 滑动）
+    _TASK_WINDOW = 4            # TODO 面板每屏可见步骤数（窗口跟随当前活跃步滑动）
 
     def __init__(self) -> None:
         super().__init__()
         self._events: deque = deque()
         self._cur_md: Markdown | None = None
         self._cur_text = ""
+        self._last_agent_text = ""    # 最近一段 agent 正文，供 Ctrl+Y 复制代码块
         self._dirty = False
-        # 思考(reasoning)流：累进暗色文本，挂进 Collapsible。展开规则=当前阶段展开、
-        # 下一阶段(工具/答案/新思考)开始时折叠上一个；_active_collapsible 记当前展开块。
+        # 思考(reasoning)流：到达即在 CTGents 头下挂折叠 Collapsible（实时展开，下阶段折起）。
         self._cur_reasoning = ""
         self._reasoning_box: Static | None = None
+        self._reasoning_collapsible: Collapsible | None = None
         self._reasoning_dirty = False
-        # 工具调用实时显示：Collapsible 中逐条罗列，默认为折叠状态
-        self._cur_tool_calls: list[str] = []
-        self._tool_box_outer: Collapsible | None = None
-        self._tool_box_inner: Static | None = None
-        self._tool_dirty = False
+        self._active_collapsible: Collapsible | None = None  # 当前展开的思考块，下阶段折起
         self._current_tool = ""           # 状态栏实时显示当前工具名
-        self._agent_header_mounted = False  # 一轮内只挂一次 CTGents 头部
+        self._pending_tool_labels: list[tuple[Label, str]] = []  # 已发起未出结果的工具行（FIFO 配对 ✓）
+        self._spin_frame = 0              # 运行中工具行转圈帧索引
+        # 每个用户轮只挂一次 CTGents 头（在首个 agent 事件挂出，所有循环的思考/工具/输出归其下）
+        self._agent_header_mounted = False
         self._last_user_stamp = ""          # 本轮用户时间戳（供 agent header 降噪用）
-        self._active_collapsible: Collapsible | None = None
         self._busy = False
         # 中断态：用户 Esc 截停本轮后进入。_interrupt_pending=已请求、等本轮真正收尾(done)；
         # _interrupted=已停稳、等用户 Enter 继续 / 再按 Esc 终止。
         self._interrupt_pending = False
         self._interrupted = False
+        self._hard_kill = False      # 二次 Esc 升级：pending 态再按 Esc → 强制终止，不等 LLM yield
+        self._queued: str | None = None  # 排队消息：agent 跑着时回车不再静默丢，存下来、本轮 done 后自动发
         self._pending_notices: list[str] = []
         self._history: list[str] = []
         self._history_idx: int = -1
         self._history_draft: str = ""
-        self._status_cache: tuple[int, int, str] = (-1, -1, "")
+        self._status_cache: tuple = (None, "")   # (缓存键, 渲染好的状态行)
         self._turn_started: float = 0.0
         self._turn_count: int = 0
         self._echo_max_turns: int = 3  # 回放最多渲染的轮数
+        self._last_md_render: float = 0.0       # 流式 markdown 上次重渲时刻（节流）
+        self._last_reason_render: float = 0.0   # 思考流上次重渲时刻（节流）
+        self._pending_marker: Static | None = None  # 首 token 前的"思考中…"占位
+        self._worker_line: Static | None = None  # delegate worker 活动行（单行原地更新，不刷屏）
+        # 输入补全状态（@ 文件 / 命令两种模式共用一套下拉）
+        self._ac_active = False
+        self._ac_mode = "file"            # "file" | "cmd"
+        self._ac_options: list[str] = []  # 选中后插入的值（文件路径 / 命令名）
+        self._ac_labels: list[str] = []   # 下拉显示文本（命令模式带描述）
+        self._ac_index = 0
+        self._ac_at_pos = 0               # 文件模式：当前 @ 在输入文本中的起始位置
+        self._ac_files_cache: list[str] | None = None
     # ── 布局 ──
     def compose(self) -> ComposeResult:
-        yield Static(id="topglow")
+        yield Static("", id="taskpanel", classes="hidden")   # 长任务 live TODO 清单
         yield VerticalScroll(id="transcript")
         with Vertical(id="bottombar"):
-            yield TextArea(
+            yield Static("", id="newmsg", classes="hidden")     # 滚上去时的"↓ 新内容"提示
+            yield Static("", id="ac_popup", classes="hidden")   # @ 文件补全下拉
+            yield PromptArea(
                 "",
-                placeholder="> 输入消息（/help 查看指令）",
+                placeholder="> 输入消息（/help 查看指令；@ 引用文件）",
                 id="prompt",
                 soft_wrap=True,
                 show_line_numbers=False,
             )
             yield Static("", id="status")
+            yield Static("", id="keyhints")   # 随状态变的快捷键提示（让交互可被发现）
 
     def on_mount(self) -> None:
         self._load_pending()
         self._refresh_status()
+        self._refresh_hints()
         self.query_one("#prompt", TextArea).focus()
+        self._refresh_task_panel()
         self.set_interval(0.03, self._drain_events)
+        self.set_interval(0.1, self._tick_spinner)
         self.set_interval(0.5, self._refresh_status)
+        self.set_interval(0.5, self._refresh_hints)
+        self.set_interval(0.5, self._refresh_task_panel)
         self.set_interval(0.5, self._drain_jobs)
 
     def on_text_area_changed(self, event: TextArea.Changed) -> None:
-        """内容非空时给输入框加 has-text 样式类。"""
+        """内容非空时给输入框加 has-text 样式类 + 刷新 @ 文件补全。"""
         if event.text_area.id != "prompt":
             return
         p = self.query_one("#prompt", TextArea)
@@ -695,6 +834,143 @@ class ChatScreen(Screen):
             p.add_class("has-text")
         else:
             p.remove_class("has-text")
+        self._ac_update(p.text)
+
+    # ── @ 文件补全 ──
+    def _ac_file_list(self) -> list[str]:
+        """项目内文件相对路径列表（首次扫描后缓存）。排除 .git/__pycache__ 等噪声。"""
+        if self._ac_files_cache is None:
+            from pathlib import Path
+            root = Path.cwd()
+            ignore = {".git", "__pycache__", ".venv", "venv", "node_modules",
+                      ".pytest_cache", ".mypy_cache", ".ruff_cache"}
+            out: list[str] = []
+            with contextlib.suppress(Exception):
+                for pth in root.rglob("*"):
+                    if any(part in ignore for part in pth.parts):
+                        continue
+                    if pth.is_file():
+                        out.append(str(pth.relative_to(root)).replace("\\", "/"))
+                    if len(out) >= 4000:
+                        break
+            self._ac_files_cache = sorted(out)
+        return self._ac_files_cache
+
+    def _ac_update(self, text: str) -> None:
+        """刷新补全下拉：整条以 / 开头且无空格 → 命令补全；末尾 @<partial> → 文件补全；否则隐藏。"""
+        import re
+        mcmd = re.match(r'^/(\S*)$', text)
+        if mcmd is not None:
+            self._ac_show_commands(mcmd.group(1))
+            return
+        m = re.search(r'(?:^|\s)@([^\s@]*)$', text)
+        if m is None:
+            if self._ac_active:
+                self._ac_hide()
+            return
+        partial = m.group(1)
+        self._ac_at_pos = m.start() + (0 if text[m.start()] == "@" else 1)
+        files = self._ac_file_list()
+        pl = partial.lower()
+        if pl:
+            from pathlib import Path
+            matches = [f for f in files if pl in f.lower()]
+            matches.sort(key=lambda f: (pl not in Path(f).name.lower(), len(f)))
+        else:
+            matches = files
+        opts = matches[:50]               # 存全部匹配（上限 50），渲染时窗口化
+        if not opts:
+            self._ac_hide()
+            return
+        self._ac_mode = "file"
+        self._ac_options = opts
+        self._ac_labels = opts
+        self._ac_index = 0
+        self._ac_active = True
+        self._render_ac()
+
+    def _ac_show_commands(self, partial: str) -> None:
+        """命令补全：按前缀匹配（去别名）的命令名 + 描述。"""
+        from .commands import command_completions
+        pl = partial.lower()
+        matches = [(name, desc) for name, desc in command_completions()
+                   if name.lstrip("/").lower().startswith(pl)]
+        matches.sort(key=lambda nd: nd[0])
+        if not matches:
+            self._ac_hide()
+            return
+        self._ac_mode = "cmd"
+        self._ac_at_pos = 0
+        self._ac_options = [name for name, _ in matches[:50]]
+        self._ac_labels = [f"{name}  {desc}" if desc else name for name, desc in matches[:50]]
+        self._ac_index = 0
+        self._ac_active = True
+        self._render_ac()
+
+    def _render_ac(self) -> None:
+        with contextlib.suppress(Exception):
+            from rich.text import Text
+            popup = self.query_one("#ac_popup", Static)
+            opts = self._ac_labels
+            n = len(opts)
+            win = self._AC_WINDOW
+            # 滑动窗口：让选中项尽量居中，到头/到尾贴边
+            start = 0 if n <= win else max(0, min(self._ac_index - win // 2, n - win))
+            end = min(n, start + win)
+            t = Text()
+            if start > 0:
+                t.append(f"  ↑ 还有 {start} 个\n", style="dim")
+            for i in range(start, end):
+                sel = i == self._ac_index
+                t.append(("▶ " if sel else "  ") + opts[i],
+                         style="bold #d4875e" if sel else "dim")
+                if i < end - 1:
+                    t.append("\n")
+            if end < n:
+                t.append(f"\n  ↓ 还有 {n - end} 个", style="dim")
+            popup.update(t)
+            popup.remove_class("hidden")
+
+    def _ac_hide(self) -> None:
+        self._ac_active = False
+        self._ac_options = []
+        self._ac_labels = []
+        with contextlib.suppress(Exception):
+            popup = self.query_one("#ac_popup", Static)
+            popup.add_class("hidden")
+            popup.update("")
+
+    def _ac_consume_key(self, key: str) -> bool:
+        """补全激活时处理导航键（PromptArea.on_key 调用）。返回 True=已消费。"""
+        if not self._ac_active:
+            return False
+        if key == "down":
+            self._ac_index = (self._ac_index + 1) % len(self._ac_options)
+            self._render_ac()
+        elif key == "up":
+            self._ac_index = (self._ac_index - 1) % len(self._ac_options)
+            self._render_ac()
+        elif key == "tab":
+            self._ac_accept()
+        elif key == "escape":
+            self._ac_hide()
+        else:
+            return False
+        return True
+
+    def _ac_accept(self) -> None:
+        """把选中项插回输入框：命令模式整条换成 /命令 ；文件模式替换末尾 @<partial> 为 @<path>。"""
+        if not self._ac_options:
+            return
+        chosen = self._ac_options[self._ac_index]
+        with contextlib.suppress(Exception):
+            ta = self.query_one("#prompt", TextArea)
+            if self._ac_mode == "cmd":
+                ta.text = chosen + " "
+            else:
+                ta.text = ta.text[:self._ac_at_pos] + f"@{chosen} "
+            ta.move_cursor(ta.document.end)
+        self._ac_hide()
 
     def _load_pending(self) -> None:
         """进聊天屏时按存档选择结果加载会话（NEW=不加载，沿用 splash 初始化的空会话）。"""
@@ -703,13 +979,21 @@ class ChatScreen(Screen):
             # 新游戏：显示欢迎消息（空状态设计）
             t = self.query_one("#transcript", VerticalScroll)
             t.mount(Static("你好，我是 CTGents。你可以输入消息开始对话，或输入 /help 查看可用指令。",
-                           classes="sys-meta"))
+                           classes="sys-meta", markup=False))
             t.scroll_end(animate=False)
             return
         from .main import _apply_prefix
         from .session import load_session
+        try:
+            msgs = load_session(sid)
+        except Exception as e:  # noqa: BLE001  存档损坏/缺失 → 降级为新会话，别崩进不去
+            t = self.query_one("#transcript", VerticalScroll)
+            t.mount(Static(f"⚠️ 存档 [{sid}] 打不开（{type(e).__name__}），已作为新会话开始。",
+                           classes="err", markup=False))
+            t.scroll_end(animate=False)
+            return
         self.app.ctx.clear_log()
-        self.app.ctx.log.extend(load_session(sid))
+        self.app.ctx.log.extend(msgs)
         _apply_prefix(self.app.ctx, sid)  # 复用该会话冻结前缀，重载不塌命中
         self.app.session_id = sid
         self.app.final_session_id = sid
@@ -723,38 +1007,70 @@ class ChatScreen(Screen):
             return
         if not ta.has_focus:
             return
+        if self._ac_active:
+            # 命令模式下已是完整命令名 → Enter 直接运行；否则（部分输入/文件模式）补全
+            if self._ac_mode == "cmd" and ta.text.strip() in self._ac_options:
+                self._ac_hide()
+            else:
+                self._ac_accept()
+                return
         text = ta.text.strip()
-        # 中断态：回车 = 继续被打断的事（不管带不带指示都算"继续"，统一走 resume）。
-        # 带指示 → 接着做并按指示调整；不带 → 纯暂停再续。两者都不开新话题、不读任务状态。
+        # 中断态回车：空 = 继续被打断的事（纯 resume）；有新内容 = 当新消息重开（不再把
+        # 你打的话硬塞回旧上下文当"调整指示"——那是之前"提示说重开、实际接着续"的自相矛盾，
+        # 也是实测的别扭点）。想在旧的基础上微调，就明说"接着刚才的继续，但…"。
         if self._interrupted and not self._busy:
-            ta.clear()
-            self._resume_after_interrupt(text)
+            if not text:
+                ta.clear()
+                self._resume_after_interrupt("")   # 空回车 = 纯续跑被打断的事
+                return
+            self._exit_interrupted()               # 有新内容 = 退出中断态，落到下面当全新消息发
+        elif self._busy:
+            # agent 还在跑：回车不再静默无反应，把这句排队、本轮结束后自动发（像 Claude Code）。
+            # 空回车不排队；重复排队则覆盖为最新一句。按 Esc 截停会把排队内容退回输入框、不丢。
+            if text:
+                self._queued = text
+                ta.clear()
+                self._mount(f"⏳ 已排队，本轮结束后自动发送：{_shorten(text, 60)}", "meta")
             return
-        if self._busy:
-            return  # agent 还在跑：保留正在编辑的内容、不清空也不提交（按 Esc 截停后再发）
         ta.clear()
+        self._submit_text(text)
+
+    def _submit_text(self, text: str) -> None:
+        """把一条已确定的文本当作新的一轮用户消息发出。
+
+        正常回车、以及"排队消息在本轮 done 后自动发"都走这里——单一实现，避免两处漂移。
+        """
         if not text:
             return
         self._history.append(text)
         self._history_idx = -1
         self._history_draft = ""
-        # 用户时间戳降噪（同分钟不重复显示）+ 重置 header 守卫
-        stamp = time.strftime("%H:%M")
-        time_part = f"  ·  {stamp}" if stamp != self._last_user_stamp else ""
-        self._last_user_stamp = stamp
+        # 记录本轮时间戳（供 CTGents 头同分钟降噪）+ 重置 header 守卫
+        self._last_user_stamp = time.strftime("%H:%M")
         self._agent_header_mounted = False
-        t = self.query_one("#transcript", VerticalScroll)
-        t.mount(Label(f"━ 你{time_part}", classes="msg-header user"))
-        t.mount(Markdown(text, classes="msg-body user-body"))
-        t.scroll_end(animate=False)
+        self._mount_user_msg(text)
         if text.startswith("/"):
             self._handle_command(text)
         else:
+            expanded, attached = _expand_file_mentions(text)   # @path → 附文件内容
+            if attached:
+                self._mount(f"已附 {len(attached)} 个文件：{', '.join(attached)}", "meta")
             if self._pending_notices:
-                text = ("【后台作业完成】\n" + "\n\n".join(self._pending_notices)
-                        + "\n\n【用户消息】\n" + text)
+                expanded = ("【后台作业完成】\n" + "\n\n".join(self._pending_notices)
+                            + "\n\n【用户消息】\n" + expanded)
                 self._pending_notices.clear()
-            self._run_turn(text)
+            self._run_turn(expanded)
+
+    def _restore_queued_to_input(self, text: str) -> None:
+        """本轮被打断/终止时，把排队消息退回输入框（不自动发、也不丢），由用户决定。"""
+        try:
+            ta = self.query_one("#prompt", TextArea)
+        except Exception:
+            return
+        if ta.text.strip():
+            return  # 用户已经在打新内容了，别覆盖
+        ta.text = text
+        self._mount(f"↩ 排队消息已退回输入框（本轮被打断，未自动发送）：{_shorten(text, 60)}", "meta")
 
     # ── 指令 ──
     def _handle_command(self, text: str) -> None:
@@ -786,50 +1102,93 @@ class ChatScreen(Screen):
     def _apply_load(self, target: str) -> None:
         from .main import _apply_prefix
         from .session import load_session
+        try:
+            msgs = load_session(target)
+        except Exception as e:  # noqa: BLE001  存档损坏/缺失 → 提示并保持当前会话不变
+            self._mount(f"⚠️ 存档 [{target}] 打不开（{type(e).__name__}），已保持当前会话。", "err")
+            return
         self.app.ctx.clear_log()
-        self.app.ctx.log.extend(load_session(target))
+        self.app.ctx.log.extend(msgs)
         _apply_prefix(self.app.ctx, target)  # 复用该会话冻结前缀，重载不塌命中
-        self._status_cache = (-1, -1, "")
+        self._status_cache = (None, "")
         self.app.session_id = target
         self.app.final_session_id = target
         from . import status_bar
+        from .llm import reset_compaction_state
         from .main import _session_state
+        from .psyche_bridge import resync_system_context
         status_bar.reset()
+        reset_compaction_state()  # 切会话重置压缩防抖锁，不带进新会话
+        resync_system_context(self.app.ctx)  # 重置 system_context 注册表，按新会话 log 里实际的 psyche 重新登记
         _session_state["task_reminded"] = False  # 切会话→新会话首轮重提醒未完成任务
         self.query_one("#transcript").remove_children()
         self._turn_count = 0
         self._agent_header_mounted = False
         self._reset_reasoning()
         self._active_collapsible = None
-        self._interrupted = self._interrupt_pending = False
+        self._interrupted = self._interrupt_pending = self._hard_kill = False
         self._echo_conversation()
         self._refresh_status()
 
     def _apply_clear(self, r) -> None:
+        from . import system_context
+        from .llm import reset_compaction_state
         from .main import _make_prefix_msgs, _session_state
         self.app.ctx.clear_log()
         self.app.ctx.rebuild_prefix(_make_prefix_msgs())
+        reset_compaction_state()  # 清空会话重置压缩防抖锁
+        system_context.reset()  # 清空会话 → log 里没有 psyche 了，注册表也清空
         _session_state["task_reminded"] = False  # 清空后允许再次提醒
         if r.save:
             self.app.session_id = None
             from . import status_bar
-            from .tasks import reset_gaps_cache
-            reset_gaps_cache()
             status_bar.reset()
-        self._status_cache = (-1, -1, "")
+        self._status_cache = (None, "")
         self.query_one("#transcript").remove_children()
         self._agent_header_mounted = False
         self._reset_reasoning()
         self._reset_tool_calls()
         self._active_collapsible = None
-        self._interrupted = self._interrupt_pending = False
+        self._interrupted = self._interrupt_pending = self._hard_kill = False
         self._mount("上下文已清除", "meta")
 
     # ── 一轮 agent 驱动 ──
+    def _prune_transcript(self) -> None:
+        """只保留最近 _echo_max_turns 轮的显示组件，删掉更早的。
+
+        会话越用 transcript 里的 widget 越多 → Textual 重排/渲染越慢（"越用越卡"的真因）。
+        只动显示层：ctx.log（喂 LLM 的真上下文）与会话存档不受影响，重载仍可见历史。
+        每轮以"用户消息头"为起点；保留最后 keep 个起点及其之后的全部组件。
+        """
+        keep = self._echo_max_turns
+        try:
+            t = self.query_one("#transcript", VerticalScroll)
+        except Exception:
+            return
+        children = list(t.children)
+        user_idxs = [i for i, w in enumerate(children) if w.has_class("user-msg")]
+        if len(user_idxs) <= keep:
+            return
+        cutoff = user_idxs[len(user_idxs) - keep]  # 第 keep-从后数 个用户头 = 保留起点
+        survivor = children[cutoff]
+        for w in children[:cutoff]:
+            with contextlib.suppress(Exception):
+                w.remove()
+        # 顶部留一行折叠提示（完整记录仍在会话存档，未受影响）
+        with contextlib.suppress(Exception):
+            t.mount(Static("⋯ 更早的对话已折叠（完整记录在会话存档）", classes="meta", markup=False),
+                    before=survivor)
+
     def _run_turn(self, text: str) -> None:
+        self._prune_transcript()  # 开新一轮前剪掉 3 轮前的旧组件，防越用越卡
         self._busy = True
         self._turn_started = time.monotonic()
         self._refresh_status()  # 即时反馈：状态栏立即闪烁，消除空档
+        # 首 token 前挂一条 dim 占位——状态栏已经变了，但 transcript 空白会让用户以为卡了
+        t = self.query_one("#transcript", VerticalScroll)
+        self._pending_marker = Static("⏳ …", classes="meta", markup=False)
+        t.mount(self._pending_marker)
+        t.scroll_end(animate=False)
         # 不禁用输入框——禁用会让"按 Esc 后到本轮真正收尾(done)之间"无法打字（中断在下一个
         # LLM 流检查点才生效，工具/网络期间可能好几秒）。保持可输入：用户随时能边跑边写下一句/
         # 截停指令；_busy 守卫负责"跑着时别提交新一轮"。
@@ -844,6 +1203,11 @@ class ChatScreen(Screen):
             with contextlib.suppress(Exception):
                 self.app.ctx.rebuild_prefix(_main._make_prefix_msgs())
         ev = self._events
+        # delegate worker 进度接进事件队列（原默认 print 被 Textual 吞掉 = 委派期间死寂，
+        # 用户以为卡死）。"worker" 事件单行原地更新，不像 status 那样逐条刷 transcript。
+        with contextlib.suppress(Exception):
+            from .tools import delegate as _delegate_mod
+            _delegate_mod.set_progress_sink(lambda s: ev.append(("worker", str(s).strip())))
 
         def make_display():
             started = [False]
@@ -868,9 +1232,25 @@ class ChatScreen(Screen):
                 self.app.ctx, text, self.app.session_id, display=disp)
             self.app.final_session_id = self.app.session_id
         except Exception as e:  # noqa: BLE001
-            ev.append(("error", f"{type(e).__name__}: {e}"))
+            from .llm import humanize_llm_error
+            friendly = humanize_llm_error(e)
+            ev.append(("error", friendly if friendly else f"{type(e).__name__}: {e}"))
         finally:
             ev.append(("done",))
+
+    def _clear_pending_marker(self) -> None:
+        """首 token 到达或本轮结束：移除"思考中…"占位符。"""
+        if self._pending_marker is not None:
+            with contextlib.suppress(Exception):
+                self._pending_marker.remove()
+            self._pending_marker = None
+
+    def _clear_worker_line(self) -> None:
+        """本轮结束：移除 delegate worker 活动行。"""
+        if self._worker_line is not None:
+            with contextlib.suppress(Exception):
+                self._worker_line.remove()
+            self._worker_line = None
 
     # ── 事件排空（UI 线程）──
     async def _drain_events(self) -> None:
@@ -891,41 +1271,70 @@ class ChatScreen(Screen):
                 self._cur_reasoning += rest[0]
                 self._reasoning_dirty = True
             else:
-                # 思考在答案之前 → 先 flush 思考(挂折叠区)、再 flush 答案，顺序正确。
-                await self._flush_reasoning(transcript)
+                # 非 token/reasoning 事件 = 阶段切换：先封口当前思考/正文（强制全渲）。
+                await self._flush_reasoning(transcript, force=True)
                 await self._flush_md(transcript)
                 if kind == "tool":
                     label, detail = rest
-                    # 追加一条工具调用，更新状态栏
                     self._current_tool = label
-                    self._cur_tool_calls.append(f"{label}  {detail}")
-                    self._tool_dirty = True
+                    self._collapse_active()             # 进工具阶段 → 折起上一个思考块
+                    await self._ensure_agent_header(transcript)
+                    text = f"⏺  {label}  {detail}".rstrip()
+                    line = Label(text, classes="tool-call running", markup=False)
+                    await transcript.mount(line)
+                    self._pending_tool_labels.append((line, label, detail))  # 等结果回来合并
                 elif kind == "tool_result":
-                    # 工具完成：把上一行标记为已完成（不展示完整结果以免刷屏）
-                    if self._cur_tool_calls:
-                        self._cur_tool_calls[-1] = f"✅ {self._cur_tool_calls[-1]}"
-                        self._tool_dirty = True
-                        self._current_tool = ""
+                    tool_name = rest[0] if rest else ""
+                    result = rest[1] if len(rest) > 1 else ""
+                    # FIFO 配对：把最早那条跑动 ⏺ 行 → 替换成「工具+参数+结论」合一的单元
+                    # （可折叠或一行），不再另留蓝色调用行
+                    lbl = None
+                    label, detail = tool_name, ""
+                    if self._pending_tool_labels:
+                        lbl, label, detail = self._pending_tool_labels.pop(0)
+                    widget = self._build_merged_tool_widget(label, detail, tool_name, result)
+                    with contextlib.suppress(Exception):
+                        if lbl is not None:
+                            await transcript.mount(widget, after=lbl)
+                            lbl.remove()
+                        else:
+                            await transcript.mount(widget)
+                    self._current_tool = ""
                 elif kind == "footer":
                     self._mount_footer(rest[0])
                 elif kind == "status":
                     self._mount(rest[0], "meta")
+                elif kind == "worker":
+                    # delegate worker 活动：单行原地更新（一个 worker 几十次调用，逐条 mount 会刷屏）
+                    if self._worker_line is None:
+                        self._worker_line = Static(rest[0], classes="meta", markup=False)
+                        with contextlib.suppress(Exception):
+                            await transcript.mount(self._worker_line)
+                    else:
+                        with contextlib.suppress(Exception):
+                            self._worker_line.update(rest[0])
                 elif kind == "error":
+                    self._clear_pending_marker()
                     self._mount(f"💥 {rest[0]}", "err")
                 elif kind == "end":
+                    self._clear_pending_marker()
                     self._collapse_active()
                     self._reset_reasoning()
                     self._reset_tool_calls()
                     self._turn_count += 1
                 elif kind == "done":
-                    self._collapse_active()  # 整轮结束：确保无残留展开块
+                    self._clear_pending_marker()  # 本轮结束，无论路径，确保占位不残留
+                    self._clear_worker_line()     # worker 活动行随轮结束移除
+                    self._collapse_active()
                     self._reset_tool_calls()
                     self._agent_header_mounted = False
                     self._busy = False
-                    # 轮次分隔（全宽线 + 淡入动效）
+                    # 本轮是被打断/终止收尾、还是自然收尾——决定排队消息是自动发还是退回输入框。
+                    _stopped = self._hard_kill or self._interrupt_pending
+                    # 轮次分隔（真·全宽细线，随终端宽度自适应 + 淡入动效）
                     if self._turn_count > 0:
                         try:
-                            sep = Static("╌" * 40, classes="turn-sep")
+                            sep = Rule(classes="turn-sep")
                             sep.styles.opacity = 0.0
                             transcript.mount(sep)
                             sep.styles.animate("opacity", 1.0, duration=0.3)
@@ -933,111 +1342,233 @@ class ChatScreen(Screen):
                         except Exception:
                             pass
                     self.query_one("#prompt", TextArea).focus()
-                    if self._interrupt_pending:
+                    if self._hard_kill:
+                        self._hard_kill = False
+                        self._interrupt_pending = False
+                        from .llm import clear_interrupt
+                        clear_interrupt()  # 卫生：硬终止也要清中断标志，防下一轮流断
+                        self._mount("──────── ■ 已强制终止本轮 ────────", "brk")
+                        self._status_cache = (None, "")
+                    elif self._interrupt_pending:
                         self._enter_interrupted()
+                    # 排队消息：本轮自然收尾 → 自动发出；被打断/终止 → 退回输入框，不丢也不偷偷发。
+                    if self._queued is not None:
+                        q, self._queued = self._queued, None
+                        if _stopped:
+                            self._restore_queued_to_input(q)
+                        else:
+                            self._submit_text(q)
                 changed = True
         if self._reasoning_dirty:
             await self._flush_reasoning(transcript)
-            changed = True
-        if self._tool_dirty:
-            await self._flush_tool_calls(transcript)
             changed = True
         if self._dirty:
             await self._flush_md(transcript, finalize=False)
             changed = True
         if changed:
-            # 用户手动翻看历史时不抢滚，只在底部时才自动跟随
+            # 用户手动翻看历史时不抢滚，只在底部时才自动跟随；不在底部则亮"↓ 新内容"
             try:
-                if transcript.scroll_y >= transcript.max_scroll_y - 3:
-                    transcript.scroll_end(animate=False)
+                at_bottom = transcript.scroll_y >= transcript.max_scroll_y - 3
             except Exception:
+                at_bottom = True
+            if at_bottom:
                 transcript.scroll_end(animate=False)
+                self._set_newmsg(False)
+            else:
+                self._set_newmsg(True)
+
+    async def _ensure_agent_header(self, transcript) -> None:
+        """每个用户轮在首个 agent 事件（思考/工具/文字，谁先到）挂一次 CTGents 头。
+
+        所有内部循环的思考/工具/输出都归这一个头之下——一轮绝不冒第二个 CTGents。
+        """
+        if self._agent_header_mounted:
+            return
+        self._clear_pending_marker()
+        await transcript.mount(Label("◆ CTGents", classes="agent-name", markup=False))
+        self._agent_header_mounted = True
+
+    def _collapse_active(self) -> None:
+        """折起当前展开的思考块（进入下一阶段：工具/输出/新思考时调）。"""
+        if self._active_collapsible is not None:
+            with contextlib.suppress(Exception):
+                self._active_collapsible.collapsed = True
+            self._active_collapsible = None
+
+    def _tick_spinner(self) -> None:
+        """每 0.1s 转一帧：把所有运行中（未出结果）工具行的首字符换成 spinner 帧。"""
+        if not self._pending_tool_labels:
+            return
+        self._spin_frame = (self._spin_frame + 1) % len(self._SPINNER)
+        ch = self._SPINNER[self._spin_frame]
+        for lbl, label, detail in self._pending_tool_labels:
+            with contextlib.suppress(Exception):
+                lbl.update(f"{ch}  {label}  {detail}".rstrip())
+
+    @staticmethod
+    def _result_block(result: str, max_lines: int = 6, width: int = 100) -> str:
+        """工具结果摘成 ⎿ 多行块：首行带 ⎿、其余缩进对齐；超 max_lines 标 … +N 行。"""
+        raw = [ln.rstrip() for ln in (result or "").splitlines()]
+        while raw and not raw[0].strip():
+            raw.pop(0)
+        while raw and not raw[-1].strip():
+            raw.pop()
+        if not raw:
+            return "⎿ 完成"
+        shown = raw[:max_lines]
+        out = []
+        for i, ln in enumerate(shown):
+            s = ln[:width] + ("…" if len(ln) > width else "")
+            out.append(("⎿ " if i == 0 else "  ") + s)
+        extra = len(raw) - len(shown)
+        if extra > 0:
+            out.append(f"  … +{extra} 行")
+        return "\n".join(out)
+
+    _RESULT_BODY_MAX = 400   # 展开时最多渲染的原文行数
+
+    @staticmethod
+    def _render_tool_result(name: str, result: str):
+        """工具结果 → (折叠标题, 展开正文, 增删统计)。
+
+        标题=一眼结论（读取→行数 / 搜索→命中数 / 编辑→改动摘要+增删 / 命令→首行或行数）；
+        正文=展开后看的全文（None 表示标题即全部、无需折叠）；统计=挂到 ⏺ 工具行的 (+N −M)。
+        Claude Code 式：默认折叠只看结论，点开看细节。
+        """
+        result = (result or "").strip()
+        if not result:
+            return "完成", None, ""
+
+        # ── 读取：标题=行数，展开=文件内容 ──
+        if name in ("read_file", "read_file_lines"):
+            import re
+            if re.match(r"^\s*\d+\|", result):        # 带行号的文件正文
+                n = result.count("\n") + 1
+                body = "\n".join(result.splitlines()[:ChatScreen._RESULT_BODY_MAX])
+                return f"{n} 行", body, ""
+            first = result.splitlines()[0]            # 错误/短消息原样透出，不折叠
+            return first[:100], (result if "\n" in result else None), ""
+
+        # ── 搜索：标题=命中数+文件数，展开=全部匹配 ──
+        if name == "grep_code":
+            first = result.splitlines()[0] if result.splitlines() else ""
+            if first.startswith(("未找到", "搜索超时", "系统中未找到")):
+                return first, None, ""
+            hits = [ln for ln in result.splitlines()
+                    if ":" in ln and not ln.startswith(("...", "…", "（"))]
+            files = {ln.split(":", 1)[0] for ln in hits}
+            body = "\n".join(hits[:ChatScreen._RESULT_BODY_MAX])
+            return f"{len(hits)} 处 · {len(files)} 个文件", body, ""
+
+        # ── 写入/编辑：标题=改动摘要+增删，展开=彩色 diff ──
+        if "```diff" in result:
+            from rich.text import Text
+            lead = ""
+            for ln in result.splitlines():
+                s = ln.strip()
+                if s.startswith("操作:"):
+                    lead = s
+                    break
+                if s.startswith(("已写入:", "已编辑:")):
+                    lead = s
+            diff = result.split("```diff", 1)[1].split("```", 1)[0]
+            lines = [ln for ln in diff.splitlines() if ln.strip()]
+            adds = sum(1 for ln in lines if ln.startswith("+"))
+            dels = sum(1 for ln in lines if ln.startswith("-"))
+            text = Text()
+            for j, ln in enumerate(lines[:ChatScreen._RESULT_BODY_MAX]):
+                style = ("green" if ln.startswith("+") else "red" if ln.startswith("-")
+                         else "cyan" if ln.startswith("@@") else "dim")
+                text.append(("" if j == 0 else "\n") + ln[:120], style=style)
+            stats = f"(+{adds} −{dels})"
+            return f"{lead or '变更'}  {stats}", text, stats
+
+        # ── 命令/执行/其余：标题=首行(多行则标行数)，展开=全文 ──
+        # 执行类(run_python/run_command/…)输出=想收起的细节，门槛放低：多于 1 行或较长就折叠，
+        # 只有单行短输出(如 42 / (无输出))才平铺。
+        lines = result.splitlines()
+        if len(lines) > 1 or len(result) > 120:
+            head = (lines[0][:90] + " …") if lines else "输出"
+            body = "\n".join(lines[:ChatScreen._RESULT_BODY_MAX])
+            return f"{head}  · {len(lines)} 行", body, ""
+        return result[:200], None, ""
+
+    def _build_merged_tool_widget(self, label: str, detail: str, name: str, result: str):
+        """一个完成的工具调用 → 单个 widget（工具+参数+结论合一）。
+
+        有展开内容 → 可折叠：标题=「工具 参数 (+N−M) · 结论」，点开看全文（不再另留蓝色调用行）。
+        无展开内容 → 一行弱色 ⏺ 完成行。供实时(完成后替换跑动行)与回放共用。
+        """
+        title, body, stats = self._render_tool_result(name, result)
+        header = f"{label}  {detail}".rstrip()
+        if stats:
+            header += f"  {stats}"
+        if body is not None:
+            full = f"{header}  · {title}" if title else header
+            return Collapsible(
+                Static(body, classes="tool-result", markup=False),
+                title=Text(full), collapsed=True,
+                collapsed_symbol="▸  ", expanded_symbol="▾  ",
+                classes="tool-result-box",
+            )
+        done = f"⏺  {header}  · {title}".rstrip() if title else f"⏺  {header}"
+        return Static(done, classes="tool-call done", markup=False)
 
     async def _flush_md(self, transcript, finalize: bool = True) -> None:
         if self._cur_text:
+            # 节流：流式期间整段 markdown 重渲很贵，限到 ~10fps；token 已在外层每 tick 攒好，
+            # 跳过本次只是晚 ≤100ms 渲（_dirty 保持，下个 tick 再来）。finalize/封口必全渲。
+            now = time.monotonic()
+            if not finalize and self._cur_md is not None \
+                    and (now - self._last_md_render) < self._LIVE_RENDER_INTERVAL:
+                return
+            self._last_md_render = now
             if self._cur_md is None:
-                if not self._agent_header_mounted:
-                    self._collapse_active()
-                    now = time.strftime("%H:%M")
-                    # 同一分钟内不重复显示时间（降噪）
-                    time_part = f"  ·  {now}" if now != self._last_user_stamp else ""
-                    await transcript.mount(Label(f"━ CTGents{time_part}", classes="msg-header agent"))
-                    self._agent_header_mounted = True
+                await self._ensure_agent_header(transcript)
+                self._collapse_active()           # 正文开始 → 折起思考块
                 self._cur_md = Markdown(self._cur_text, classes="msg-body")
                 await transcript.mount(self._cur_md)
             else:
                 await self._cur_md.update(self._cur_text)
             self._dirty = False
         if finalize:
+            if self._cur_text.strip():
+                self._last_agent_text = self._cur_text   # 供 Ctrl+Y 复制代码块
             self._cur_md = None
             self._cur_text = ""
 
-    async def _flush_reasoning(self, transcript) -> None:
-        """把累进的思考挂进 Collapsible（展开），实时更新；下一阶段开始时折叠。
-
-        首次 mount 时设为当前展开块(_activate 会先折上一个)，之后只更新内部 Static。
-        """
+    async def _flush_reasoning(self, transcript, force: bool = False) -> None:
+        """思考到达即在 CTGents 头下挂折叠 Collapsible（实时展开，下一阶段折起）。"""
         if not self._cur_reasoning:
             return
-        if self._reasoning_box is None:
+        if self._reasoning_collapsible is None:
+            await self._ensure_agent_header(transcript)
+            self._collapse_active()               # 新思考块前先折上一个
             self._reasoning_box = Static(self._cur_reasoning, classes="thinking", markup=False)
-            box = Collapsible(self._reasoning_box, title="💭 思考", collapsed=False,
-                                collapsed_symbol="▸ ", expanded_symbol="▾ ", classes="collapsible-chat")
+            box = Collapsible(self._reasoning_box, title="思考", collapsed=False,
+                              collapsed_symbol="▸  ", expanded_symbol="▾  ",
+                              classes="collapsible-chat")
             await transcript.mount(box)
-            self._activate(box)
+            self._reasoning_collapsible = box
+            self._active_collapsible = box
         else:
+            now = time.monotonic()
+            if not force and (now - self._last_reason_render) < self._LIVE_RENDER_INTERVAL:
+                return
+            self._last_reason_render = now
             self._reasoning_box.update(self._cur_reasoning)
-            # 脉冲动效：微暗→恢复，让用户感知有新内容涌入
-            with contextlib.suppress(Exception):
-                self._reasoning_box.styles.animate("opacity", 0.85, duration=0.05)
-                self._reasoning_box.styles.animate("opacity", 1.0, duration=0.08)
         self._reasoning_dirty = False
-
-    def _activate(self, box: Collapsible) -> None:
-        """设 box 为当前展开块：先把上一个折上，再记录这个。"""
-        self._collapse_active()
-        self._active_collapsible = box
-
-    def _collapse_active(self) -> None:
-        """折叠当前展开块（思考/工具）。无则 no-op。"""
-        if self._active_collapsible is not None:
-            with contextlib.suppress(Exception):
-                self._active_collapsible.collapsed = True
-            self._active_collapsible = None
 
     def _reset_reasoning(self) -> None:
-        """一条消息收尾：复位思考累进，下条消息另起一个折叠区。"""
         self._cur_reasoning = ""
         self._reasoning_box = None
+        self._reasoning_collapsible = None
         self._reasoning_dirty = False
 
-
     def _reset_tool_calls(self) -> None:
-        """一条消息收尾：复位工具调用累进，下条消息另起一个折叠区。"""
-        self._cur_tool_calls.clear()
-        self._tool_box_outer = None
-        self._tool_box_inner = None
-        self._tool_dirty = False
+        """一条消息收尾：清当前工具名 + 待配对工具行（内联行无折叠块要收）。"""
         self._current_tool = ""
-
-    async def _flush_tool_calls(self, transcript) -> None:
-        """把累进的工具调用挂进 Collapsible（折叠），实时追加新行。
-
-        首次 mount Collapsible，之后只更新内部 Static 的内容。
-        始终折叠（与思考不同——工具调用不是用户必需看的），用户可手动展开查看。
-        """
-        if not self._tool_dirty:
-            return
-        lines = "\n".join(f"  {line}" for line in self._cur_tool_calls)
-        if self._tool_box_inner is None:
-            self._tool_box_inner = Static(lines, classes="thinking", markup=False)
-            box = Collapsible(self._tool_box_inner, title="🛠 工具调用", collapsed=True,
-                                collapsed_symbol="▸ ", expanded_symbol="▾ ", classes="collapsible-chat")
-            await transcript.mount(box)
-            self._tool_box_outer = box
-        else:
-            self._tool_box_inner.update(lines)
-        self._tool_dirty = False
+        self._pending_tool_labels.clear()
 
     # ── 辅助 ──
     def _mount(self, text: str, cls: str) -> None:
@@ -1045,38 +1576,47 @@ class ChatScreen(Screen):
         t.mount(Label(text, classes=cls, markup=False))
         t.scroll_end(animate=False)
 
+    def _mount_user_msg(self, text: str) -> None:
+        """用户输入：› 前缀单行块（极简版式，暖色）。submit/续跑/回放共用。"""
+        t = self.query_one("#transcript", VerticalScroll)
+        t.mount(Static(f"❯ {text}", classes="user-msg", markup=False))
+        t.scroll_end(animate=False)
+
+    def _mount_agent_name(self) -> None:
+        """回放：挂一个 ◆ CTGents 标记（与实时同样式，每个用户轮一次）。"""
+        t = self.query_one("#transcript", VerticalScroll)
+        t.mount(Label("◆ CTGents", classes="agent-name", markup=False))
+        t.scroll_end(animate=False)
+
     def _mount_footer(self, text: str) -> None:
         """每轮收尾小结：弱色一行，直接用 status_bar 的文本。"""
         t = self.query_one("#transcript", VerticalScroll)
-        t.mount(Label(text, classes="meta"))
+        t.mount(Label(text, classes="meta", markup=False))
         t.scroll_end(animate=False)
 
-    def _mount_md(self, text: str) -> None:
-        """回放：挂 agent 消息（角色头 + Markdown + 时间戳）。"""
-        t = self.query_one("#transcript", VerticalScroll)
-        stamp = time.strftime("%H:%M")
-        t.mount(Label(f"━ CTGents  ·  {stamp}", classes="msg-header agent"))
-        t.mount(Markdown(text, classes="msg-body"))
-        t.scroll_end(animate=False)
+    def _echo_conversation(self, max_turns: int | None = None) -> None:
+        """加载会话后回放：与实时同结构——每个用户轮一个 CTGents 头，思考折叠 + 工具链 + 文字归其下。
 
-    def _echo_conversation(self) -> None:
-        """加载会话后回放：用户消息 + 思考折叠 + 工具调用折叠 + assistant 文字。
-
-        只显示最近 self._echo_max_turns 轮，超出部分折叠提示。
+        max_turns=None → 只显示最近 self._echo_max_turns 轮（默认，超出折叠提示）；
+        传大数（Ctrl+R 回看全部）→ 渲染整段历史。
         """
+        import json
+
         t = self.query_one("#transcript", VerticalScroll)
         all_msgs = self.app.ctx.log
         # 找所有 user 消息的位置，只保留最近 N 轮
         user_indices = [i for i, m in enumerate(all_msgs) if m.get("role") == "user"]
-        n = self._echo_max_turns
+        n = max_turns if max_turns is not None else self._echo_max_turns
         skip_users = max(0, len(user_indices) - n)
         skip_up_to = user_indices[skip_users] if skip_users > 0 and skip_users < len(user_indices) else 0
 
         if skip_up_to > 0:
-            folded = len([m for m in all_msgs[:skip_up_to] if m.get("role") in ("user", "assistant")])
-            t.mount(Static(f"⋯ 省略前 {len(user_indices) - n} 轮（{folded} 条消息）", classes="meta"))
+            folded = len([m for m in all_msgs[:skip_up_to] if m.get("role") in ("user", "assistant", "tool")])
+            t.mount(Static(f"⋯ 省略前 {len(user_indices) - n} 轮（{folded} 条消息）", classes="meta", markup=False))
 
-        last_shown_user_stamp = ""
+        agent_named = False   # 一个用户轮只挂一次 CTGents 头（多个 assistant 循环归其下）
+        # FIFO：assistant 发起的工具 (label, detail, name)，按序配后续 tool 结果 → 合并成一个单元
+        pending_tools: deque = deque()
         for i, m in enumerate(all_msgs):
             if i < skip_up_to:
                 continue
@@ -1085,20 +1625,37 @@ class ChatScreen(Screen):
             if role == "user":
                 text = _strip_user_wrappers(content)
                 if text:
-                    stamp = time.strftime("%H:%M")
-                    time_part = f"  ·  {stamp}" if stamp != last_shown_user_stamp else ""
-                    last_shown_user_stamp = stamp if time_part else last_shown_user_stamp
-                    t.mount(Label(f"━ 你{time_part}", classes="msg-header user"))
-                    t.mount(Markdown(text, classes="msg-body user-body"))
-                    t.scroll_end(animate=False)
+                    self._mount_user_msg(text)
+                    agent_named = False
             elif role == "assistant":
-                # 思考折叠
                 reasoning = (m.get("_reasoning") or "").strip()
+                tool_calls = m.get("tool_calls") or []
+                if not (content or reasoning or tool_calls):
+                    continue   # 纯中间 assistant（无文字无思考无工具）跳过，不占位
+                if not agent_named:
+                    self._mount_agent_name()
+                    agent_named = True
                 if reasoning:
-                    self._mount_collapsed("💭 思考", reasoning)
-                # 答案文字
+                    self._mount_collapsed("思考", reasoning)
+                for tc in tool_calls:
+                    fn = tc.get("function", {})
+                    name = fn.get("name", "")
+                    try:
+                        args = json.loads(fn.get("arguments", "{}"))
+                    except Exception:
+                        args = {}
+                    label, detail = _fmt_tool(name, args)
+                    pending_tools.append((label, detail, name))   # 等结果回来合并渲染
                 if content:
-                    self._mount_md(content)
+                    t.mount(Markdown(content, classes="msg-body"))
+                    t.scroll_end(animate=False)
+            elif role == "tool":
+                result = m.get("content", "")
+                if pending_tools:
+                    label, detail, name = pending_tools.popleft()
+                else:
+                    label, detail, name = "", "", ""
+                t.mount(self._build_merged_tool_widget(label, detail, name, result))
         t.scroll_end(animate=False)
 
     def _mount_collapsed(self, title: str, body: str) -> None:
@@ -1106,7 +1663,7 @@ class ChatScreen(Screen):
         t = self.query_one("#transcript", VerticalScroll)
         t.mount(Collapsible(Static(body, classes="thinking", markup=False),
                             title=title, collapsed=True,
-                            collapsed_symbol="▸ ", expanded_symbol="▾ ",
+                            collapsed_symbol="▸  ", expanded_symbol="▾  ",
                             classes="collapsible-chat"))
         t.scroll_end(animate=False)
 
@@ -1120,21 +1677,33 @@ class ChatScreen(Screen):
             except Exception:
                 model = ""
             sid_hash = hash((self.app.session_id or "", model))
-            if self._status_cache[0] != n_msgs or self._status_cache[1] != sid_hash:
+            # 缓存键含后台任务数 + 是否有未完成任务——否则它们做完后(n_msgs 没变)状态行赖着旧值不刷新
+            jobs, unfinished = 0, False
+            with contextlib.suppress(Exception):
+                from .tools.exec import running_job_count
+                jobs = running_job_count()
+            with contextlib.suppress(Exception):
+                from .tasks import has_unfinished
+                unfinished = has_unfinished()
+            key = (n_msgs, sid_hash, jobs, unfinished)
+            if self._status_cache[0] != key:
                 line = _status_line(self.app.ctx, self.app.session_id or "")
-                self._status_cache = (n_msgs, sid_hash, line)
+                self._status_cache = (key, line)
             else:
-                line = self._status_cache[2]
+                line = self._status_cache[1]
             status = self.query_one("#status", Static)
             if self._busy:
-                if self._interrupt_pending:
+                if self._hard_kill:
+                    line = f"[red]●[/]  ⏹ 强制终止中…  │  {line}"
+                elif self._interrupt_pending:
                     line = f"[yellow]●[/]  ⏹ 截停中…  │  {line}"
                 else:
                     dot = "●" if int(time.monotonic() * 2) % 2 == 0 else "○"
                     elapsed = time.monotonic() - self._turn_started
                     tool_info = f"  │  {self._current_tool}" if self._current_tool else ""
-                    tool_count = f"  🛠×{len(self._cur_tool_calls)}" if self._cur_tool_calls else ""
-                    line = f"[yellow]{dot}[/]  思考中 {elapsed:.0f}s{tool_count}{tool_info}  │  {line}"
+                    tool_count = f"  🛠×{len(self._pending_tool_labels)}" if self._pending_tool_labels else ""
+                    queued = "  ⏳已排队1条" if self._queued else ""
+                    line = f"[yellow]{dot}[/]  思考中 {elapsed:.0f}s{tool_count}{tool_info}{queued}  │  {line}"
                 status.remove_class("interrupted")
             elif self._interrupted:
                 line = f"[red]●[/]  ⏸ 已中断  │  Enter 继续 · Esc 终止  │  {line}"
@@ -1143,6 +1712,33 @@ class ChatScreen(Screen):
                 line = f"[green]●[/]  {line}"
                 status.remove_class("interrupted")
             status.update(line)
+        # 用户滚回底部后（可能无新事件触发 drain）把"↓ 新内容"灭掉
+        with contextlib.suppress(Exception):
+            tr = self.query_one("#transcript", VerticalScroll)
+            if tr.scroll_y >= tr.max_scroll_y - 3:
+                self._set_newmsg(False)
+
+    def _hint_text(self) -> str:
+        """按当前状态给出该按什么键——让界面里那些看不见的操作被发现。"""
+        if self._ac_active:
+            if self._ac_mode == "cmd":
+                return "↑↓ 选择   ·   Enter/Tab 补全   ·   Esc 关闭"
+            return "↑↓ 选择   ·   Tab 插入   ·   Esc 关闭"
+        if self._busy:
+            if self._interrupt_pending:
+                return "Esc 再按一次 强制终止"
+            return "Esc 中断本轮"
+        if self._interrupted:
+            return "Enter 继续被打断的事   ·   Esc 终止   ·   或直接输入新消息重开"
+        return "@ 引用文件   ·   / 命令   ·   Ctrl+↑↓ 翻历史   ·   /help 全部指令   ·   Ctrl+Q 退出"
+
+    def _refresh_hints(self) -> None:
+        with contextlib.suppress(Exception):
+            hint = self._hint_text()
+            hints = self.query_one("#keyhints", Static)
+            if getattr(self, "_hint_cache", None) != hint:   # 只在变化时更新，省重绘
+                self._hint_cache = hint
+                hints.update(hint)
 
     def _drain_jobs(self) -> None:
         try:
@@ -1153,8 +1749,54 @@ class ChatScreen(Screen):
         except Exception:
             pass
 
+    def _refresh_task_panel(self) -> None:
+        """长任务 TODO 面板：读 current.md 步骤渲染成顶部常驻清单；无任务则隐藏。
+
+        agent 用 update_plan/create_task 维护 current.md，这里只读渲染（每 0.5s），
+        步骤完成/新增立即反映。纯只读，不碰 ctx/缓存。
+        """
+        try:
+            panel = self.query_one("#taskpanel", Static)
+        except Exception:
+            return
+        from .tasks import has_unfinished, task_steps
+        try:
+            steps = task_steps()
+            active_task = has_unfinished()
+        except Exception:
+            steps, active_task = [], False
+        # 没步骤、或全做完无活跃未完成 → 收起（做完就别赖着）
+        if not steps or not active_task:
+            panel.add_class("hidden")
+            return
+        done = sum(1 for icon, _ in steps if icon == "✅")
+        n = len(steps)
+        win = self._TASK_WINDOW
+        # 窗口跟随当前活跃步（第一个非 ✅）：上露一条已完成作上文，下接待办
+        active = next((i for i, (ic, _) in enumerate(steps) if ic != "✅"), n - 1)
+        start = 0 if n <= win else max(0, min(active - 1, n - win))
+        end = min(n, start + win)
+        lines = [f"任务进度  {done}/{n}"]
+        if start > 0:
+            lines.append(f"  ↑ {start} 已完成")
+        for i in range(start, end):
+            icon, label = steps[i]
+            lines.append(f"  {icon} {label[:72]}")
+        if end < n:
+            lines.append(f"  ↓ 还有 {n - end}")
+        panel.update("\n".join(lines))
+        panel.remove_class("hidden")
+
     # ── 动作 ──
     def action_interrupt(self) -> None:
+        if self._ac_active:           # @ 补全激活：Esc = 关下拉，不中断本轮
+            self._ac_hide()
+            return
+        # 截停中再按 Esc → 升级为强制终止：不等 LLM yield，done 时直接终止。
+        if self._interrupt_pending and self._busy:
+            self._hard_kill = True
+            self._refresh_status()
+            return
         # 运行中 → 软中断：截停本轮（让用户觉得是"被你截停"，不是程序断了）。
         if self._busy:
             with contextlib.suppress(Exception):
@@ -1179,7 +1821,7 @@ class ChatScreen(Screen):
         self._interrupted = True
         stamp = time.strftime("%H:%M:%S")
         self._mount(f"──────── ⏸ 推理已暂停，现场已保存 · {stamp} ────────", "brk")
-        self._status_cache = (-1, -1, "")
+        self._status_cache = (None, "")
         self._refresh_status()
         with contextlib.suppress(Exception):
             self.query_one("#prompt", TextArea).placeholder = "⏸ 已中断 · Enter 继续 · 输入新消息重开"
@@ -1194,12 +1836,7 @@ class ChatScreen(Screen):
         """
         self._exit_interrupted()
         if instruction:
-            stamp = time.strftime("%H:%M")
-            t = self.query_one("#transcript", VerticalScroll)
-            t.mount(Label(f"━ 你  ·  {stamp}", classes="msg-header user"))
-            user_md = Markdown(instruction, classes="msg-body user-body")
-            t.mount(user_md)
-            t.scroll_end(animate=False)
+            self._mount_user_msg(instruction)
             self._mount("──────── ▶ 按指示继续 ────────", "brk")
             prompt = (f"（我刚才打断了你一下。现在接着上一条被打断的地方继续，"
                       f"同时按这个来调整：{instruction}）")
@@ -1217,13 +1854,57 @@ class ChatScreen(Screen):
     def _exit_interrupted(self) -> None:
         self._interrupted = False
         self._interrupt_pending = False
-        self._status_cache = (-1, -1, "")
+        self._hard_kill = False
+        self._status_cache = (None, "")
         self._refresh_status()
         with contextlib.suppress(Exception):
             self.query_one("#prompt", TextArea).placeholder = "> 输入消息（/help 查看指令）"
 
+    def _set_newmsg(self, on: bool) -> None:
+        """滚上去看历史时底部来新内容 → 亮提示；回到底部 → 灭。"""
+        with contextlib.suppress(Exception):
+            w = self.query_one("#newmsg", Static)
+            if on:
+                if w.has_class("hidden"):
+                    w.update("↓ 有新内容 · Ctrl+L 回到底部")
+                    w.remove_class("hidden")
+            else:
+                w.add_class("hidden")
+
     def action_clear_screen(self) -> None:
         with contextlib.suppress(Exception):
+            self.query_one("#transcript", VerticalScroll).scroll_end(animate=False)
+        self._set_newmsg(False)
+
+    def action_copy_code(self) -> None:
+        """Ctrl+Y：把 agent 最后一条回复里的最后一个代码块复制到剪贴板。
+
+        agent 常吐命令/代码片段，复制去跑很频繁；免去手选。无代码块则提示。
+        """
+        import re
+        blocks = re.findall(r"```[^\n]*\n(.*?)```", self._last_agent_text or "", re.DOTALL)
+        if not blocks:
+            self._mount("最近回复里没有代码块可复制", "meta")
+            return
+        code = blocks[-1].strip("\n")
+        with contextlib.suppress(Exception):
+            self.app.copy_to_clipboard(code)
+        self._mount(f"已复制最后一个代码块（{len(code.splitlines())} 行）到剪贴板", "meta")
+
+    def action_show_history(self) -> None:
+        """Ctrl+R：展开本会话全部历史（默认只精简显示最近几轮以保流畅）。
+
+        平时靠 _prune_transcript 精简保性能；想回看时一键给全，继续对话后自动回到精简。
+        """
+        if self._busy:
+            return
+        with contextlib.suppress(Exception):
+            self.query_one("#transcript", VerticalScroll).remove_children()
+            self._agent_header_mounted = False
+            self._reset_reasoning()
+            self._reset_tool_calls()
+            self._echo_conversation(max_turns=10 ** 9)   # 全部
+            self._mount("（已展开本会话全部历史；继续对话后自动回到精简显示）", "sys-meta")
             self.query_one("#transcript", VerticalScroll).scroll_end(animate=False)
 
     def action_arrow_up(self) -> None:

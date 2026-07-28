@@ -1,5 +1,7 @@
 """项目结构感知：自动扫描项目、识别语言/框架、分析依赖、生成结构树。"""
 
+from __future__ import annotations
+
 import json
 import re
 import time
@@ -9,7 +11,7 @@ from pathlib import Path
 
 TOOLS_PROJECT = [
     {
-        "_meta": {"label": "扫描项目", "parallel_safe": True},
+        "_meta": {"group": "core", "label": "扫描项目", "parallel_safe": True},
         "type": "function",
         "function": {
             "name": "scan_project",

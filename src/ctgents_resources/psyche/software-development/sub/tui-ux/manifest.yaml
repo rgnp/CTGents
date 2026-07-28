@@ -1,0 +1,13 @@
+id: tui-ux
+version: "0.1"
+kind: subdomain
+core: 核心/tui-ux-core.md
+requires: [software-development]
+scope_default: task
+summary: TUI 导航、中断、键盘、状态和反馈体验
+judgment_delta:
+  - 从静态界面判断提升到完整交互时间线
+skills: []
+exit_checks:
+  - 键盘路径、中断和恢复是否完整？
+  - 状态反馈是否及时且不会干扰输入？
