@@ -1,0 +1,15 @@
+id: paper-collection
+version: "0.1"
+kind: mode
+core: 核心/paper-collection-core.md
+requires: [general]
+scope_default: task
+summary: 论文知识库自动化入库——发现、评分、下载、转写、结构化
+judgment_delta:
+  - 论文评分五维度标准化（相关度/方法新颖度/发表质量/实验说服力/可复现性）
+  - 入库不替代精读——只做结构化存储，不做论证审计
+skills: [paper-pipeline]
+exit_checks:
+  - 新入库论文是否都有 paper.md + _meta.json？
+  - _pipeline_state.md 是否已更新？
+  - 边界过滤是否正确（VLA/VLM/视频生成/高斯/RL 已排除）？

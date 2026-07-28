@@ -1,0 +1,13 @@
+id: aesthetic-design
+version: "0.5"
+kind: domain
+core: 核心/aesthetic-design-core.md
+requires: [general]
+scope_default: task
+summary: 通用界面审美、视觉层级、布局和交互判断
+judgment_delta:
+  - 增加视觉层级、Gestalt、可读性和一致性审计
+skills: [review-interface]
+exit_checks:
+  - 视觉选择是否服务信息层级和使用任务？
+  - 是否保持一致性、可读性和克制？

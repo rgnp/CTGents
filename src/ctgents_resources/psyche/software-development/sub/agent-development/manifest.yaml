@@ -1,0 +1,14 @@
+id: agent-development
+version: "0.5"
+kind: subdomain
+core: 核心/agent-development-core.md
+requires: [software-development]
+scope_default: task
+summary: Agent 循环、工具、上下文和验证机制判断
+judgment_delta:
+  - 从普通应用视角切换到 Agent 特有失败模式
+  - 检查工具协议、上下文污染、循环终止和可验证性
+skills: []
+exit_checks:
+  - 关键行为是否由机制保证而不是只靠提示词？
+  - Agent 循环是否有可观察的停止和恢复条件？

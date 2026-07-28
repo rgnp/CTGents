@@ -1,5 +1,5 @@
 # GitHub Actions CI
-# 每次 push / PR 到 master 时自动运行：ruff 检查 + pytest + 项目规范扫描
+# 每次 push / PR 到 master 时自动运行：Ruff + pytest + 文档同步检查
 
 name: CI
 
@@ -39,9 +39,7 @@ jobs:
           python-version: "3.11"
 
       - name: Install dependencies
-        run: |
-          pip install -r requirements.txt
-          pip install pytest
+        run: pip install -e ".[dev]"
 
       - name: Run pytest
         run: pytest -v --tb=short
@@ -49,28 +47,13 @@ jobs:
           DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY || 'sk-placeholder' }}
           TAVILY_API_KEY: ${{ secrets.TAVILY_API_KEY || 'tvly-placeholder' }}
 
-  spec-check:
-    name: Project Spec
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Setup Python 3.11
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.11"
-
-      - name: Run check_project
-        run: |
-          pip install pytest
-          python -c "
-          from src.tools.lint import check_project;
-          result = check_project();
   docs-sync:
     name: Docs Sync Check
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Setup Python 3.11
         uses: actions/setup-python@v5
@@ -78,20 +61,17 @@ jobs:
           python-version: "3.11"
 
       - name: Run docs_sync_check
+        env:
+          CTG_DOCS_BASE_REF: ${{ github.event.pull_request.base.sha || github.event.before }}
         run: |
-          python -c "
+          python - <<'PY'
+          import os
           from src.tools.lint import docs_sync_check;
-          result = docs_sync_check();
+          base_ref = os.environ.get('CTG_DOCS_BASE_REF', '')
+          if not base_ref or set(base_ref) == {'0'}:
+              base_ref = 'HEAD^'
+          result = docs_sync_check(base_ref=base_ref);
           print(result);
           if '🔴' in result:
               raise SystemExit(1)
-          "
-
-          print(result);
-          # 如果总分低于 80 则报错退出
-          score_line = [l for l in result.split('\n') if '总分' in l][0]
-          score = int(score_line.split(':')[1].split('/')[0].strip())
-          print(f'\n解析得分: {score}/100')
-          if score < 80:
-              raise SystemExit(1)
-          "
+          PY

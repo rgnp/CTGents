@@ -1,5 +1,7 @@
 """Web 工具：search_web + read_page，带 TTL 缓存和超时控制。"""
 
+from __future__ import annotations
+
 import json
 import re
 import time
@@ -90,7 +92,7 @@ def get_web_cache_stats() -> dict:
 
 TOOLS_WEB = [
     {
-        "_meta": {"label": "搜索", "parallel_safe": True},
+        "_meta": {"group": "core", "label": "搜索", "parallel_safe": True},
         "type": "function",
         "function": {
             "name": "search_web",
@@ -119,7 +121,7 @@ TOOLS_WEB = [
         },
     },
     {
-        "_meta": {"label": "阅读网页", "parallel_safe": True},
+        "_meta": {"group": "core", "label": "阅读网页", "parallel_safe": True},
         "type": "function",
         "function": {
             "name": "read_page",

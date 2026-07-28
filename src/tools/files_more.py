@@ -33,6 +33,7 @@ def _guard_write(target: Path) -> None:
 
 @tk.tool(
     label="移动文件",
+    group="core",
     params={"src": "现有文件路径", "dst": "目标路径（含新文件名即重命名）"},
     dedup_blacklist=True,
 )
@@ -52,6 +53,7 @@ def move_file(src: str, dst: str) -> str:
 
 @tk.tool(
     label="按名查找",
+    group="core",
     params={"pattern": "文件名 glob，如 *.py / test_*.py", "path": "搜索根目录，不传=当前目录"},
     parallel_safe=True,
 )
@@ -77,6 +79,7 @@ def find_files(pattern: str, path: str | None = None) -> str:
 
 @tk.tool(
     label="替换编辑",
+    group="core",
     params={
         "path": "文件路径",
         "old": "要替换的原文，逐字精确匹配（含空格/缩进/换行），默认须唯一",
@@ -123,7 +126,7 @@ def replace_in_file(path: str, old: str, new: str, replace_all: bool = False) ->
     return r
 
 
-@tk.tool(label="建目录", params={"path": "要创建的目录路径"})
+@tk.tool(label="建目录", group="core", params={"path": "要创建的目录路径"})
 def make_dir(path: str) -> str:
     """创建目录（含父目录，已存在不报错）。"""
     d = _resolve(path)

@@ -18,15 +18,17 @@ import urllib.request
 from collections import defaultdict
 from pathlib import Path
 
+from ..paths import KNOWLEDGE_DIR
+
 _ARXIV_API = "http://export.arxiv.org/api/query"
 _S2_API = "https://api.semanticscholar.org/graph/v1/paper/search"
 # 默认顶会名单（CV/机器人主线）。S2 用简写过滤有效（内部映射到全称）。
 _TOP_VENUES = "CVPR,ICCV,ECCV,NeurIPS,ICLR,ICML,CoRL,ICRA,IROS,RSS,AAAI"
 
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
-_KNOWLEDGE_TOOLS = _PROJECT_ROOT / "knowledge" / "trajectory-prediction" / "tools"
-_KNOWLEDGE_PAPERS = _PROJECT_ROOT / "knowledge" / "trajectory-prediction" / "papers"
-_KNOWLEDGE_AD2026 = _PROJECT_ROOT / "knowledge" / "autonomous-driving-2026"
+_KNOWLEDGE_TOOLS = KNOWLEDGE_DIR / "trajectory-prediction" / "tools"
+_KNOWLEDGE_PAPERS = KNOWLEDGE_DIR / "trajectory-prediction" / "papers"
+_KNOWLEDGE_AD2026 = KNOWLEDGE_DIR / "autonomous-driving-2026"
 
 if str(_KNOWLEDGE_TOOLS) not in sys.path:
     sys.path.insert(0, str(_KNOWLEDGE_TOOLS))

@@ -28,6 +28,10 @@ from .params import DELEGATE
 _URL_RE = re.compile(r"https?://[^\s\)\]>，。；、\"'）】》]+")
 
 _VERIFIED_MARK = "[已核]"
+# 行内代码 span（`...`）：其中的 [已核] 是对标记的"提及"不是核实"声称"——worker 修完
+# 文件后自述「每处 `[已核]` 已与 URL 同行」被闸按声称打回，会拖进自指重试循环
+# （2026-07-17/07-20 会话实测）。判定标记是否存在前先剥掉行内代码。
+_CODE_SPAN_RE = re.compile(r"`[^`\n]*`")
 
 # 闸反馈的固定开头——重试时反馈作为 user 消息进 worker log，而 haystack 收 user
 # 消息（用户/主 agent 给的 URL 合法 grounded）。若不剔除，反馈里点名的编造 URL
@@ -105,10 +109,10 @@ def gate_check(
     for u in ungrounded:
         problems.append(f"URL 未在你的工具活动中出现过（疑似编造来源）: {u}")
 
-    # ③ [已核] 断言
+    # ③ [已核] 断言（反引号内的 `[已核]` 是提及不是声称，剥掉行内代码后再判）
     read_urls = collect_read_page_urls(worker_log)
     for line in combined.splitlines():
-        if _VERIFIED_MARK not in line:
+        if _VERIFIED_MARK not in _CODE_SPAN_RE.sub("", line):
             continue
         line_urls = extract_urls(line)
         if not line_urls:

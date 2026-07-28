@@ -1,0 +1,44 @@
+# paper-extract skill manifest
+# 版本: 1.0 | 创建: 2026-07-19
+
+name: paper-extract
+version: "1.0"
+description: >
+  一篇论文的全面资产拆解。从论证审计到积木提取到决策判断，
+  把论文的价值榨干——产出分散到三层架构（问题库/积木库/方法库）。
+
+# ── 轴声明 ──
+
+axes:
+  - id: depth
+    name: 拆解深度
+    description: 够格的论文才配 full；大部分只走到 lite
+    default: lite
+    values:
+      - id: lite
+        label: 轻量筛选
+        description: >
+          只走 D1（论证审计）+ D4（未说出口的）+ D9（问题定义审计）+ D13（takeaway）。
+          判断这篇值不值得跟。lite 跑完后 agent 自主判断是否切 full。
+      - id: full
+        label: 全面拆解
+        description: >
+          全部 17 维，三阶段流水线（评→取→用），产出分散到知识库各处。
+
+  - id: domain
+    name: 研究领域
+    description: 论文所属领域，决定领域特有判断准则
+    default: autonomous-driving
+    values:
+      - id: autonomous-driving
+        label: 自动驾驶
+        description: 加载 AD 领域的五筛子、算力约束、baseline 知识
+      - id: general-ml
+        label: 通用机器学习
+        description: 标准 ML 评估准则
+
+# ── always_load：每次必载 ──
+
+always_load:
+  - static/core/stance.md
+  - static/core/workflow.md

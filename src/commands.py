@@ -568,25 +568,31 @@ def _cmd_tools(r: CmdResult, _ctx, args, _sid) -> None:
 
 
 @builtin("/psyche", description="加载/卸载/列出 Psyche 认知框架",
-         usage="/psyche load <name>  — 读取核心并注入上下文，位置固定，不影响缓存\n"
-               "/psyche unload <name> — 从上下文移除\n"
-               "/psyche list          — 查看当前已加载的 psyche")
+         usage="/psyche load <name> [task|session] — 原子加载依赖和核心\n"
+               "/psyche unload <name>              — append-only 停用\n"
+               "/psyche list [query]                — 查看能力目录\n"
+               "/psyche status                      — 查看 Active Stack")
 def _cmd_psyche(r: CmdResult, ctx, _args, _sid) -> None:
     if not _args:
         r.message = "用法: /psyche load|unload|list [name]"
         return
     sub = _args[0].lower()
 
-    from .psyche_bridge import inject_psyche, remove_psyche, status_text
+    from .psyche_bridge import catalog_status_text, inject_psyche, remove_psyche, status_text
 
     if sub == "list":
+        r.message = catalog_status_text(ctx, " ".join(_args[1:]))
+    elif sub == "status":
         r.message = status_text(ctx)
     elif sub == "load":
         if len(_args) < 2:
             r.message = "用法: /psyche load <name>"
             return
         name = _args[1].lower().replace(" ", "-")
-        r.message = inject_psyche(ctx, name)
+        scope = _args[2].lower() if len(_args) >= 3 else None
+        r.message = inject_psyche(
+            ctx, name, scope=scope, source="user", reason="explicit user command",
+        )
         if r.message.startswith("✅"):
             r.save = True
     elif sub == "unload":
@@ -594,11 +600,11 @@ def _cmd_psyche(r: CmdResult, ctx, _args, _sid) -> None:
             r.message = "用法: /psyche unload <name>"
             return
         name = _args[1].lower().replace(" ", "-")
-        r.message = remove_psyche(ctx, name)
+        r.message = remove_psyche(ctx, name, source="user")
         if r.message.startswith("✅"):
             r.save = True
     else:
-        r.message = f"未知子指令 '{sub}'。可用: load, unload, list"
+        r.message = f"未知子指令 '{sub}'。可用: load, unload, list, status"
 
 
 @builtin("/compact", description="手动压缩上下文：驱逐旧对话换摘要（不必等 65% 自动触发）")
@@ -622,8 +628,8 @@ def _cmd_compact(r: CmdResult, ctx, _args, _sid) -> None:
 
 
 @builtin("/task", description="查看/清空/归档当前长任务", usage="/task [clear | archive <简述>]")
-def _cmd_task(r: CmdResult, _ctx, args, _sid) -> None:
-    from .tasks import archive_current, clear_current, read_current
+def _cmd_task(r: CmdResult, ctx, args, _sid) -> None:
+    from .tasks import archive_current_if_accepted, clear_current, read_current
 
     if not args:
         text = read_current()
@@ -633,9 +639,17 @@ def _cmd_task(r: CmdResult, _ctx, args, _sid) -> None:
     if sub == "clear":
         r.message = clear_current()
     elif sub == "archive":
-        r.message = archive_current(" ".join(args[1:]))
+        r.message = archive_current_if_accepted(" ".join(args[1:]))
     else:
         r.message = "用法: /task [clear | archive <简述>]"
+        return
+
+    from .psyche_bridge import deactivate_scope
+
+    stopped = deactivate_scope(ctx, "task")
+    if stopped:
+        r.message += "\n" + "\n".join(stopped)
+        r.save = True
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -652,11 +666,73 @@ def _cmd_pulse(r: CmdResult, _ctx, _args, _sid) -> None:
     r.save = True
 
 
+@builtin(
+    "/gap",
+    description="可靠性 gap 台账：查看、决策、标记修复和机械复核",
+    usage="/gap [accept|reject|defer|fixed|verify] <编号或ID> [说明]",
+)
+def _cmd_gap(r: CmdResult, _ctx, args, _sid) -> None:
+    from .gaps import format_gap_ledger, set_gap_status, verify_gap
+
+    if not args or args[0] == "list":
+        r.message = format_gap_ledger()
+        return
+    action = args[0].lower()
+    if action not in {"accept", "reject", "defer", "fixed", "verify"}:
+        r.message = "用法: /gap [accept|reject|defer|fixed|verify] <编号或ID> [说明]"
+        return
+    if len(args) < 2:
+        r.message = f"用法: /gap {action} <编号或ID> [说明]"
+        return
+    reference = args[1]
+    note = " ".join(args[2:]).strip()
+    if action == "verify":
+        r.message = verify_gap(reference)
+    else:
+        status = {
+            "accept": "accepted",
+            "reject": "rejected",
+            "defer": "deferred",
+            "fixed": "fixed",
+        }[action]
+        r.message = set_gap_status(reference, status, note)
+    r.save = r.message.startswith("✅")
+
+
 @builtin("/organs", description="器官生命体征：各内部机制上次跳动/疑似衰竭（只读，派生自产物）",
          usage="/organs — 扫各器官产物 mtime，列出哪个器官几个会话没跳了")
 def _cmd_organs(r: CmdResult, _ctx, _args, _sid) -> None:
     from .organs import render_census
     r.message = render_census()
+
+
+@builtin(
+    "/heartbeat",
+    description="心跳：无人期自主推进探索前沿（tasks/frontier.md）",
+    usage=(
+        "/heartbeat — 看状态；run — 手动触发；"
+        "accept|revise|reject [说明] — 处置最近交还"
+    ),
+)
+def _cmd_heartbeat(r: CmdResult, ctx, args, _sid) -> None:
+    from .heartbeat import run_once, status_text
+    action = args[0].lower() if args else ""
+    if action == "run":
+        outcome = run_once(force=True)
+        # worker 的 inject_psyche 会写全局 system_context 注册表；同进程手动触发后
+        # 按主会话 log 重新归约，防止 worker 的 psyche 泄漏进主会话自知状态。
+        from .psyche_bridge import resync_system_context
+        resync_system_context(ctx)
+        r.message = f"🫀 手动触发一跳（阻塞，预算内跑完即回）…\n{outcome}"
+    elif action in {"accept", "revise", "reject"}:
+        from .work_receipts import resolve_latest_delivery
+
+        r.message = resolve_latest_delivery(action, " ".join(args[1:]))
+        r.save = r.message.startswith("✅")
+    elif action:
+        r.message = "用法: /heartbeat [run | accept|revise|reject [说明]]"
+    else:
+        r.message = status_text()
 
 
 @builtin("/reload", description="热加载代码改动（指令+工具），无需重启")
@@ -698,12 +774,12 @@ def _append_arch_section(parts: list[str]) -> None:
     parts.append("    exec.py         — 执行类：run_command/run_python")
     parts.append("    code.py         — 代码搜索：grep_code")
     parts.append("    git.py          — Git 类：git_status/git_diff/git_commit/git_push...")
-    parts.append("    project.py      — 项目类：scan_project/check_project/generate_agents_md...")
+    parts.append("    project.py      — 项目结构扫描：scan_project")
     parts.append("    think.py        — 思考工具：think（策略规划）")
     parts.append("    memory.py       — 记忆工具：remember/recall/forget")
     parts.append("    rag.py          — RAG 索引：rag_index/rag_query/rag_status")
     parts.append("    storm.py        — 去重引擎：同轮工具调用滑动窗口去重")
-    parts.append("    lint.py         — 检查引擎：check_project（六维军规检查）")
+    parts.append("    lint.py         — CI/Makefile 直接调用的规范与文档同步检查")
     parts.append("    self.py         — 自我认知：self（结构化架构+运行时状态）")
     parts.append("docs/")
     parts.append("  AGENTS.md         — AI 操作手册")
@@ -728,7 +804,7 @@ def _guess_tool_group(name: str) -> str:
         return "exec"
     if name == "grep_code":
         return "code"
-    if name in ("scan_project", "check_project", "generate_agents_md", "docs_sync_check"):
+    if name == "scan_project":
         return "project"
     if name == "think":
         return "think"
@@ -828,7 +904,7 @@ def _cmd_fix(r: CmdResult, ctx, args, _sid) -> None:
         r.message = f"无效编号: {args[0]}"
         return
 
-    from .gaps import _make_fix_prompt, get_gap_by_index, get_last_report
+    from .gaps import _make_fix_prompt, get_gap_by_index, get_last_report, set_gap_status
     report = get_last_report()
     if report is None or not report.gaps:
         r.message = "暂无方向发现报告，先正常对话一轮让系统启动检测。"
@@ -838,11 +914,15 @@ def _cmd_fix(r: CmdResult, ctx, args, _sid) -> None:
         r.message = f"编号 {n} 超出范围（当前共 {len(report.gaps)} 个方向）。"
         return
 
+    decision = set_gap_status(gap.id, "accepted", f"通过 /fix {n} 接受")
+    if decision.startswith("❌"):
+        r.message = decision
+        return
     prompt = _make_fix_prompt(gap, n)
     ctx.log.append({"role": "user", "content": prompt})
     r.retry = True
     r.save = True
-    r.message = f"已启动方向 #{n}：{gap.detail[:80]}..."
+    r.message = f"已接受并启动方向 #{n}（{gap.id}）：{gap.detail[:80]}..."
 
 
 # ═══════════════════════════════════════════════════════════════

@@ -1,0 +1,13 @@
+id: communication
+version: "0.1"
+kind: mode
+core: 核心/communication-core.md
+requires: [general]
+scope_default: task
+summary: 与用户协作时的判断表达、节奏和关系维护
+judgment_delta:
+  - 增加对语境、认知负担和沟通后果的判断
+skills: []
+exit_checks:
+  - 是否先给结论并让理由易于验证？
+  - 表达是否匹配用户当前理解和情绪状态？

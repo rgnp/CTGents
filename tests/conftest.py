@@ -7,17 +7,58 @@ import pytest
 
 
 @pytest.fixture(autouse=True)
-def _isolate_task_state(tmp_path, monkeypatch):
-    """把长任务状态(current.md/ambitions)隔离到临时空文件，并重置会话级一次性缓存。
+def _isolate_runtime_state(tmp_path_factory, monkeypatch):
+    """把所有可变运行数据隔离到临时 workspace。
 
-    否则回合驱动测试会读到开发/agent 实时的 tasks/current.md：一旦那里留了未完成
-    步骤([ ]/[o])，has_unfinished() 即为真 → 自动续做多跑一轮 → 脚本化 mock 迭代器
-    StopIteration。即"套件成败取决于实时任务状态"的设计性 flaky。需要任务的测试自行
-    monkeypatch CURRENT_TASK_FILE 覆盖（覆盖在 test body 中发生，晚于本 autouse，胜出）。
+    测试不得读取或污染真实 current.md、回执、Gap、统计和会话摘要。需要特定路径
+    的测试可在 test body 中再次 monkeypatch（发生得更晚，覆盖本 fixture）。
     """
+    import src.asset_usage as _asset_usage
+    import src.gaps as _gaps
+    import src.llm as _llm
+    import src.main as _main
+    import src.paths as _paths
+    import src.session_summary as _session_summary
     import src.tasks as _tasks
-    monkeypatch.setattr(_tasks, "CURRENT_TASK_FILE", tmp_path / "_no_current.md")
-    monkeypatch.setattr(_tasks, "AMBITIONS_FILE", tmp_path / "_no_ambitions.md")
+    import src.tracker as _tracker
+    import src.verification_receipts as _verification
+    import src.work_receipts as _work_receipts
+    from src.tools import rag as _rag
+
+    runtime = tmp_path_factory.mktemp("ctg-runtime")
+    task_dir = runtime / "tasks"
+    stats_dir = runtime / "stats"
+    knowledge_dir = runtime / "knowledge"
+    task_dir.mkdir(parents=True)
+
+    monkeypatch.setattr(_paths, "WORKSPACE_ROOT", runtime)
+    monkeypatch.setattr(_paths, "KNOWLEDGE_DIR", knowledge_dir)
+    monkeypatch.setattr(_paths, "MEMORY_DIR", runtime / "memory")
+    monkeypatch.setattr(_paths, "SESSIONS_DIR", runtime / "sessions")
+    monkeypatch.setattr(_paths, "STATS_DIR", stats_dir)
+    monkeypatch.setattr(_paths, "TASKS_DIR", task_dir)
+    monkeypatch.setattr(_paths, "RAG_INDEX_DIR", runtime / ".rag-index")
+    monkeypatch.setattr(_tasks, "TASKS_DIR", task_dir)
+    monkeypatch.setattr(_tasks, "CURRENT_TASK_FILE", task_dir / "current.md")
+    monkeypatch.setattr(_tasks, "AMBITIONS_FILE", task_dir / "ambitions.md")
+    monkeypatch.setattr(_tasks, "ARCHIVE_DIR", task_dir / "archive")
+    monkeypatch.setattr(_asset_usage, "USAGE_FILE", task_dir / "asset-usage.jsonl")
+    monkeypatch.setattr(_work_receipts, "WORK_RECEIPTS_FILE", task_dir / "work-receipts.jsonl")
+    monkeypatch.setattr(_verification, "RECEIPTS_FILE", task_dir / "verification-receipts.jsonl")
+    monkeypatch.setattr(_gaps, "_GAP_LEDGER_FILE", task_dir / "gap-ledger.json")
+    monkeypatch.setattr(_gaps, "_GAP_CACHE_FILE", runtime / ".gap_cache.json")
+    monkeypatch.setattr(_tracker, "_STATS_DIR", stats_dir)
+    monkeypatch.setattr(_llm, "_STATS_DIR", stats_dir)
+    monkeypatch.setattr(_llm, "_PAYLOAD_DIR", stats_dir / "payloads")
+    monkeypatch.setattr(_main, "_STATE_FILE", runtime / "sessions" / "_state.md")
+    monkeypatch.setattr(_main, "_ERRORS_FILE", runtime / "sessions" / "_errors.md")
+    monkeypatch.setattr(
+        _session_summary,
+        "_KNOWLEDGE_SESSIONS_DIR",
+        knowledge_dir / "sessions",
+    )
+    monkeypatch.setattr(_rag, "_KNOWLEDGE_DIR", knowledge_dir)
+    monkeypatch.setattr(_rag, "RAG_INDEX_DIR", str(runtime / ".rag-index"))
 
 
 @pytest.fixture(autouse=True)
@@ -125,3 +166,18 @@ def clean_cwd():
     old = os.getcwd()
     yield
     os.chdir(old)
+
+
+class _DummyCtx:
+    """最小化 CacheContext mock，供 verifier 等不涉 LLM 的测试用。"""
+
+    def __init__(self) -> None:
+        self.log: list[dict] = []
+        self.control_signal: str | None = None
+        self.control_payload: str | None = None
+
+
+@pytest.fixture
+def dummy_ctx() -> _DummyCtx:
+    """返回仅含 log + control_signal 的最小 ctx。"""
+    return _DummyCtx()

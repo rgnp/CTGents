@@ -15,7 +15,7 @@ _BATCH_SLEEP = 0.8
 
 TOOLS_LEARN = [
     {
-        "_meta": {"label": "学习", "parallel_safe": True},
+        "_meta": {"group": "core", "label": "学习", "parallel_safe": True},
         "type": "function",
         "function": {
             "name": "learn",

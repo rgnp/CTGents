@@ -1,0 +1,9 @@
+name: contradiction-miner
+version: "1.0"
+description: >
+  系统性文献矛盾挖掘。给定研究领域，穷举搜索→深读→交叉矛盾挖掘→矛盾对清单。
+  用于找研究缺口、方法矛盾、未检验假设。
+
+axes: []
+
+always_load: []

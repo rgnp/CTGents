@@ -2,7 +2,7 @@
 
 worker 循环用 fake run_conversation 替身（模块级哨兵确保零真 API 调用）；
 断言的重心是隔离契约：worker 拿到的 kwargs（track_stats/session_id/tools/max_requests）、
-全新 ctx（inject_task_tail=False）、tracker 会话指针 finally 恢复。
+全新 ctx、tracker 会话指针 finally 恢复。
 """
 
 import json
@@ -20,10 +20,14 @@ from src.tools.delegate import delegate
 @pytest.fixture(autouse=True)
 def _sentinel_no_real_llm(monkeypatch, tmp_path):
     """哨兵：任何漏网的真 LLM 调用直接炸；产出根指到 tmp，不碰真 knowledge/。"""
+    import src.paths as paths
+
     def _boom(*_a, **_k):
         raise AssertionError("测试不允许真 LLM 调用")
     monkeypatch.setattr(llm_mod, "_invoke_llm_eager", _boom)
     monkeypatch.setattr(delegate_mod, "_PROJECT_ROOT", tmp_path)
+    monkeypatch.setattr(delegate_mod, "WORKSPACE_ROOT", tmp_path)
+    monkeypatch.setattr(paths, "WORKSPACE_ROOT", tmp_path)
     llm_mod.clear_interrupt()
     yield
     llm_mod.clear_interrupt()
@@ -79,7 +83,6 @@ class TestHappyPath:
         assert kw["session_id"] == ""
         assert kw["max_requests"] == DELEGATE.worker_max_requests
         assert isinstance(kw["ctx"], CacheContext)
-        assert kw["ctx"].inject_task_tail is False
         tool_names = {t["function"]["name"] for t in kw["tools"]}
         assert "delegate" not in tool_names   # 防递归
         assert "need_user" not in tool_names  # 无人值守，不给 control 工具
@@ -205,18 +208,14 @@ class TestPathValidation:
         assert "已禁用" in result
 
 
-class TestInjectTaskTail:
-    """cache_context 挂尾开关的现行为回归锚 + worker 关断。"""
+class TestNoTaskTail:
+    """活动任务不能通过 send-time 挂尾进入 payload。"""
 
-    def test_default_true_injects(self, monkeypatch):
+    def test_active_step_does_not_change_payload(self, monkeypatch):
         monkeypatch.setattr("src.tasks.read_current_active_step", lambda: "步骤3：写测试")
         ctx = CacheContext(prefix_msgs=[{"role": "system", "content": "p"}])
         ctx.log.append({"role": "user", "content": "hi"})
-        assert any("系统最高指令" in m.get("content", "") for m in ctx.send())
-
-    def test_false_suppresses(self, monkeypatch):
-        monkeypatch.setattr("src.tasks.read_current_active_step", lambda: "步骤3：写测试")
-        ctx = CacheContext(prefix_msgs=[{"role": "system", "content": "p"}])
-        ctx.inject_task_tail = False
-        ctx.log.append({"role": "user", "content": "hi"})
-        assert not any("系统最高指令" in m.get("content", "") for m in ctx.send())
+        assert ctx.send() == [
+            {"role": "system", "content": "p"},
+            {"role": "user", "content": "hi"},
+        ]

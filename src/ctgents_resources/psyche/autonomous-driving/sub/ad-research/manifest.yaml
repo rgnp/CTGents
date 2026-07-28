@@ -1,0 +1,16 @@
+id: ad-research
+version: "0.1"
+kind: domain
+core: 核心/ad-research-core.md
+requires: [autonomous-driving, research, software-development]
+scope_default: task
+summary: 自动驾驶科研——在已有模型上改架构的端到端判断框架
+judgment_delta:
+  - AD 场景下的 novelty 判断——什么修改算有意义、什么算 trivial 组合
+  - 架构修改的插入点判断——同时受代码约束和 AD 闭环约束
+  - AD 科研场景下最小诊断实验的设计方法
+skills: []
+exit_checks:
+  - novelty 判断是否落到「带来了什么旧方法做不到的性质」？
+  - 架构修改是否同时考虑了代码约束和 AD 闭环影响路径？
+  - 是否在验证问题存在后才展开方案设计？

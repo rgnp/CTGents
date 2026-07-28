@@ -1,0 +1,15 @@
+id: paper-deep-read
+version: "0.4"
+kind: mode
+core: 核心/paper-deep-read-core.md
+requires: [research]
+scope_default: task
+summary: 单篇论文的论证审计与一次性全域分析
+judgment_delta:
+  - 增加 Claim、Warrant、Qualifier 审计
+  - 增加研究设计、领域位置和未声明假设审计
+skills: [paper-deep-read, paper-extract]
+exit_checks:
+  - 核心 claim 和 qualifier 是否明确？
+  - warrant 最弱一环是否指出？
+  - 实验是否真的支撑 claim？

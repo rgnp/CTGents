@@ -14,7 +14,7 @@
      实测 LLM 评分者对可机械判定的标准目测放行）。
 
 隔离清单（为什么 worker 不污染主会话）：
-  - 全新 CacheContext + inject_task_tail=False（主任务切片不泄进 worker 请求）；
+  - 全新 CacheContext（主会话 log 与任务状态不进入 worker 请求）；
   - session_id=""（不落 sessions/ 存档）、track_stats=False（不碰主会话缓存统计）、
     on_progress 不传（不触发主会话存盘）；
   - tracker 会话指针 try/finally 恢复（run_conversation 会无条件覆盖它）；
@@ -38,6 +38,7 @@ from .. import tracker
 from ..cache_context import CacheContext
 from ..delegate_gate import format_gate_feedback, gate_check
 from ..params import DELEGATE
+from ..paths import CORE_ROOT, WORKSPACE_ROOT, resolve_runtime_path
 from ._toolkit import Toolkit
 
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
@@ -79,13 +80,16 @@ def _worker_tools() -> list[dict]:
 
 
 def _validate_output_path(output_file: str) -> tuple[Path | None, str]:
-    """路径校验：必须在项目内，拒绝代码/存档/git 目录。返回 (resolved, 错误文案)。"""
+    """路径校验：允许核心 docs 或个人 knowledge，拒绝代码/存档/git。"""
     try:
-        target = (_PROJECT_ROOT / output_file).resolve()
-        rel = target.relative_to(_PROJECT_ROOT)
+        target = resolve_runtime_path(output_file, _PROJECT_ROOT)
+        if target.is_relative_to(WORKSPACE_ROOT):
+            rel = target.relative_to(WORKSPACE_ROOT)
+        else:
+            rel = target.relative_to(CORE_ROOT)
     except (ValueError, OSError):
         return None, (
-            f"⛔ delegate 拒绝: output_file 必须是项目内的相对路径，收到 {output_file!r}。\n"
+            f"⛔ delegate 拒绝: output_file 必须在核心项目或个人 workspace 内，收到 {output_file!r}。\n"
             "正道：1. 调研产出推荐 knowledge/<领域>/... 或 knowledge/paper/<论文名>/analysis.md；\n"
             "2. 其他文档可用 docs/ 下路径。"
         )
@@ -104,6 +108,7 @@ tk = Toolkit()
 
 @tk.tool(
     label="委派调研",
+    group="core",
     dedup_blacklist=True,  # 有副作用（worker 写盘），不进 storm 去重、写后读缓存正确失效
     params={
         "brief": "任务简报：要查什么、判断标准、期望的产出结构",
@@ -112,7 +117,7 @@ tk = Toolkit()
     },
 )
 def delegate(brief: str, output_file: str, psyche: str = "") -> str:
-    """派一次性调研任务给干净上下文 worker；产出落文件过机械出处闸，返回路径+结论，细节需自行 read_file。"""
+    """派调研给干净上下文worker，产出过机械出处闸返回路径+结论（细节自行read_file）。串行阻塞：一次只派一个，拿到结果再派下一个，同批多余调用会被拒绝。"""
     if not DELEGATE.enabled:
         return "⛔ delegate 已禁用（CTG_DELEGATE_ENABLED=0）。"
 
@@ -133,7 +138,6 @@ def delegate(brief: str, output_file: str, psyche: str = "") -> str:
             prefix.append({"role": "system", "content": core_text})
 
     worker_ctx = CacheContext(prefix_msgs=prefix)
-    worker_ctx.inject_task_tail = False  # 主 agent 的任务切片不泄进 worker
 
     # 压缩前取证：on_tool 在工具执行前收到 (name, 解析后 args)，原样记进 evidence——
     # 搜索结果 content 进 log 前可能被头尾压缩丢中段，arguments 这层永远无损。
@@ -193,6 +197,9 @@ def delegate(brief: str, output_file: str, psyche: str = "") -> str:
     gate_line = (
         "✅ 出处闸: 通过" if not problems
         else "⛔ 出处闸: 未通过\n" + "\n".join(f"  - {p}" for p in problems)
+        + "\n  ↯ 重派前先针对上面的问题清单修改 brief（明确要求 worker 对相关来源 "
+          "read_page / 降级标注）——原样重派只会撞同一堵墙（worker 每次都是全新上下文，"
+          "不记得上次为什么失败）。"
     )
     size = len(out_path.read_text(encoding="utf-8", errors="ignore")) if out_path.exists() else 0
     llm_calls = sum(1 for m in worker_ctx.log if m.get("role") == "assistant")

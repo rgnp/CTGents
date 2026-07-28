@@ -1,8 +1,7 @@
 """器官生命体征 — 只读派生 CTGents 各内部机制的"上次跳动"。
 
 为什么派生产物、不撒探针：push 式探针(record_organ_fire)放在器官触发点，
-若那段代码本身是死路(经典案底：reflect_on_session 写在 return 之后、从未跑、
-0 个反思文件)，探针同样不会跑——抓不到"声明了却没接线"这类衰竭。真相在**产物**：
+若那段代码本身是死路，探针同样不会跑——抓不到"声明了却没接线"这类衰竭。真相在**产物**：
 0 个文件就是 0 个，不管代码怎么声称。本模块自动化"查声明的机制先看产物文件在不在"
 那一步：扫每个器官的真实落盘产物的 mtime / 数量，跨目录共用文件 mtime 作统一时间轴
 (同一时钟可比，不必解析时间戳)。
@@ -19,9 +18,10 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from .config import MEMORY_DIR, SESSION_DIR
+from .paths import STATS_DIR
 
 _ROOT = Path(__file__).resolve().parent.parent
-_STATS_DIR = _ROOT / "stats"
+_STATS_DIR = STATS_DIR
 _MEMORY = Path(MEMORY_DIR)
 _SESSIONS = Path(SESSION_DIR)
 
@@ -59,7 +59,7 @@ def _session_mtimes() -> list[float]:
 def _sessions_ago(last: float | None, timeline: list[float]) -> int:
     """有多少个会话比该器官最近一次产物更新——即"几个会话没跳了"。
 
-    本会话退出时收尾产物(memory/反思)写在 save_session 之后，mtime 更大，故
+    本会话退出时收尾产物写在 save_session 之后，mtime 更大，故
     本会话跳过的器官 sessions_ago=0。
     """
     if last is None:
@@ -97,6 +97,7 @@ def census() -> list[OrganVital]:
         c = count if count is not None else len(mt)
         return OrganVital(name, role, last, c, _sessions_ago(last, timeline), note)
 
+    # 已退役 reflection 文件可能仍残留在用户 stats/ 中，不把历史遗留误算为缓存统计。
     cache_files = [p for p in _glob(_STATS_DIR, "*.json")
                    if not p.name.endswith("_reflection.json")]
     strat = _memory_by_type("strategy")
@@ -104,9 +105,6 @@ def census() -> list[OrganVital]:
     return [
         vital("工具追踪", "记录每次工具调用耗时/成败（tracker，唯一已插仪表的器官）",
               _glob(_STATS_DIR, "*_tools.jsonl")),
-        vital("会话反思", "退出时异常检测+基线对比（reflect_on_session）",
-              _glob(_STATS_DIR, "*_reflection.json"),
-              note="仅检测到异常才落盘——少/无文件可能=无异常，非必然衰竭"),
         vital("缓存统计", "每会话 prompt / cache hit-miss 用量",
               cache_files),
         vital("用户档案", "越用越懂你：记忆 type=user（agent 显式 remember，前缀全文注入）",
@@ -156,4 +154,8 @@ def render_census() -> str:
     lines.append(f"心跳基准: 已知 {n_sessions} 个会话存档。"
                  "🟢最近会话 / 🟡近 3 会话 / 🔴久未跳动或从未。"
                  "口径=最近产物 mtime vs 会话存档 mtime 时间轴。")
+    with contextlib.suppress(Exception):
+        from .work_receipts import format_work_status
+
+        lines.extend(["", format_work_status()])
     return "\n".join(lines)

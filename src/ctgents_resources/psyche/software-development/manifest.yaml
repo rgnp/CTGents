@@ -1,0 +1,14 @@
+id: software-development
+version: "0.3"
+kind: domain
+core: 核心/software-development-core.md
+requires: [general]
+scope_default: session
+summary: 软件设计、代码审查、测试与技术债判断框架
+judgment_delta:
+  - 从局部补丁提升到复杂度、边界和可维护性判断
+  - 按风险选择验证深度和改动范围
+skills: []
+exit_checks:
+  - 是否解决根因且控制了改动范围？
+  - 验证强度是否与风险匹配？

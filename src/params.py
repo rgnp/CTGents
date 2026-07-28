@@ -19,6 +19,8 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 
+from .paths import RAG_INDEX_DIR
+
 # 与 config 同源、幂等：保证读 env 前 .env 已加载（无论谁先 import）。
 load_dotenv(Path(__file__).parent.parent / ".env")
 
@@ -106,7 +108,7 @@ class RagParams:
     max_file_size: int = _env_int("CTG_RAG_MAX_FILE_SIZE", 512 * 1024)
     # 索引落盘目录（cwd 相对）。rag.py 的词面索引与 embeddings.py 的向量索引共用此目录——
     # 单一真相源，两处曾各自硬编码 ".rag-index"，改一处会静默分裂到两个位置。
-    index_dir: str = _env_str("CTG_RAG_INDEX_DIR", ".rag-index")
+    index_dir: str = _env_str("CTG_RAG_INDEX_DIR", str(RAG_INDEX_DIR))
     # 本地 embedding 语义检索（knowledge/ 研究文档索引专用，代码索引不受影响）
     embed_enabled: bool = _env_bool("CTG_RAG_EMBED_ENABLED", True)
     embed_model: str = _env_str("CTG_RAG_EMBED_MODEL", "paraphrase-multilingual-MiniLM-L12-v2")
@@ -227,7 +229,7 @@ class SummaryParams:
     # 喂给摘要 LLM 的对话文字稿字符上限（超出保头尾、中间标记省略）
     digest_max_chars: int = _env_int("CTG_SUMMARY_DIGEST_MAX_CHARS", 12000)
     # 前缀会话索引：最多列最近多少场
-    index_sessions: int = _env_int("CTG_SUMMARY_INDEX_SESSIONS", 25)
+    index_sessions: int = _env_int("CTG_SUMMARY_INDEX_SESSIONS", 5)
     # 前缀会话索引：最近多少场附带未竟事项（"接着做"的钩子，全带太占前缀）
     index_unfinished: int = _env_int("CTG_SUMMARY_INDEX_UNFINISHED", 8)
 
@@ -256,3 +258,33 @@ class DelegateParams:
 
 
 DELEGATE = DelegateParams()
+
+
+@dataclass(frozen=True)
+class HeartbeatParams:
+    """心跳旋钮：无人期自主推进探索前沿（tasks/frontier.md），见 heartbeat.py。"""
+
+    enabled: bool = _env_bool("CTG_HEARTBEAT_ENABLED", True)
+    # 每次心跳醒来的 API 请求预算（一次领一项活跃项，到额收尾落盘）
+    worker_max_requests: int = _env_int("CTG_HEARTBEAT_WORKER_MAX_REQUESTS", 25)
+    # 出处闸打回后的重试预算（补 read_page/改标注，用不了多少步）
+    retry_max_requests: int = _env_int("CTG_HEARTBEAT_RETRY_MAX_REQUESTS", 12)
+    # 无人期硬加载的领域 psyche（冷启动开放判断塌的实测解药，不能靠散文提醒）
+    psyche: str = _env_str("CTG_HEARTBEAT_PSYCHE", "research")
+    # 连续多少次心跳没推进 frontier 就自暂停（frontier 被人改动后自动恢复）
+    stall_limit: int = _env_int("CTG_HEARTBEAT_STALL_LIMIT", 2)
+    # 每日心跳次数上限（成本兜底；调度间隔本身由 schtasks/--loop 决定）
+    max_runs_per_day: int = _env_int("CTG_HEARTBEAT_MAX_RUNS_PER_DAY", 16)
+    # 无人期工具白名单：只读/可逆 + 科研工具 + write_file（产出落 knowledge/frontier）
+    # + psyche/skill 运行时（load_psyche/activate_skill 让 worker 能跑 paper-pipeline 等
+    # 成套流程）+ fetch_paper/transcribe_paper（pipeline 阶段 1/2 的窄工具，替代 run_python）。
+    # 刻意不含 run_command/run_python/git_*/delete_file/remember——无人期不动系统状态。
+    worker_tools: str = os.getenv(
+        "CTG_HEARTBEAT_WORKER_TOOLS",
+        "search_web,read_page,read_file,list_files,write_file,rag_search,think,learn,"
+        "scan_papers,scan_conf,read_papers,read_paper,fetch_paper,transcribe_paper,"
+        "psyche_catalog,load_psyche,activate_skill",
+    )
+
+
+HEARTBEAT = HeartbeatParams()

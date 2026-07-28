@@ -1,6 +1,8 @@
+from __future__ import annotations
+
 TOOLS_THINK = [
     {
-        "_meta": {"label": "思考"},
+        "_meta": {"group": "core", "label": "思考"},
         "type": "function",
         "function": {
             "name": "think",

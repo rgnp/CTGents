@@ -68,7 +68,7 @@ def test_max_requests_budget_breaker(monkeypatch):
     monkeypatch.setattr(llm, "_invoke_llm_eager", fake_eager)
     monkeypatch.setattr(llm, "_handle_tool_results",
                         lambda *a, **k: (None, 0))
-    monkeypatch.setattr(llm, "_detect_control_signal", lambda _tc: None)
+    monkeypatch.setattr(llm, "_detect_control_signal", lambda *_args: None)
     result = llm.run_conversation(_ctx(), "q", _NOOP, _NOOP, max_requests=2)
     assert len(calls) == 2
     assert "熔断上限（2）" in result
@@ -86,7 +86,7 @@ def test_none_max_requests_uses_global_default(monkeypatch):
 
     monkeypatch.setattr(llm, "_invoke_llm_eager", fake_eager)
     monkeypatch.setattr(llm, "_handle_tool_results", lambda *a, **k: (None, 0))
-    monkeypatch.setattr(llm, "_detect_control_signal", lambda _tc: None)
+    monkeypatch.setattr(llm, "_detect_control_signal", lambda *_args: None)
     monkeypatch.setattr(llm, "_MAX_REQUESTS_PER_TURN", 50)
     result = llm.run_conversation(_ctx(), "q", _NOOP, _NOOP)
     assert result == "完成"

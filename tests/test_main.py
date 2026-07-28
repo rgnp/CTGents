@@ -5,8 +5,16 @@ main() 是 REPL 入口，难直接测。这里只锁抽出的纯函数 _render_t
 """
 from __future__ import annotations
 
+import pytest
+
 import src.main as main
 from src.main import _render_turn_error
+
+
+@pytest.fixture(autouse=True)
+def _isolate_state_file(tmp_path, monkeypatch):
+    """任何收尾测试都不得读写真实 sessions/_state.md。"""
+    monkeypatch.setattr(main, "_STATE_FILE", tmp_path / "_state.md")
 
 
 def test_exception_friendly_and_no_break():
@@ -37,57 +45,41 @@ def test_non_exception_base_no_break():
 # 是已删除的挂尾机制本身。审计逻辑保留为 dormant,回归须按 append-only 重做。
 
 
-# ── C16 缝：会话收尾必须触发反思（被动进化分析层的唯一写入口） ──
+# ── 会话收尾的保存闸 ──
 
-def test_finalize_session_triggers_reflection(monkeypatch):
-    """有 assistant 回复 → 保存 + reflect_on_session(以保存后的 id 调用)。
-
-    缝：reflect 调用曾挂在 load_session 的 return 之后(不可达)，整层分析
-    管线静默死亡数日(stats/ 零 reflection 文件)。锁住"收尾必反思"接线。
-    """
-    import src.tracker as tracker
+def test_finalize_session_saves_assistant_session(monkeypatch):
+    """有 assistant 回复 → 以保存后的 session id 报告落盘成功。"""
     from src.cache_context import CacheContext
 
-    calls: list[str] = []
     monkeypatch.setattr(main, "save_session", lambda msgs, sid: "sid-123")
-    monkeypatch.setattr(tracker, "reflect_on_session",
-                        lambda sid: calls.append(sid) or None)
     main._session_state["turn_ran"] = True
     ctx = CacheContext(log_msgs=[{"role": "user", "content": "嗨"},
                                  {"role": "assistant", "content": "好"}])
     lines = main._finalize_session(ctx, None)
-    assert calls == ["sid-123"], "收尾必须以保存后的 session_id 触发反思"
-    assert any("会话已保存" in ln for ln in lines)
+    assert any("会话已保存: [sid-123]" in ln for ln in lines)
 
 
 def test_finalize_session_skips_empty(monkeypatch):
-    """无 assistant 回复 → 不保存也不反思（空会话不落盘）。"""
-    import src.tracker as tracker
+    """无 assistant 回复 → 不保存（空会话不落盘）。"""
     from src.cache_context import CacheContext
 
     monkeypatch.setattr(main, "save_session",
                         lambda *a: (_ for _ in ()).throw(AssertionError("不应保存")))
-    monkeypatch.setattr(tracker, "reflect_on_session",
-                        lambda sid: (_ for _ in ()).throw(AssertionError("不应反思")))
     main._session_state["turn_ran"] = True  # 测内层 any-assistant 闸（非空会话早退）
     ctx = CacheContext(log_msgs=[{"role": "user", "content": "嗨"}])
     lines = main._finalize_session(ctx, None)
     assert not any("会话已保存" in ln for ln in lines)
 
 
-def test_finalize_session_reflect_failure_not_blocking(monkeypatch):
-    """反思抛异常 → 不阻塞退出，保存行仍在。"""
-    import src.tracker as tracker
+def test_finalize_session_skips_when_no_turn_ran(monkeypatch):
+    """未运行过对话轮次时直接退出，不保存会话。"""
     from src.cache_context import CacheContext
 
-    monkeypatch.setattr(main, "save_session", lambda msgs, sid: "sid-9")
-    monkeypatch.setattr(tracker, "reflect_on_session",
-                        lambda sid: (_ for _ in ()).throw(OSError("disk")))
-    main._session_state["turn_ran"] = True
-    ctx = CacheContext(log_msgs=[{"role": "assistant", "content": "好"}])
-    lines = main._finalize_session(ctx, None)
-    assert any("会话已保存" in ln for ln in lines)
-    assert any("退出" in ln for ln in lines)
+    monkeypatch.setattr(main, "save_session",
+                        lambda *a: (_ for _ in ()).throw(AssertionError("不应保存")))
+    main._session_state["turn_ran"] = False
+    ctx = CacheContext(log_msgs=[{"role": "assistant", "content": "旧内容"}])
+    assert main._finalize_session(ctx, None) == ["退出"]
 
 
 # ── 主干 run_agent_turn：对话分支 → 按 current.md 推进升级任务分支 ──
@@ -95,8 +87,11 @@ def test_finalize_session_reflect_failure_not_blocking(monkeypatch):
 
 def _stub_backbone(monkeypatch, calls, *, progressed):
     """把 run_agent_turn 的外部依赖全 stub 掉，只留控制流可观察。"""
+    import src.heartbeat as heartbeat
     import src.task_loop as task_loop
     import src.tasks as tasks
+    # 心跳摘要消费有副作用（pending → archive），测试必须 stub 掉，不吃真摘要
+    monkeypatch.setattr(heartbeat, "consume_digest", lambda: None)
     monkeypatch.setattr(main, "process_turn",
                         lambda *a, **k: calls.append("process_turn") or "")
     monkeypatch.setattr(main, "_make_display",
@@ -159,3 +154,26 @@ def test_run_agent_turn_injects_gate_notice_once(monkeypatch):
     assert sum(1 for m in ctx.log if m.get("_gate_notice")) == 1
     main.run_agent_turn(ctx, "hi again", "sid0")
     assert sum(1 for m in ctx.log if m.get("_gate_notice")) == 1, "首轮一次，后续不重复"
+
+
+def test_run_agent_turn_injects_heartbeat_digest(monkeypatch):
+    """有待送心跳摘要 → append-only 注入一次；消费后（返回 None）不再注入。"""
+    import src.heartbeat as heartbeat
+    from src.cache_context import CacheContext
+    calls: list[str] = []
+    _stub_backbone(monkeypatch, calls, progressed=False)
+    main._session_state["task_reminded"] = True
+    main._session_state["base_psyche_ensured"] = True
+    main._session_state["gate_checked"] = True
+    pending = ["## 03:30\n推进了世界模型方向，写入 knowledge/wm/card.md"]
+    monkeypatch.setattr(heartbeat, "consume_digest",
+                        lambda: pending.pop() if pending else None)
+    ctx = CacheContext()
+    main.run_agent_turn(ctx, "hi", "sid0")
+    digests = [m for m in ctx.log if m.get("_heartbeat_digest")]
+    assert len(digests) == 1
+    assert "心跳汇报" in digests[0]["content"]
+    assert "knowledge/wm/card.md" in digests[0]["content"]
+    assert "/heartbeat accept" in digests[0]["content"]
+    main.run_agent_turn(ctx, "hi again", "sid0")
+    assert sum(1 for m in ctx.log if m.get("_heartbeat_digest")) == 1, "消费后不再注入"

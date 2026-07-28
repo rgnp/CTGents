@@ -1,0 +1,13 @@
+id: psyche-building
+version: "0.8"
+kind: subdomain
+core: 核心/psyche-building-core.md
+requires: [software-development]
+scope_default: task
+summary: 构建、验证和演化 Psyche 的知识工程框架
+judgment_delta:
+  - 从写提示词提升到能力问题、知识来源和验证闭环
+skills: [build-psyche]
+exit_checks:
+  - Psyche 准则是否有知识或实战证据支撑？
+  - 是否定义了可验证的 competency questions？

@@ -1,0 +1,32 @@
+name: review-interface
+version: "1.0"
+description: 对界面视觉层级、状态、介质约束和交互时间线进行系统审查
+
+axes:
+  - id: medium
+    name: 界面介质
+    default: general
+    values:
+      - id: general
+        label: 通用界面
+      - id: tui
+        label: 终端界面
+      - id: web
+        label: Web 界面
+  - id: goal
+    name: 审查目标
+    default: diagnose
+    values:
+      - id: diagnose
+        label: 诊断问题
+      - id: improve
+        label: 形成改进方案
+      - id: verify
+        label: 验证已有改动
+
+always_load: []
+
+on_demand:
+  - id: state-matrix
+    file: references/state-matrix.md
+    load_when: 界面含异步、错误、空状态、长内容、窄屏或多步交互时

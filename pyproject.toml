@@ -1,17 +1,67 @@
 [build-system]
-requires = ["setuptools>=64"]
+requires = ["setuptools>=77"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "ctg"
+name = "ctgents-agent"
 version = "0.1.0"
+description = "A terminal-native, self-improving coding and research agent with mechanical safety gates."
+readme = {file = "README.md", content-type = "text/markdown"}
+license = "MIT"
+license-files = ["LICENSE"]
+authors = [{name = "rgnp"}]
+keywords = ["agent", "coding-assistant", "research-assistant", "terminal", "llm"]
 requires-python = ">=3.11"
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Environment :: Console",
+    "Intended Audience :: Developers",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Software Development",
+]
+dependencies = [
+    "openai>=1.0.0",
+    "python-dotenv>=1.0.0",
+    "PyYAML>=6.0",
+    "tavily-python>=0.5.0",
+    "trafilatura>=2.0.0",
+    "lxml_html_clean",
+    "curl_cffi>=0.7.0",
+    "prompt_toolkit>=3.0.0",
+    "rich>=13.0.0",
+    "textual>=8.0.0",
+]
+
+[project.optional-dependencies]
+research = [
+    "sentence-transformers>=3.0.0",
+    "pymupdf>=1.24.0",
+]
+dev = [
+    "pymupdf>=1.24.0",
+    "pytest>=7.0",
+    "pytest-cov>=7.0.0",
+    "pytest-timeout>=2.3.0",
+    "pytest-xdist>=3.0",
+    "ruff",
+]
+
+[project.urls]
+Homepage = "https://github.com/rgnp/CTGents"
+Repository = "https://github.com/rgnp/CTGents"
+Issues = "https://github.com/rgnp/CTGents/issues"
 
 [project.scripts]
 ctg = "src.main:main"
 
 [tool.setuptools.packages.find]
 include = ["src*"]
+
+[tool.setuptools.package-data]
+"src.ctgents_resources" = ["**/*.md", "**/*.yaml"]
 
 # ── Ruff: 一站式 linter + formatter ──
 [tool.ruff]
@@ -66,7 +116,7 @@ skip-magic-trailing-comma = false
 minversion = "7.0"
 testpaths = ["tests"]
 pythonpath = ["."]
-addopts = "-v --tb=short -p no:cacheprovider --ignore=tests/test_prefix_cache.py --ignore=tests/analyze_cache_hitrate.py"
+addopts = "-v --tb=short -p no:cacheprovider --timeout=60 --ignore=tests/test_prefix_cache.py --ignore=tests/analyze_cache_hitrate.py"
 markers = [
     "slow: 速度较慢的测试（L2 集成、上下文压缩等，>2s），pre-commit 快速门禁跳过",
 ]

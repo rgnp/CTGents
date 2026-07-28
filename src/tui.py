@@ -24,6 +24,7 @@ import time
 from collections import deque
 from typing import TYPE_CHECKING
 
+from rich.text import Text
 from textual import work
 from textual.app import App, ComposeResult
 from textual.binding import Binding
@@ -785,6 +786,7 @@ class ChatScreen(Screen):
         self._last_md_render: float = 0.0       # 流式 markdown 上次重渲时刻（节流）
         self._last_reason_render: float = 0.0   # 思考流上次重渲时刻（节流）
         self._pending_marker: Static | None = None  # 首 token 前的"思考中…"占位
+        self._worker_line: Static | None = None  # delegate worker 活动行（单行原地更新，不刷屏）
         # 输入补全状态（@ 文件 / 命令两种模式共用一套下拉）
         self._ac_active = False
         self._ac_mode = "file"            # "file" | "cmd"
@@ -1201,6 +1203,11 @@ class ChatScreen(Screen):
             with contextlib.suppress(Exception):
                 self.app.ctx.rebuild_prefix(_main._make_prefix_msgs())
         ev = self._events
+        # delegate worker 进度接进事件队列（原默认 print 被 Textual 吞掉 = 委派期间死寂，
+        # 用户以为卡死）。"worker" 事件单行原地更新，不像 status 那样逐条刷 transcript。
+        with contextlib.suppress(Exception):
+            from .tools import delegate as _delegate_mod
+            _delegate_mod.set_progress_sink(lambda s: ev.append(("worker", str(s).strip())))
 
         def make_display():
             started = [False]
@@ -1237,6 +1244,13 @@ class ChatScreen(Screen):
             with contextlib.suppress(Exception):
                 self._pending_marker.remove()
             self._pending_marker = None
+
+    def _clear_worker_line(self) -> None:
+        """本轮结束：移除 delegate worker 活动行。"""
+        if self._worker_line is not None:
+            with contextlib.suppress(Exception):
+                self._worker_line.remove()
+            self._worker_line = None
 
     # ── 事件排空（UI 线程）──
     async def _drain_events(self) -> None:
@@ -1290,6 +1304,15 @@ class ChatScreen(Screen):
                     self._mount_footer(rest[0])
                 elif kind == "status":
                     self._mount(rest[0], "meta")
+                elif kind == "worker":
+                    # delegate worker 活动：单行原地更新（一个 worker 几十次调用，逐条 mount 会刷屏）
+                    if self._worker_line is None:
+                        self._worker_line = Static(rest[0], classes="meta", markup=False)
+                        with contextlib.suppress(Exception):
+                            await transcript.mount(self._worker_line)
+                    else:
+                        with contextlib.suppress(Exception):
+                            self._worker_line.update(rest[0])
                 elif kind == "error":
                     self._clear_pending_marker()
                     self._mount(f"💥 {rest[0]}", "err")
@@ -1301,6 +1324,7 @@ class ChatScreen(Screen):
                     self._turn_count += 1
                 elif kind == "done":
                     self._clear_pending_marker()  # 本轮结束，无论路径，确保占位不残留
+                    self._clear_worker_line()     # worker 活动行随轮结束移除
                     self._collapse_active()
                     self._reset_tool_calls()
                     self._agent_header_mounted = False
@@ -1483,7 +1507,7 @@ class ChatScreen(Screen):
             full = f"{header}  · {title}" if title else header
             return Collapsible(
                 Static(body, classes="tool-result", markup=False),
-                title=full, collapsed=True,
+                title=Text(full), collapsed=True,
                 collapsed_symbol="▸  ", expanded_symbol="▾  ",
                 classes="tool-result-box",
             )

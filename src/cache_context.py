@@ -69,6 +69,10 @@ class CacheContext:
         self.log: list[dict] = list(log_msgs or [])
         self.scratch: list[dict] = []
         self._prefix_hash: str = _compute_msg_hash(self.prefix)
+        # Psyche 的运行时单一真相源。事件仍写入 log 做持久化；加载旧会话时由
+        # psyche_bridge 首次访问一次性归约，之后不再每轮扫描整段历史。
+        self.psyche_stack: dict[str, dict] = {}
+        self._psyche_stack_synced: bool = False
         # 循环控制信号：agent 调 task_done/need_user 时由 run_conversation 置位（取代
         # "不调工具=结束"的隐式判断）。续跑/主干据此决定停或继续。见 tools/control.py。
         self.control_signal: str | None = None
@@ -298,6 +302,8 @@ class CacheContext:
     def clear_log(self) -> None:
         """清空 log，保持 prefix 不变。"""
         self.log.clear()
+        self.psyche_stack.clear()
+        self._psyche_stack_synced = True
 
     def clear_scratch(self) -> None:
         """清空 scratch。"""

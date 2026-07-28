@@ -1,0 +1,34 @@
+# paper-pipeline skill manifest
+# 版本: 1.0 | 创建: 2026-07-19
+
+name: paper-pipeline
+version: "1.0"
+description: >
+  论文入库自动化流水线——候选发现→下载→转写→结构化入库→关联索引。
+  单篇容错，断点续跑，三态驱动。
+
+axes:
+  - id: stage
+    name: 执行模式
+    description: 跑全流程还是仅搜索
+    default: full
+    values:
+      - id: full
+        label: 全流程
+        description: 阶段 0→1→2→3→4A，全自动到关联索引
+      - id: discover
+        label: 仅发现
+        description: 只做阶段 0（搜索+筛除+候选创建），不下载
+      - id: resume
+        label: 断点续跑
+        description: 从 _pipeline_state.md 读到断点，继续未完成的论文
+
+always_load:
+  - static/core/stance.md
+  - static/core/workflow.md
+
+on_demand:
+  - id: report-template
+    file: references/report-template.md
+    description: 各阶段完成后的摘要汇报模板
+    load_when: 流水线执行完成或中断，需要向用户汇报结果时

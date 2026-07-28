@@ -1,0 +1,13 @@
+id: tui-aesthetics
+version: "0.4"
+kind: subdomain
+core: 核心/tui-aesthetics-core.md
+requires: [software-development, aesthetic-design]
+scope_default: task
+summary: 终端介质下的视觉节奏、密度、色彩和布局判断
+judgment_delta:
+  - 加入终端字符网格、有限色彩和动态布局约束
+skills: []
+exit_checks:
+  - 视觉效果是否在真实终端尺寸和滚动中成立？
+  - 是否避免装饰噪音压过内容？

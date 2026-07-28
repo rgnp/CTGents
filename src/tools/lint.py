@@ -1,4 +1,4 @@
-"""项目规范检查与优化：扫描项目是否符合 AI Agent 开发规范，给出评分和优化建议。
+"""项目规范检查与优化：扫描项目规则，给出具体问题和优化建议。
 
 基于 GitHub 2500+ 案例研究的"六大军规"：
   1. 命令 (Commands)  — 构建/测试/运行命令是否明确
@@ -9,6 +9,8 @@
   6. 边界 (Boundaries) — AGENTS.md、三级边界系统
 """
 
+from __future__ import annotations
+
 import json
 import re
 from datetime import datetime
@@ -16,21 +18,14 @@ from pathlib import Path
 
 # ── 工具定义 ──
 
-# check_project / generate_agents_md / docs_sync_check 已从注册移除
-# （2026-06-23，82 会话零调用）：维护元工具，实现保留在本模块（lint 规则内部复用），
-# 仅不再作为 agent 工具暴露。需要时恢复对应 schema dict 即可。
+# 维护检查不作为 agent 工具暴露；check_project 由 Makefile 直接调用，
+# docs_sync_check 由 CI 直接调用，内部 AGENTS 生成器只服务 check_project(fix=True)。
 TOOLS_LINT: list = []
 
 
 # ═══════════════════════════════════════════════════════════════
 # 检查规则定义
 # ═══════════════════════════════════════════════════════════════
-
-# 评级阈值
-_SCORE_EXCELLENT = 85
-_SCORE_GOOD = 70
-_SCORE_FAIR = 50
-
 
 # ── 维度 1：命令（满分 16 分）──
 def _check_commands(root: Path) -> dict:
@@ -221,8 +216,12 @@ def _check_structure(root: Path) -> dict:
     has_license = any(root.glob("LICENSE*"))
     has_gitignore = (root / ".gitignore").exists()
 
-    # 检查 __init__.py 是否过大（超过 200 行使提示）
-    init_files = list(root.rglob("__init__.py"))
+    # 检查项目代码里的 __init__.py 是否过大；虚拟环境/依赖目录不属于项目结构。
+    ignored_parts = {".venv", "venv", "node_modules", ".git", "__pycache__"}
+    init_files = [
+        f for f in root.rglob("__init__.py")
+        if not ignored_parts.intersection(f.relative_to(root).parts)
+    ]
     oversized_inits = [f for f in init_files if f.stat().st_size > 10000]
 
     # 检查是否有扁平化趋势（src 下超过 15 个 .py 文件）
@@ -534,19 +533,8 @@ def _check_bonus(root: Path) -> dict:
 # 主检查函数
 # ═══════════════════════════════════════════════════════════════
 
-def _get_rating(score: int) -> str:
-    if score >= _SCORE_EXCELLENT:
-        return "🏆 优秀"
-    elif score >= _SCORE_GOOD:
-        return "👍 良好"
-    elif score >= _SCORE_FAIR:
-        return "⚠️ 一般"
-    else:
-        return "🔴 需改进"
-
-
 def check_project(path: str | None = None, fix: bool = False) -> str:
-    """全面检查项目规范。"""
+    """Report concrete project-rule findings without an aggregate self-score."""
     root = Path(path).resolve() if path else Path.cwd()
 
     if not root.is_dir():
@@ -572,33 +560,14 @@ def check_project(path: str | None = None, fix: bool = False) -> str:
         _check_boundaries(root),
     ]
 
-    total_score = 0
-    total_max = 0
-
-    lines.append("── 维度评分 ──")
+    lines.append("── 维度检查 ──")
     lines.append("")
 
     for dim in dimensions:
-        pct = dim["score"] / dim["max_score"] * 100
-        bar_len = 12
-        filled = int(bar_len * pct / 100)
-        bar = "█" * filled + "░" * (bar_len - filled)
-        lines.append(f"  {dim['name']}")
-        lines.append(f"    [{bar}] {dim['score']}/{dim['max_score']} ({pct:.0f}%)")
-        total_score += dim["score"]
-        total_max += dim["max_score"]
+        lines.append(f"  {dim['name']}: {len(dim['issues'])} 项问题")
 
-    # 额外加减分
+    # 额外发现只作为事实，不再折算成能够掩盖红色问题的加减分。
     bonus = _check_bonus(root)
-    bonus_score = sum(2 if b[0] == "+" else -2 for b in bonus["items"])
-    total_score = max(0, total_score + bonus_score)
-
-    lines.append("")
-    overall_pct = total_score / total_max * 100
-    rating = _get_rating(total_score)
-    lines.append(f"  📊 总分: {total_score}/{total_max} ({overall_pct:.0f}%) → {rating}")
-    if bonus["items"]:
-        lines.append(f"     （含额外加减分: {bonus_score:+d}）")
     lines.append("")
 
     # 问题汇总
@@ -650,17 +619,13 @@ def check_project(path: str | None = None, fix: bool = False) -> str:
     # 总结
     lines.append("── 📋 总结 ──")
     lines.append("")
-    if overall_pct >= _SCORE_EXCELLENT:
-        lines.append("  项目规范良好，继续保持！")
-    elif overall_pct >= _SCORE_GOOD:
-        lines.append("  项目基础不错，重点优化上述建议的问题。")
-    elif overall_pct >= _SCORE_FAIR:
-        lines.append("  项目有多项需要改进，建议优先处理 🔴 问题列表。")
-    else:
+    if all_issues:
         lines.append(
-            "  项目规范严重不足，建议参考 AGENTS.md 规范指南"
-            "（yeasy.gitbook.io/agentic_ai_guide）进行全面整改。"
+            f"  发现 {len(all_issues)} 项具体问题。"
+            "本检查不生成综合分数；是否阻断由 Ruff、pytest、文档同步等确定性门决定。"
         )
+    else:
+        lines.append("  当前规则覆盖范围内未发现问题；这不等于项目获得质量评级。")
 
     return "\n".join(lines)
 
@@ -858,31 +823,6 @@ def _generate_agents_md_content(root: Path, output_path: Path) -> None:
     output_path.write_text("\n".join(lines), encoding="utf-8")
 
 
-def generate_agents_md(path: str | None = None, overwrite: bool = False) -> str:
-    """自动生成或更新 AGENTS.md。"""
-    root = Path(path).resolve() if path else Path.cwd()
-
-    if not root.is_dir():
-        return f"目录不存在: {root}"
-
-    agents_md = root / "AGENTS.md"
-
-    if agents_md.exists() and not overwrite:
-        return (
-            f"AGENTS.md 已存在: {agents_md}\n\n"
-            f"如需覆盖，请设置 overwrite=True。\n"
-            f"或使用 check_project(fix=True) 来检查并修复其他规范问题。"
-        )
-
-    existed = agents_md.exists()  # 写入前快照：区分"已生成"(新建) vs "已更新"(覆盖)
-    try:
-        _generate_agents_md_content(root, agents_md)
-        action = "已更新" if existed else "已生成"
-        return f"{action} AGENTS.md: {agents_md}\n\n请检查并根据项目实际情况调整内容。"
-    except Exception as e:
-        return f"生成 AGENTS.md 失败: {e}"
-
-
 # ═══════════════════════════════════════════════════════════════
 # 文档同步检查
 # ═══════════════════════════════════════════════════════════════
@@ -891,37 +831,25 @@ def generate_agents_md(path: str | None = None, overwrite: bool = False) -> str:
 # 新增/修改模块后必须同步对应的文档，否则检查不通过
 _DOC_SYNC_MAP: dict[str, list[str]] = {
     # 核心模块变更 → 影响哪些文档
-    "src/llm.py":          ["AGENTS.md", "docs/architecture.md"],
-    "src/commands.py":     ["AGENTS.md", "README.md"],
+    "src/llm.py":          ["docs/architecture.md"],
+    "src/commands.py":     ["README.md"],
     "src/main.py":         ["README.md", "docs/architecture.md"],
-    "src/config.py":       [".env.example", "README.md"],
-    "src/session.py":      ["AGENTS.md", "docs/architecture.md"],
+    "src/config.py":       ["README.md"],
+    "src/session.py":      ["docs/architecture.md"],
 
-    # 工具模块变更 → 必须更新对应文档
-    "src/tools/lint.py":       ["AGENTS.md", "docs/features.md", "docs/roadmap.md"],
-    "src/tools/git.py":        ["AGENTS.md"],
-    "src/tools/project.py":    ["AGENTS.md"],
-    "src/tools/web.py":        ["AGENTS.md"],
-    "src/tools/memory.py":     ["AGENTS.md"],
-    "src/tools/code.py":       ["AGENTS.md"],
-    "src/tools/think.py":      ["AGENTS.md"],
-    "src/tools/tokens.py":     ["AGENTS.md"],
+    # 工程质量工具/CI 变更 → 开发文档。AGENTS.md 只放导航和协作约定，
+    # 不是代码行为变更日志，不能被当成所有源码的万能同步目标。
+    "src/tools/lint.py":       ["docs/development.md"],
+    ".github/workflows/":      ["docs/development.md"],
 
     # 测试变更 → 至少更新 CHANGELOG
     "tests/":                  ["docs/changelog.md"],
     "tests/test_cache.py":     ["docs/cache-design.md"],
 
     # 配置变更 → 影响范围大
-    "pyproject.toml":          ["README.md", "AGENTS.md", "docs/changelog.md"],
-    "Makefile":                ["README.md", "AGENTS.md"],
-    ".github/workflows/":      ["README.md", "AGENTS.md"],
-
-    # 文档互相引用
-    "AGENTS.md":               ["README.md"],
-    "README.md":               ["AGENTS.md"],
-    "docs/roadmap.md":         ["README.md"],
-    "docs/features.md":        ["docs/changelog.md"],
-    "docs/cache-design.md":    ["AGENTS.md", "docs/architecture.md"],
+    "pyproject.toml":          ["README.md", "docs/changelog.md"],
+    "Makefile":                ["README.md"],
+    "docs/cache-design.md":    ["docs/architecture.md"],
 }
 
 # 白名单：修改以下文件 / 目录不需要同步文档
@@ -955,9 +883,11 @@ def _classify_changed_file(changed: str) -> str:
     return ""
 
 
-def docs_sync_check(path: str | None = None) -> str:
+def docs_sync_check(path: str | None = None, base_ref: str | None = None) -> str:
     """检查当前变更是否违反了文档同步规范。
 
+    base_ref 给定时检查 ``base_ref...HEAD``（供 CI）；否则检查本地工作区的
+    未暂存、已暂存和未跟踪文件。
     遍历所有修改/新增/删除的文件，检查是否应该更新对应的文档。
     如果违反（改了代码但没改文档），给出明确提醒。
     """
@@ -968,28 +898,34 @@ def docs_sync_check(path: str | None = None) -> str:
     # 获取变更文件列表
     changed_files: list[str] = []
     try:
-        # 未暂存 + 已暂存
-        for cmd_flag in ["--name-only", "--cached --name-only"]:
+        if base_ref:
             r = subprocess.run(
-                f"git -C {root} diff {cmd_flag}".split(),
+                ["git", "-C", str(root), "diff", "--name-only", f"{base_ref}...HEAD"],
+                capture_output=True, encoding="utf-8", errors="replace", timeout=10,
+            )
+            if r.returncode != 0:
+                return f"无法获取 Git 基线变更: {r.stderr.strip() or base_ref}"
+            changed_files.extend(line.strip() for line in r.stdout.splitlines() if line.strip())
+        else:
+            # 未暂存 + 已暂存
+            for cmd_args in (["diff", "--name-only"], ["diff", "--cached", "--name-only"]):
+                r = subprocess.run(
+                    ["git", "-C", str(root), *cmd_args],
+                    capture_output=True, encoding="utf-8", errors="replace", timeout=10,
+                )
+                if r.returncode == 0:
+                    changed_files.extend(line.strip() for line in r.stdout.splitlines() if line.strip())
+
+            # 未跟踪文件
+            r = subprocess.run(
+                ["git", "-C", str(root), "status", "--porcelain"],
                 capture_output=True, encoding="utf-8", errors="replace", timeout=10,
             )
             if r.returncode == 0:
-                for line in r.stdout.strip().split("\n"):
+                for line in r.stdout.splitlines():
                     line = line.strip()
-                    if line:
-                        changed_files.append(line)
-
-        # 未跟踪文件
-        r = subprocess.run(
-            f"git -C {root} status --porcelain".split(),
-            capture_output=True, encoding="utf-8", errors="replace", timeout=10,
-        )
-        if r.returncode == 0:
-            for line in r.stdout.strip().split("\n"):
-                line = line.strip()
-                if line.startswith("?? "):
-                    changed_files.append(line[3:].strip())
+                    if line.startswith("?? "):
+                        changed_files.append(line[3:].strip())
     except Exception:
         return "无法获取 Git 变更（可能不是 Git 仓库）"
 
@@ -1055,23 +991,3 @@ def docs_sync_check(path: str | None = None) -> str:
         lines.append("✅ 所有变更都已同步对应文档，合规！")
 
     return "\n".join(lines)
-
-
-# ── 调度 ──
-def execute(name: str, args: dict) -> str | None:
-    """根据工具名分发到对应的检查函数。"""
-    if name == "check_project":
-        return check_project(
-            path=args.get("path"),
-            fix=args.get("fix", False),
-        )
-    if name == "generate_agents_md":
-        return generate_agents_md(
-            path=args.get("path"),
-            overwrite=args.get("overwrite", False),
-        )
-    if name == "docs_sync_check":
-        return docs_sync_check(
-            path=args.get("path"),
-        )
-    return None

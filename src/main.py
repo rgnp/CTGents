@@ -8,11 +8,13 @@ import threading
 import time
 import traceback
 from collections.abc import Callable
+from datetime import datetime
 from pathlib import Path
 from typing import TYPE_CHECKING
 
 from .cache_context import CacheContext
 from .commands import dispatch as dispatch_cmd
+from .paths import SESSIONS_DIR
 from .session import list_sessions, load_prefix, load_session, save_prefix, save_session
 
 # 重模块（llm→openai/tools ~1.1s、tools._tool_meta→trafilatura/tavily）延迟到使用处 import，
@@ -90,9 +92,11 @@ def _stop_esc_listener() -> None:
 
 
 # 本进程是否真跑过一轮（产生过新内容）。空会话 / 加载后未改动的会话退出时
-# 不触发反思/摘要/收割（那是白烧 LLM）。加载/清空会话时复位。
+# 不触发摘要或状态更新。加载/清空会话时复位。
 _session_state = {"turn_ran": False, "task_reminded": False,
                   "base_psyche_ensured": False, "gate_checked": False}
+_STATE_FILE = SESSIONS_DIR / "_state.md"
+_ERRORS_FILE = SESSIONS_DIR / "_errors.md"
 
 
 def _make_memory_context() -> dict | None:
@@ -131,6 +135,34 @@ def _make_agents_message() -> dict:
     return {"role": "system", "content": content, "_volatile": True, "_label": "AGENTS.md"}
 
 
+def _make_state_message() -> dict | None:
+    """跨会话任务状态：上次要点、活跃任务、已知未知、行为纠正记录。
+
+    自动注入到每次会话的 prefix 中，不需 agent 手动 recall——agent 启动即感知
+    上次中断在哪、有什么遗留缺口。文件不存在时静默跳过。
+    """
+    if not _STATE_FILE.exists():
+        return None
+    content = _STATE_FILE.read_text(encoding="utf-8")
+    if not content.strip():
+        return None
+    return {"role": "system", "content": content, "_volatile": True, "_label": "跨会话状态"}
+
+
+def _make_errors_message() -> dict | None:
+    """错误日志：跨会话积累的错误模式（幻觉/跳过验证/方案不匹配/边界遗漏/过度准备）。
+
+    自动注入到每次会话的 prefix 中，让 agent 启动即感知历史错误模式，
+    不再需要主动 recall。文件不存在或为空时静默跳过。
+    """
+    if not _ERRORS_FILE.exists():
+        return None
+    content = _ERRORS_FILE.read_text(encoding="utf-8")
+    if not content.strip():
+        return None
+    return {"role": "system", "content": content, "_volatile": True, "_label": "错误日志"}
+
+
 # _make_mechanisms_message（自动派生「每轮注入的运行时机制」索引）已删除：它索引的
 # 是 _inject_* / _append_volatile_context 这些挂尾注入器，随挂尾机制整体删除已无对象可索引。
 
@@ -149,13 +181,14 @@ def _make_prefix_msgs() -> list[dict]:
     长期目标 ambitions 曾在此注入，已于 2026-06-25 移出前缀（用户减负）：它无主动消费者、
     作为前缀散文对行为≈零效（见 rule-placement-three-layers）。/ambition 命令仍可查看管理。
 
-    「被动进化反思」(reflect_on_session 检出的工具耗时/失败/调用量异常) 已于 2026-06-23 移出
-    前缀：它测的是工具墙钟时间（run_command/git_commit 等被外部进程主导）、对接近 0ms 的值算
-    倍数产出荒谬比率（0→0=3.2x、git_commit 因提交门 833x），对 agent 无可行动性、纯噪声稀释
-    前缀。reflect_on_session 仍写 stats/*_reflection.json（dashboard 可看），只是不再每轮注入。
+    「被动进化反思」曾把工具耗时/失败/调用量异常写入独立 reflection 文件。前缀注入于
+    2026-06-23 删除，剩余 Dashboard 专属产物链于 2026-07-27 一并退役；Gap 继续直接消费
+    tracker 原始事件和异常检测，不依赖这份重复快照。
     """
     makers = (
         _make_agents_message,
+        _make_state_message,
+        _make_errors_message,
         _make_memory_context,
         _make_sessions_index,
         _make_knowledge_index,
@@ -267,6 +300,20 @@ def run_agent_turn(ctx: CacheContext, user_input: str,
 
     disp = display or _stdout_display()
     sid = [session_id]
+
+    # 心跳摘要回灌：无人期心跳（heartbeat.py）攒下的合并汇报，回到主会话时一次性
+    # append-only 注入（缓存安全）。每轮开头查一次 pending 文件，无摘要零成本。
+    from .heartbeat import consume_digest
+    digest = consume_digest()
+    if digest:
+        digest_msg = (
+            "【心跳汇报】你不在时心跳自主推进了探索前沿（tasks/frontier.md），"
+            "以下是合并摘要（产出细节在 knowledge/ 对应文件，引用前先 read_file 核对）。"
+            "检查后用 /heartbeat accept、revise 或 reject 记录交还结果：\n\n"
+            + digest
+        )
+        ctx.log.append({"role": "system", "content": digest_msg, "_heartbeat_digest": True})
+        disp.on_status(digest_msg)
 
     # 可恢复：会话首轮若有未完成长任务，append-only 注入一次提醒（恢复跨会话/重启后的"注意力"）。
     if not _session_state["task_reminded"]:
@@ -458,13 +505,60 @@ def _reload_dispatch():
     return True, f"已热加载：{'、'.join(loaded_items)}。"
 
 
+# ── 跨会话状态自动维护 ──
+
+def _update_state_on_finalize() -> None:
+    """会话结束时自动更新 _state.md：时间戳 + 活跃任务状态。
+
+    只改这两项——"上次会话要点""已知未知""行为记录"由 agent 在会话中手动写，
+    不在此覆盖。文件不存在 → 静默跳过。
+    """
+    if not _STATE_FILE.exists():
+        return
+
+    content = _STATE_FILE.read_text(encoding="utf-8")
+    lines = content.splitlines(keepends=True)
+
+    # 1) 更新时间戳行
+    now = datetime.now().strftime("%Y-%m-%d %H:%M")
+    ts_tag = "last updated: "
+    for i, line in enumerate(lines):
+        if ts_tag in line:
+            # 保留 `# 跨会话状态 (last updated: ...)` 格式
+            lines[i] = f"# 跨会话状态 ({ts_tag}{now})\n"
+            break
+
+    # 2) 替换 活跃任务 section
+    from .tasks import read_current
+    current = read_current()
+    if current:
+        task_section = f"## 活跃任务\n{current}\n"
+    else:
+        task_section = "## 活跃任务\n_当前 tasks/current.md 为空——未开始具体任务。_\n"
+
+    new_lines: list[str] = []
+    skip = False
+    for line in lines:
+        if line.startswith("## 活跃任务"):
+            new_lines.append(task_section)
+            skip = True
+        elif skip and line.startswith("## "):
+            new_lines.append(line)
+            skip = False
+        elif skip:
+            continue  # 跳过旧的 活跃任务 内容
+        else:
+            new_lines.append(line)
+
+    _STATE_FILE.write_text("".join(new_lines), encoding="utf-8")
+
+
 # ── 主入口 ──
 
 def _finalize_session(ctx: CacheContext, session_id: str | None) -> list[str]:
-    """会话收尾：落盘 → 反思。
+    """会话收尾：落盘 → 摘要 → 跨会话状态。
 
-    本进程没真跑过一轮（空会话 / 加载后未改动就退出）则直接退出，不触发任何
-    反思——那是 LLM 调用，对没新内容的会话纯属白烧。
+    本进程没真跑过一轮（空会话 / 加载后未改动就退出）则直接退出，不生成派生产物。
 
     会话关闭时的「收割」（lesson / 用户档案 / 项目知识 LLM 重写）已于 2026-06-23 整体
     删除：记忆改为「用出来的」靠 agent 显式 remember，不靠每次关闭自动收割（曾烧 LLM +
@@ -486,17 +580,15 @@ def _finalize_session(ctx: CacheContext, session_id: str | None) -> list[str]:
         session_id = _timed("保存", lambda: _save_ctx(ctx, session_id))
         lines.append(f"会话已保存: [{session_id}]")
         try:
-            from .tracker import reflect_on_session
-            if _timed("反思", lambda: reflect_on_session(session_id)):
-                lines.append("已写入会话反思。")
-        except Exception as e:
-            logger.warning("会话反思失败: %s", e)
-        try:
             from .session_summary import summarize_session
             if _timed("摘要", lambda: summarize_session(ctx.all, session_id)):
                 lines.append("已写入会话摘要。")
         except Exception as e:
             logger.warning("会话摘要失败: %s", e)
+        try:
+            _timed("状态", lambda: _update_state_on_finalize())
+        except Exception as e:
+            logger.warning("跨会话状态更新失败: %s", e)
     if timings:
         slow = sorted(timings, key=lambda kv: kv[1], reverse=True)
         brief = " ".join(f"{k}{v:.1f}s" for k, v in slow if v >= 0.05)
@@ -523,6 +615,9 @@ def main() -> None:
     for _stream in (sys.stdin, sys.stdout, sys.stderr):
         if hasattr(_stream, "reconfigure"):
             _stream.reconfigure(encoding="utf-8", errors="replace")
+    from .paths import ensure_workspace
+
+    ensure_workspace()
     _ensure_git_hooks()
     sessions = list_sessions()
     session_id: str | None = None

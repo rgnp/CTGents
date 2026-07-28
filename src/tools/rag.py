@@ -24,6 +24,7 @@ embedding 语义检索（见 embeddings.py），词面零重合但语义相关�
 from __future__ import annotations
 
 import fnmatch
+import hashlib
 import json
 import math
 import os
@@ -33,6 +34,7 @@ from collections import Counter
 from pathlib import Path
 
 from ..params import RAG
+from ..paths import KNOWLEDGE_DIR as _KNOWLEDGE_DIR
 from . import embeddings
 
 # ═══════════════════════════════════════════════════════════════
@@ -223,6 +225,15 @@ TOOLS_RAG = [
                 },
                 "required": ["query"],
             },
+        },
+    },
+    {
+        "_meta": {"label": "知识审计", "parallel_safe": True, "group": "research"},
+        "type": "function",
+        "function": {
+            "name": "knowledge_audit",
+            "description": "审计知识源、索引新鲜度、空短文档、精确重复和 registry 断链；只报告不删除。",
+            "parameters": {"type": "object", "properties": {}, "required": []},
         },
     },
 ]
@@ -1162,7 +1173,11 @@ class DocChunk:
         return cls(d["source"], d["title"], d["content"], d["doc_type"])
 
 
-def _index_doc_chunks(chunks: list[DocChunk], index_name: str) -> int:
+def _index_doc_chunks(
+    chunks: list[DocChunk],
+    index_name: str,
+    metadata: dict | None = None,
+) -> int:
     """用 TF-IDF 索引文档块。返回索引的块数。"""
     index_dir = Path(RAG_INDEX_DIR)
     index_dir.mkdir(exist_ok=True)
@@ -1202,6 +1217,7 @@ def _index_doc_chunks(chunks: list[DocChunk], index_name: str) -> int:
         "doc_count": doc_count,
         "created": time.time(),
     }
+    index_data.update(metadata or {})
     idx_path = index_dir / f"{index_name}.json"
     idx_path.write_text(json.dumps(index_data, ensure_ascii=False), encoding="utf-8")
 
@@ -1271,28 +1287,45 @@ def _search_doc_index(index_data: dict, query: str, top_k: int = 5, index_name: 
     return results
 
 
-_KNOWLEDGE_DIR = Path(__file__).parent.parent.parent / "knowledge"
-
-
 def _iter_knowledge_files() -> list[Path]:
     """研究知识库的 .md 文件（排除 sessions/——会话摘要归 search_sessions 专管，
     双重索引只会让两个检索口互相污染结果）。
     """
     if not _KNOWLEDGE_DIR.exists():
         return []
-    return [f for f in _KNOWLEDGE_DIR.rglob("*.md")
-            if f.relative_to(_KNOWLEDGE_DIR).parts[0] != "sessions"]
+    excluded_roots = {"sessions", "_retired"}
+    return sorted(
+        f
+        for f in _KNOWLEDGE_DIR.rglob("*.md")
+        if f.relative_to(_KNOWLEDGE_DIR).parts[0] not in excluded_roots
+    )
 
 
-def _knowledge_mtime() -> float:
-    """知识库最新修改时间（过期判定用）。"""
-    times = []
+def _knowledge_signature() -> str:
+    """Snapshot source paths and stat metadata so edits and deletions invalidate the index."""
+    digest = hashlib.sha256()
     for f in _iter_knowledge_files():
         try:
-            times.append(f.stat().st_mtime)
+            stat = f.stat()
         except OSError:
             continue
-    return max(times, default=0.0)
+        relative = f.relative_to(_KNOWLEDGE_DIR).as_posix()
+        digest.update(relative.encode("utf-8", errors="replace"))
+        digest.update(f"{stat.st_size}:{stat.st_mtime_ns}".encode())
+    return digest.hexdigest()
+
+
+def _clear_doc_index(index_name: str) -> None:
+    for path in (
+        Path(RAG_INDEX_DIR) / f"{index_name}.json",
+        Path(RAG_INDEX_DIR) / f"{index_name}.embeddings.npy",
+    ):
+        try:
+            path.unlink()
+        except FileNotFoundError:
+            pass
+        except OSError:
+            continue
 
 
 def index_research_content() -> str:
@@ -1305,9 +1338,11 @@ def index_research_content() -> str:
 
     knowledge_dir = _KNOWLEDGE_DIR
     if not knowledge_dir.exists():
+        _clear_doc_index("research")
         return "knowledge/ 目录不存在。先用 write_file 创建研究笔记，再用此工具索引。"
 
-    for md_file in _iter_knowledge_files():
+    source_files = _iter_knowledge_files()
+    for md_file in source_files:
         try:
             content = md_file.read_text(encoding="utf-8")
             if len(content) < 50:
@@ -1333,11 +1368,20 @@ def index_research_content() -> str:
         except Exception:
             continue
 
+    source_signature = _knowledge_signature()
     if not chunks:
+        _clear_doc_index("research")
         return "knowledge/ 目录为空或文件内容不足（需 ≥50 字符）。先用 write_file 在 knowledge/ 下创建研究笔记。"
 
-    n = _index_doc_chunks(chunks, "research")
-    parts = [f"已索引 {n} 个文档块", f"{len(chunks)} 篇知识库文档"]
+    n = _index_doc_chunks(
+        chunks,
+        "research",
+        {
+            "source_signature": source_signature,
+            "source_files": len(source_files),
+        },
+    )
+    parts = [f"已索引 {n} 个文档块", f"{len(source_files)} 篇知识库文档"]
     return "（" + "、".join(parts) + "）。使用 rag_search(query) 搜索，rag_query(query) 搜代码。"
 
 
@@ -1348,7 +1392,7 @@ def query_research(query: str, top_k: int = 5) -> str:
     "先调 rag_index_research 再搜"的两步摩擦本身就是知识库不被读的原因之一。
     """
     idx = _load_doc_index("research")
-    if idx is None or idx.get("created", 0.0) < _knowledge_mtime():
+    if idx is None or idx.get("source_signature") != _knowledge_signature():
         index_research_content()
         idx = _load_doc_index("research")
     if not idx:
@@ -1366,6 +1410,103 @@ def query_research(query: str, top_k: int = 5) -> str:
         lines.append(f"{icon} [{src}] {r['title'][:80]}  (相关度 {r['score']})")
         lines.append(f"   {r['content'][:150]}")
         lines.append("用 read_file 查看详细内容")
+    try:
+        from ..asset_usage import record_retrieval
+
+        record_retrieval("knowledge", [result["source"] for result in results], query)
+    except Exception:
+        pass
+    lines.append(
+        "若其中某条实质影响后续判断或动作，请调用 adopt_asset，"
+        "asset_kind=knowledge，asset_id 原样使用方括号内的 source 路径。"
+    )
+    return "\n".join(lines)
+
+
+def _registry_paths(value) -> list[str]:
+    paths: list[str] = []
+    if isinstance(value, dict):
+        for key, child in value.items():
+            if key == "path" and isinstance(child, str):
+                paths.append(child)
+            else:
+                paths.extend(_registry_paths(child))
+    elif isinstance(value, list):
+        for child in value:
+            paths.extend(_registry_paths(child))
+    return paths
+
+
+def knowledge_audit() -> str:
+    """Report lifecycle problems while keeping source-document decisions explicit."""
+    files = _iter_knowledge_files()
+    short: list[str] = []
+    hashes: dict[str, list[str]] = {}
+    for path in files:
+        relative = path.relative_to(_KNOWLEDGE_DIR).as_posix()
+        try:
+            content = path.read_bytes()
+        except OSError:
+            continue
+        if len(content.strip()) < 50:
+            short.append(relative)
+        digest = hashlib.sha256(content).hexdigest()
+        hashes.setdefault(digest, []).append(relative)
+    duplicates = [paths for paths in hashes.values() if len(paths) > 1]
+
+    broken_registry: list[str] = []
+    registry_dir = _KNOWLEDGE_DIR / "_registry"
+    if registry_dir.is_dir():
+        for registry in sorted(registry_dir.glob("*.json")):
+            try:
+                payload = json.loads(registry.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError):
+                broken_registry.append(f"{registry.name}: registry 无法解析")
+                continue
+            for reference in _registry_paths(payload):
+                target = Path(reference)
+                if not target.is_absolute():
+                    target = _KNOWLEDGE_DIR.parent / target
+                if not target.exists():
+                    broken_registry.append(f"{registry.name}: {reference}")
+
+    index = _load_doc_index("research")
+    signature = _knowledge_signature()
+    index_state = (
+        "缺失"
+        if index is None
+        else "当前"
+        if index.get("source_signature") == signature
+        else "过期"
+    )
+    lines = [
+        "知识资产审计",
+        f"- 源文档: {len(files)}",
+        f"- Research 索引: {index_state}",
+        f"- 空/短文档候选（<50 bytes）: {len(short)}",
+        f"- 精确重复组: {len(duplicates)}",
+        f"- Registry 断链/损坏: {len(broken_registry)}",
+    ]
+    for label, items in (
+        ("空/短文档候选", short),
+        ("Registry 问题", broken_registry),
+    ):
+        if items:
+            lines.append(f"\n{label}:")
+            lines.extend(f"- {item}" for item in items[:30])
+    if duplicates:
+        lines.append("\n精确重复候选:")
+        lines.extend(f"- {' = '.join(paths)}" for paths in duplicates[:20])
+    lines.append(
+        "\n审计不修改原文；更新用 replace_in_file，退役优先 move_file 到 knowledge/_retired/，"
+        "确认无价值后再删除。"
+    )
+    try:
+        from ..asset_usage import format_usage_summary
+
+        lines.append(format_usage_summary("knowledge"))
+    except Exception:
+        pass
     return "\n".join(lines)
 
 
@@ -1449,4 +1590,6 @@ def execute(name: str, args: dict) -> str | None:
             query=args["query"],
             top_k=args.get("top_k", 5),
         )
+    elif name == "knowledge_audit":
+        return knowledge_audit()
     return None

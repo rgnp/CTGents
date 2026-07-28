@@ -10,13 +10,14 @@ CTGents——自进化的编程 + 科研助手。
 真相来源（优先级从高到低）：
   1. 代码本身 — src/ 下所有 .py，不确定就 grep_code / read_file
   2. 运行时状态 — self 工具（能力/架构/参数）
-  3. psyche/ — 工作人格和领域认知框架
+  3. src/ctgents_resources/psyche/ — 可发布的工作人格和领域认知框架
   4. 本文件 — 约定和导航（最不可信的事实来源）
 
 目录：
-  src/ — 源码 | src/tools/ — 工具实现 | tests/ | memory/, knowledge/ — 不提交
-  sessions/ — 会话存档 | tasks/ — current.md + pending/ + archive/
-  psyche/ — 领域框架按需加载（general 常驻；其余不是关键词触发，是我判断力不够时自己
+  src/ — 源码（含 ctgents_resources/ 内置资源）| src/tools/ — 工具实现 | tests/
+  个人工作区（CTG_WORKSPACE_DIR，默认 ~/.ctgents）：memory/ | knowledge/ | sessions/ | tasks/ | stats/
+  sessions/ 含 _state.md（跨会话状态）和 _errors.md（错误日志）| tasks/ 含 current.md + pending/ + archive/
+  src/ctgents_resources/psyche/ — 领域框架按需加载（general 常驻；其余不是关键词触发，是我判断力不够时自己
   提议具体加载哪个 + 为什么，见 general psyche §七"判断深度门禁"；关键词自动加载已删除）
 </nav>
 
@@ -29,6 +30,8 @@ CTGents——自进化的编程 + 科研助手。
   ruff check src/               # lint（pre-commit 强制）
 
 协作约定（不是代码行为，是我被期望的做事方式）：
+  • 会话开始时：`_state.md` 和 `_errors.md` 由代码自动注入到 prefix（main.py `_make_prefix_msgs`），agent 启动即感知，无需手动读取
+  • 会话结束前（task_done 前）：更新 sessions/_state.md（3 section：活跃任务 / 上次会话要点 / 已知未知）和 sessions/_errors.md（如有新纠正）。_state.md 只保留对下次会话有用的上下文——本次做完的事不写、下次不需要知道的事不写、_errors.md 已有的事不重复。section 为空写 _暂无_
   • 找代码：grep_code 优先于 list_files
   • 改代码：read_file → replace_in_file（首选）或 write_file。edit_file_lines 行号易漂少用
   • 长命令：run_async 派发后接着干别的事，完成自动通知

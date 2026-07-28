@@ -113,6 +113,20 @@ class TestVerifiedMark:
         out = _write_output(tmp_path, f"{_LONG}\n[未核·仅摘要] 该文似乎提出 XYZ（{url}）")
         assert gate_check("", out, _log_with_search(url)) == []
 
+    def test_backtick_mention_is_not_a_claim(self, tmp_path):
+        """失败类钉死（2026-07-17/20 实测）：worker 自述「每处 `[已核]` 已同行给 URL」
+        是对标记的提及不是核实声称——按声称打回会把 worker 拖进自指重试循环。
+        """
+        out = _write_output(tmp_path, _LONG)
+        report = "修正完成。每处 `[已核]` 现在与来源 URL 严格同行，已删除图例行中的裸 `[已核]`。"
+        assert gate_check(report, out, []) == []
+
+    def test_backtick_does_not_shield_real_claim(self, tmp_path):
+        """反向钉死：同一行里裸 [已核] 声称不因旁边有反引号片段而被豁免。"""
+        out = _write_output(tmp_path, f"{_LONG}\n[已核] 结论 X（见 `代码片段`），无来源")
+        problems = gate_check("", out, [])
+        assert any("没给来源 URL" in p for p in problems)
+
 
 class TestDelivery:
     def test_missing_output_rejected(self, tmp_path):

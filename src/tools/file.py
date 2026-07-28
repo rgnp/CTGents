@@ -1,5 +1,7 @@
 """文件操作工具：读写、行级编辑、备份与撤销。"""
 
+from __future__ import annotations
+
 import contextlib
 import shutil
 import time
@@ -7,6 +9,7 @@ from datetime import datetime
 from pathlib import Path
 
 from ..params import RUNTIME
+from ..paths import WORKSPACE_ROOT, resolve_runtime_path
 
 # ── list_files 缓存 ──
 _LIST_CACHE_TTL = 300   # 秒（同 web 工具一致，5 分钟）
@@ -199,7 +202,7 @@ def _track_changes(just_modified: str) -> str:
 
 TOOLS_FILE = [
     {
-        "_meta": {"label": "读取文件", "parallel_safe": True, "skip_compress": True},
+        "_meta": {"group": "core", "label": "读取文件", "parallel_safe": True, "skip_compress": True},
         "type": "function",
         "function": {
             "name": "read_file",
@@ -225,7 +228,7 @@ TOOLS_FILE = [
         },
     },
     {
-        "_meta": {"label": "写入文件", "dedup_blacklist": True},
+        "_meta": {"group": "core", "label": "写入文件", "dedup_blacklist": True},
         "type": "function",
         "function": {
             "name": "write_file",
@@ -247,7 +250,7 @@ TOOLS_FILE = [
         },
     },
     {
-        "_meta": {"label": "浏览目录", "parallel_safe": True},
+        "_meta": {"group": "core", "label": "浏览目录", "parallel_safe": True},
         "type": "function",
         "function": {
             "name": "list_files",
@@ -265,7 +268,7 @@ TOOLS_FILE = [
         },
     },
     {
-        "_meta": {"label": "删除文件", "dedup_blacklist": True},
+        "_meta": {"group": "files-mutate", "label": "删除文件", "dedup_blacklist": True},
         "type": "function",
         "function": {
             "name": "delete_file",
@@ -283,7 +286,7 @@ TOOLS_FILE = [
         },
     },
     {
-        "_meta": {"label": "统计行数", "parallel_safe": True},
+        "_meta": {"group": "core", "label": "统计行数", "parallel_safe": True},
         "type": "function",
         "function": {
             "name": "count_lines",
@@ -307,20 +310,17 @@ TOOLS_FILE = [
 
 
 def _resolve(path: str) -> Path:
-    return Path(path).expanduser().resolve()
+    return resolve_runtime_path(Path(path).expanduser(), Path.cwd())
 
 
 def _ensure_in_workspace(filepath: Path) -> None:
     """确保路径在工作目录内。所有写/删操作必须经过此检查。"""
-    root = Path.cwd().resolve()
-    try:
-        filepath.resolve().relative_to(root)
-    except ValueError as exc:
+    roots = (Path.cwd().resolve(), WORKSPACE_ROOT.resolve())
+    if not any(filepath.resolve().is_relative_to(root) for root in roots):
         raise PermissionError(
-            f"路径超出工作目录范围: {filepath}\n"
-            f"工作目录: {root}\n"
-            "所有增删改操作只能在工作目录内进行。"
-        ) from exc
+            f"路径超出核心项目和个人工作区: {filepath}\n"
+            f"允许范围: {roots[0]} 或 {roots[1]}"
+        )
 
 
 def _assert_file(filepath: Path) -> None:

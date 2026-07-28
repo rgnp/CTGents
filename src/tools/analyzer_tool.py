@@ -13,6 +13,7 @@ TOOLS_ANALYZER: list[dict] = [
     {
         "_meta": {
             "label": "代码分析",
+            "group": "core",
             "parallel_safe": True,
         },
         "type": "function",

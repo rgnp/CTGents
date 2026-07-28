@@ -17,6 +17,8 @@ messages_hash/tools_hash/request_hash 落盘到 stats/payloads/<session>/req_NNN
   python scripts/payload_diff.py <session_id>   # 指定会话
 """
 
+from __future__ import annotations
+
 import json
 import sys
 from pathlib import Path

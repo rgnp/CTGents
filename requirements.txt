@@ -1,11 +1,2 @@
-openai>=1.0.0
-python-dotenv>=1.0.0
-tavily-python>=0.5.0
-trafilatura>=2.0.0
-lxml_html_clean
-prompt_toolkit>=3.0.0
-rich>=13.0.0  # 终端渲染：ui.py 配色 + TUI markdown
-textual>=8.0.0  # Claude 式全屏 TUI（src/tui.py）：滚动 transcript + 底部常驻输入/状态
-pytest-cov>=7.0.0  # 覆盖率报告：validate.py Phase3 回归检查 + 偶尔手动 pytest --cov 诊断
-mcp>=1.0.0  # MCP 协议支持（可选）
-
+# Compatibility entrypoint. pyproject.toml is the single dependency source.
+-e .[dev,research]

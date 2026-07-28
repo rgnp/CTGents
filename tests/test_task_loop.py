@@ -74,6 +74,19 @@ def test_continuation_drives_until_all_done_then_archives(monkeypatch, tmp_path)
     assert any("完成" in s or "归档" in s for s in status)
     assert task.read_text(encoding="utf-8").strip() == "", "全 [x] 后应归档清空"
 
+
+def test_continuation_does_not_archive_failed_acceptance(monkeypatch, tmp_path):
+    task = _set_current(
+        monkeypatch,
+        tmp_path,
+        "# 目标锚点\nX\n\n- [x] S1\n\n## 验收\n\n- `file: missing.md`\n",
+    )
+    monkeypatch.setattr(tasks, "PROJECT_ROOT", tmp_path)
+    status = []
+    run_task_continuation(object(), lambda *_: None, on_status=status.append)
+    assert task.read_text(encoding="utf-8").strip()
+    assert any(message.startswith("❌") for message in status)
+
 def test_continuation_stops_on_blocker_without_driving(monkeypatch, tmp_path):
     _set_current(monkeypatch, tmp_path,
                  "# 目标锚点\nX\n\n- [x] S1\n- [!] S2 用 A 还是 B?\n- [ ] S3\n")
@@ -158,3 +171,117 @@ def test_continuation_budget_caps_runaway(monkeypatch, tmp_path):
     run_task_continuation(object(), drive, on_status=status.append, budget=3, planning_interval=0)
     assert n[0] == 3, "应到自主上限即停"
     assert any("自主上限" in s or "上限" in s for s in status)
+
+
+def test_contract_budget_caps_continuation(monkeypatch, tmp_path):
+    task = _set_current(
+        monkeypatch,
+        tmp_path,
+        "# 目标锚点\nX\n\n- [ ] S\n\n## 停止条件\n\n- `budget: 2`\n",
+    )
+    drives = []
+
+    def drive(_ctx, _prompt):
+        drives.append(1)
+        task.write_text(
+            f"# 目标锚点\nX\n\n- [o] S {len(drives)}\n\n"
+            "## 停止条件\n\n- `budget: 2`\n",
+            encoding="utf-8",
+        )
+
+    status = []
+    run_task_continuation(object(), drive, on_status=status.append, planning_interval=0)
+    assert drives == [1, 1]
+    assert any("自主上限 2" in message for message in status)
+
+
+def test_explicit_budget_overrides_contract(monkeypatch, tmp_path):
+    task = _set_current(
+        monkeypatch,
+        tmp_path,
+        "# 目标锚点\nX\n\n- [ ] S\n\n## 停止条件\n\n- `budget: 1`\n",
+    )
+    drives = []
+
+    def drive(_ctx, _prompt):
+        drives.append(1)
+        task.write_text(
+            f"# 目标锚点\nX\n\n- [o] S {len(drives)}\n\n"
+            "## 停止条件\n\n- `budget: 1`\n",
+            encoding="utf-8",
+        )
+
+    run_task_continuation(
+        object(),
+        drive,
+        on_status=lambda _message: None,
+        budget=3,
+        planning_interval=0,
+    )
+    assert drives == [1, 1, 1]
+
+
+def test_replan_stop_policy_applies_on_next_step(monkeypatch, tmp_path):
+    task = _set_current(
+        monkeypatch,
+        tmp_path,
+        "# 目标锚点\nX\n\n- [ ] S\n\n## 停止条件\n\n- `budget: 5`\n",
+    )
+    drives = []
+
+    def drive(_ctx, _prompt):
+        drives.append(1)
+        task.write_text(
+            "# 目标锚点\nX\n\n- [o] S 已重规划\n\n"
+            "## 停止条件\n\n- `budget: 1`\n",
+            encoding="utf-8",
+        )
+
+    status = []
+    run_task_continuation(object(), drive, on_status=status.append, planning_interval=0)
+    assert drives == [1]
+    assert any("自主上限 1" in message for message in status)
+
+
+def test_contract_stall_limit(monkeypatch, tmp_path):
+    _set_current(
+        monkeypatch,
+        tmp_path,
+        f"{_BASE}\n## 停止条件\n\n- `stall: 1`\n",
+    )
+    drives = []
+    status = []
+    run_task_continuation(
+        object(),
+        lambda *_args: drives.append(1),
+        on_status=status.append,
+        planning_interval=0,
+    )
+    assert drives == [1]
+    assert any("没推进" in message for message in status)
+
+
+def test_past_deadline_stops_before_drive(monkeypatch, tmp_path):
+    _set_current(
+        monkeypatch,
+        tmp_path,
+        f"{_BASE}\n## 停止条件\n\n- `deadline: 2000-01-01T00:00:00+00:00`\n",
+    )
+    drives = []
+    status = []
+    run_task_continuation(object(), lambda *_args: drives.append(1), on_status=status.append)
+    assert drives == []
+    assert any("截止时间" in message for message in status)
+
+
+def test_invalid_stop_contract_fails_closed(monkeypatch, tmp_path):
+    _set_current(
+        monkeypatch,
+        tmp_path,
+        f"{_BASE}\n## 停止条件\n\n- `budget: unlimited`\n",
+    )
+    drives = []
+    status = []
+    run_task_continuation(object(), lambda *_args: drives.append(1), on_status=status.append)
+    assert drives == []
+    assert any("合同无效" in message for message in status)

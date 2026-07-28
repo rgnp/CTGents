@@ -2,6 +2,27 @@
 
 本文档面向需要扩展本项目的开发者，介绍如何添加新工具、新指令、新插件。
 
+## 开发环境
+
+```bash
+pip install -e ".[dev]"
+```
+
+研究语义检索还需要：
+
+```bash
+pip install -e ".[dev,research]"
+```
+
+测试运行时数据由 `tests/conftest.py` 自动隔离，禁止测试读写真实个人 workspace。
+核心项目与个人数据边界见 [`workspace.md`](workspace.md)。
+
+## CI 质量门
+
+CI 对源码执行 Ruff、全量 pytest 和文档同步检查。原 `check_project >= 80` 聚合分数门已退役：
+它曾在报告红色问题的同时给出 100/100，不能作为质量证据。`make check` 仍可输出具体规范发现，
+但不再评级或阻断 CI。
+
 ---
 
 ## 一、添加新工具
@@ -206,7 +227,7 @@ make check       # 项目规范扫描
 
 每次 push/PR 到 master 自动运行：
 1. **Lint**: ruff check src/
-2. **Tests**: pytest -v（93 用例）
-3. **Spec**: check_project 评分（低于 80 分报错）
+2. **Tests**: pytest -v
+3. **Docs Sync**: 行为相关代码变化必须同步现役文档
 
 配置在 `.github/workflows/ci.yml`。

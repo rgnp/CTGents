@@ -1,4 +1,4 @@
-"""测试 lint 模块：check_project / generate_agents_md。"""
+"""测试 lint 模块：具体规范发现、内部修复和文档同步检查。"""
 
 import json
 
@@ -16,29 +16,13 @@ from src.tools.lint import (
     _detect_tech_stack,
     _detect_test_commands,
     _generate_agents_md_content,
-    _get_rating,
     check_project,
     docs_sync_check,
-    generate_agents_md,
 )
 
 # ═══════════════════════════════════════════════════════════════
 # 独立函数测试
 # ═══════════════════════════════════════════════════════════════
-
-class TestGetRating:
-    def test_excellent(self):
-        assert "优秀" in _get_rating(90)
-
-    def test_good(self):
-        assert "良好" in _get_rating(75)
-
-    def test_fair(self):
-        assert "一般" in _get_rating(60)
-
-    def test_needs_improvement(self):
-        assert "需改进" in _get_rating(30)
-
 
 class TestCheckCommands:
     def test_fully_configured(self, tmp_project):
@@ -129,6 +113,17 @@ class TestCheckStructure:
         (tmp_path / ".gitignore").write_text("")
         result = _check_structure(tmp_path)
         assert any("过大" in i for i in result.get("issues", []))
+
+    def test_virtualenv_init_is_ignored(self, tmp_path):
+        """第三方依赖不属于项目结构，不能触发 __init__.py 过大告警。"""
+        src = tmp_path / "src"
+        src.mkdir()
+        (src / "__init__.py").write_text("", encoding="utf-8")
+        vendor = tmp_path / ".venv" / "lib" / "site-packages" / "vendor"
+        vendor.mkdir(parents=True)
+        (vendor / "__init__.py").write_text("x" * 11000, encoding="utf-8")
+        result = _check_structure(tmp_path)
+        assert not any("vendor" in issue for issue in result.get("issues", []))
 
     def test_flat_src_many_files(self, tmp_path):
         """src/ 下超过 15 个 .py 文件 → 扁平化警告。"""
@@ -332,6 +327,27 @@ class TestDocsSyncCheck:
         assert isinstance(result, str)
         assert len(result) > 0
 
+    def test_base_ref_checks_committed_range(self, tmp_path, monkeypatch):
+        """CI 模式比较 base...HEAD，不能在干净 checkout 上直接报无变更。"""
+        from types import SimpleNamespace
+
+        calls = []
+
+        def fake_run(args, **_kwargs):
+            calls.append(args)
+            return SimpleNamespace(
+                returncode=0,
+                stdout="src/llm.py\ndocs/architecture.md\n",
+                stderr="",
+            )
+
+        monkeypatch.setattr("subprocess.run", fake_run)
+        result = docs_sync_check(path=str(tmp_path), base_ref="origin/main")
+        assert calls == [[
+            "git", "-C", str(tmp_path.resolve()), "diff", "--name-only", "origin/main...HEAD",
+        ]]
+        assert "合规" in result
+
 
 # ═══════════════════════════════════════════════════════════════
 # 集成测试
@@ -345,45 +361,20 @@ class TestCheckProject:
     def test_good_project(self, tmp_project):
         result = check_project(path=str(tmp_project))
         assert "项目" in result
-        assert "总分" in result
+        assert "维度检查" in result
+        assert "总分" not in result
 
     def test_empty_project(self, tmp_empty_project):
         result = check_project(path=str(tmp_empty_project))
-        assert "总分" in result
+        assert "发现" in result
+        assert "质量评级" not in result
 
     def test_fix_option(self, tmp_empty_project):
         result = check_project(path=str(tmp_empty_project), fix=True)
-        assert "AGENTS.md" in result or "总分" in result
+        assert "AGENTS.md" in result
 
-    def test_excellent_project(self, tmp_project):
-        """高分项目 → 优秀评级。"""
+    def test_project_is_not_self_rated(self, tmp_project):
         result = check_project(path=str(tmp_project))
-        assert "优秀" in result or "良好" in result
-
-
-class TestGenerateAgentsMd:
-    def test_generates_to_empty_project(self, tmp_empty_project):
-        result = generate_agents_md(path=str(tmp_empty_project), overwrite=True)
-        assert "已生成" in result
-        generated = tmp_empty_project / "AGENTS.md"
-        assert generated.exists()
-
-    def test_skips_existing_without_overwrite(self, tmp_project):
-        result = generate_agents_md(path=str(tmp_project))
-        assert "已存在" in result
-
-    def test_overwrite_existing(self, tmp_project):
-        result = generate_agents_md(path=str(tmp_project), overwrite=True)
-        assert "已更新" in result
-
-    def test_invalid_path(self):
-        result = generate_agents_md(path="/nonexistent/path/12345")
-        assert "不存在" in result
-
-    def test_generated_has_required_sections(self, tmp_empty_project):
-        generate_agents_md(path=str(tmp_empty_project), overwrite=True)
-        content = (tmp_empty_project / "AGENTS.md").read_text(encoding="utf-8")
-        assert "命令" in content or "Commands" in content
-        assert "项目结构" in content or "Structure" in content
-        assert "边界" in content or "Boundaries" in content
-        assert "安全" in content or "Security" in content
+        assert "优秀" not in result
+        assert "良好" not in result
+        assert "综合分数" in result or "质量评级" in result

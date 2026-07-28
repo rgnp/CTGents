@@ -394,8 +394,8 @@ class TestBuildSessionsIndex:
             self._write(monkeypatch, tmp, f"2026-06-{day:02d}-100000",
                         [f"话题{day}"], unfinished=f"没做完{day}")
         idx = build_sessions_index()
-        # 倒序：06-11 最新，最近 index_unfinished(默认8) 场带未竟，更老的（06-01 等）不带
+        # 倒序：索引最多 index_sessions 场，其中最多 index_unfinished 场带未竟。
         assert "未竟: 没做完11" in idx
-        assert idx.count("未竟:") == min(ss.SUMMARY.index_unfinished, 11)
-        oldest_line = next(ln for ln in idx.splitlines() if "2026-06-01" in ln)
-        assert "未竟" not in oldest_line
+        expected = min(ss.SUMMARY.index_sessions, ss.SUMMARY.index_unfinished, 11)
+        assert idx.count("未竟:") == expected
+        assert "2026-06-01" not in idx

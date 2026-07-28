@@ -46,3 +46,5 @@ def test_pre_commit_has_lint():
     src = (install_hooks.HOOKS_SRC / "pre-commit").read_text(encoding="utf-8")
     assert "ruff" in src
     assert "sk-" in src
+    assert "git grep --cached" in src
+    assert "PRIVATE KEY" in src

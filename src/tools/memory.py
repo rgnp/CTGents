@@ -1,5 +1,8 @@
 """记忆系统：agent 可以 remember / recall / forget 跨会话知识。"""
 
+from __future__ import annotations
+
+import contextlib
 import re
 from datetime import UTC, datetime
 from pathlib import Path
@@ -12,6 +15,7 @@ _SNIPPET_CHARS = 200
 # 分词:ASCII alnum 词 + 中文连续块(下方切 bigram)。
 _TOKEN_ASCII = re.compile(r"[a-z0-9]+")
 _TOKEN_CJK = re.compile(r"[一-鿿]+")
+_RETIRED_DIR_NAME = "_retired"
 
 # ── 回忆双向扩词：中↔英互搜 ——
 # 搜"用户"时自动加"user" token，避免中文查询无法命中英文记忆（反之亦然）。
@@ -36,6 +40,32 @@ _TRANSLITERATE: dict[str, list[str]] = {
 # ── 记忆索引缓存（避免每次请求重复读文件） ──
 _context_cache: str | None = None
 _context_dirty: bool = True
+
+
+def _is_active(meta: dict[str, str]) -> bool:
+    return meta.get("status", "active") == "active" and not meta.get("superseded_by")
+
+
+def _set_metadata_fields(raw: str, fields: dict[str, str]) -> str:
+    """Update or append flattened metadata fields without rewriting the body."""
+    if not raw.startswith("---"):
+        return raw
+    lines = raw.split("\n")
+    close = next((i for i in range(1, len(lines)) if lines[i].strip() == "---"), None)
+    if close is None:
+        return raw
+    for key, value in fields.items():
+        replacement = f"  {key}: {value}"
+        found = next(
+            (i for i in range(1, close) if lines[i].strip().startswith(f"{key}:")),
+            None,
+        )
+        if found is not None:
+            lines[found] = replacement
+        else:
+            lines.insert(close, replacement)
+            close += 1
+    return "\n".join(lines)
 
 
 
@@ -63,6 +93,22 @@ def _split_frontmatter(text: str) -> tuple[dict[str, str], str]:
     return meta, body
 
 
+def _extract_distilled(text: str) -> list[str]:
+    """从 frontmatter 中提取所有 distilled: 行（不依赖 _split_frontmatter 扁平 dict）。"""
+    if not text.startswith("---"):
+        return []
+    lines = text.split("\n")
+    close = next((i for i in range(1, len(lines)) if lines[i].strip() == "---"), None)
+    if close is None:
+        return []
+    result: list[str] = []
+    for raw in lines[1:close]:
+        line = raw.strip()
+        if line.startswith("distilled:"):
+            result.append(line.split(":", 1)[1].strip())
+    return result
+
+
 # ── 上下文注入用类型 ──
 # user（用户画像）→ 全文注入前缀、不截断：字数有限、是"懂你"的常驻地基，每轮都该看全。
 # 其余（strategy/knowledge/reference/lesson）→ 仅列主题名（name），不带描述：
@@ -86,6 +132,8 @@ def _build_context() -> str | None:
             continue
         try:
             meta, body = _split_frontmatter(f.read_text(encoding="utf-8"))
+            if not _is_active(meta):
+                continue
             name = meta.get("name", f.stem)
             mem_type = meta.get("type", "")
             if mem_type == "user":
@@ -138,7 +186,7 @@ def is_dirty() -> bool:
 
 TOOLS_MEMORY = [
     {
-        "_meta": {"label": "记住", "dedup_blacklist": True},
+        "_meta": {"group": "core", "label": "记住", "dedup_blacklist": True},
         "type": "function",
         "function": {
             "name": "remember",
@@ -164,13 +212,21 @@ TOOLS_MEMORY = [
                             "如 improvement_loop、memory_corruption。"
                         ),
                     },
+                    "contradicts": {
+                        "type": "string",
+                        "description": (
+                            "声明此记忆替代/修正已有记忆的名称（可选）。"
+                            "写入双方 frontmatter 形成双向标注。"
+                            "如 user-prefers-short-v2 替代 user-prefers-short。"
+                        ),
+                    },
                 },
                 "required": ["name", "content", "type"],
             },
         },
     },
     {
-        "_meta": {"label": "回忆", "parallel_safe": True},
+        "_meta": {"group": "core", "label": "回忆", "parallel_safe": True},
         "type": "function",
         "function": {
             "name": "recall",
@@ -185,22 +241,117 @@ TOOLS_MEMORY = [
         },
     },
     {
-        "_meta": {"label": "忘记", "dedup_blacklist": True},
+        "_meta": {"group": "core", "label": "忘记", "dedup_blacklist": True},
         "type": "function",
         "function": {
             "name": "forget",
-            "description": "删除一条记忆。当记忆过时或错误时调用。",
+            "description": "退役一条过时或错误记忆；默认移入可恢复归档，不物理销毁。",
             "parameters": {
                 "type": "object",
                 "properties": {
                     "name": {"type": "string", "description": "要删除的记忆名称"},
+                    "superseded_by": {
+                        "type": "string",
+                        "description": (
+                            "被哪条记忆取代（可选）。传则软删除——保留文件标记 superseded，"
+                            "后续 recall 自动跳过。不传则硬删除。"
+                        ),
+                    },
+                    "reason": {
+                        "type": "string",
+                        "description": "退役依据（推荐填写），用于后续审计和恢复判断。",
+                    },
                 },
                 "required": ["name"],
             },
         },
     },
     {
-        "_meta": {"label": "搜索会话", "parallel_safe": True},
+        "_meta": {"group": "core", "label": "记忆审计", "parallel_safe": True},
+        "type": "function",
+        "function": {
+            "name": "memory_audit",
+            "description": "审计活跃、冲突、过期、重复和已退役记忆；只报告候选，不自动删除。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "stale_days": {
+                        "type": "integer",
+                        "description": "多久未更新视为待复核，默认 180 天。",
+                    },
+                },
+                "required": [],
+            },
+        },
+    },
+    {
+        "_meta": {"group": "core", "label": "采用认知资产", "dedup_blacklist": True},
+        "type": "function",
+        "function": {
+            "name": "adopt_asset",
+            "description": (
+                "明确采用本会话刚由 recall/rag_search 返回的资产。"
+                "只有资产实质影响后续判断或动作时调用，并说明用途。"
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "asset_kind": {
+                        "type": "string",
+                        "enum": ["memory", "knowledge"],
+                    },
+                    "asset_id": {
+                        "type": "string",
+                        "description": "recall 返回的记忆名，或 rag_search 返回的 knowledge:path。",
+                    },
+                    "purpose": {
+                        "type": "string",
+                        "description": "该资产具体改变了什么判断或后续动作。",
+                    },
+                },
+                "required": ["asset_kind", "asset_id", "purpose"],
+            },
+        },
+    },
+    {
+        "_meta": {"group": "core", "label": "反馈认知资产", "dedup_blacklist": True},
+        "type": "function",
+        "function": {
+            "name": "feedback_asset",
+            "description": (
+                "对已有任务结果的资产采用记录给出显式 helpful/misleading 反馈。"
+                "不会从任务结果自动推断价值，也不会自动修改或删除资产。"
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "asset_kind": {
+                        "type": "string",
+                        "enum": ["memory", "knowledge"],
+                    },
+                    "asset_id": {
+                        "type": "string",
+                        "description": "记忆名或 rag_search 返回的 source 路径。",
+                    },
+                    "verdict": {
+                        "type": "string",
+                        "enum": ["helpful", "misleading"],
+                    },
+                    "reason": {
+                        "type": "string",
+                        "description": "资产具体帮助了什么，或在哪个判断上造成了误导。",
+                    },
+                    "adoption_id": {
+                        "type": "string",
+                        "description": "可选；采用事件 ID 或其唯一前缀，用于精确指定历史采用。",
+                    },
+                },
+                "required": ["asset_kind", "asset_id", "verdict", "reason"],
+            },
+        },
+    },
+    {
+        "_meta": {"group": "core", "label": "搜索会话", "parallel_safe": True},
         "type": "function",
         "function": {
             "name": "search_sessions",
@@ -262,6 +413,8 @@ def _rebuild_index() -> None:
             continue
         try:
             meta, _ = _split_frontmatter(f.read_text(encoding="utf-8"))
+            if not _is_active(meta):
+                continue
             name = meta.get("name", f.stem)
             desc = meta.get("description", "")
             entries.append(f"- [{name}]({f.name}) — {desc}")
@@ -279,7 +432,7 @@ def _find_by_fingerprint(fp: str) -> Path | None:
             continue
         try:
             meta, _ = _split_frontmatter(f.read_text(encoding="utf-8"))
-            if meta.get("fingerprint") == fp:
+            if _is_active(meta) and meta.get("fingerprint") == fp:
                 return f
         except Exception:
             continue
@@ -292,6 +445,8 @@ def _merge_memory(existing_path: Path, name: str, content: str,
     meta, _old_body = _split_frontmatter(existing_path.read_text(encoding="utf-8"))
     old_name = meta.get("name", existing_path.stem)
     times = int(meta.get("times_encountered", 1)) + 1
+    revision = int(meta.get("revision", 1)) + 1
+    created = meta.get("created", meta.get("updated", now))
 
     first_sentence = content.split("。")[0].split("\n")[0].strip()
     desc = first_sentence[:30] if first_sentence else content[:30]
@@ -302,7 +457,10 @@ def _merge_memory(existing_path: Path, name: str, content: str,
         f"description: {desc}\n"
         f"metadata:\n"
         f"  type: {mem_type}\n"
+        f"  status: active\n"
+        f"  created: {created}\n"
         f"  updated: {now}\n"
+        f"  revision: {revision}\n"
         f"  fingerprint: {fingerprint}\n"
         f"  times_encountered: {times}\n"
         f"  last_encountered: {now}\n"
@@ -316,8 +474,15 @@ def _merge_memory(existing_path: Path, name: str, content: str,
 
 
 def _remember(name: str, content: str, mem_type: str,
-              fingerprint: str | None = None) -> str:
-    """创建或更新一条记忆。有 fingerprint 时先扫描合并，避免同质散成 N 条。"""
+              fingerprint: str | None = None,
+              contradicts: str | None = None) -> str:
+    """创建或更新一条记忆。有 fingerprint 时先扫描合并，避免同质散成 N 条。
+
+    contradicts: 声明此记忆替代/修正另一条记忆。写入双方 frontmatter 形成
+    双向标注——本条写 contradicts，对方写 contradicted_by。
+    """
+    if contradicts == name:
+        return f"不能让记忆 {name} 替代自身；请提供另一条旧记忆名称。"
     now = datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
 
     # ── fingerprint 合并：同指纹先查已有，找到即合并 ──
@@ -326,7 +491,20 @@ def _remember(name: str, content: str, mem_type: str,
         if existing:
             return _merge_memory(existing, name, content, mem_type, fingerprint, now)
 
+    # ── LLM 蒸馏：提取 3-5 条结构化断言（失败不阻塞写入）──
+    distilled: list[str] = []
+    if len(content) >= 80:
+        with contextlib.suppress(Exception):
+            distilled = _distill(content)
+
     # ── 正常新建（或 name 覆盖）──
+    target = _mem_path(name)
+    old_meta: dict[str, str] = {}
+    if target.exists():
+        old_meta, _ = _split_frontmatter(target.read_text(encoding="utf-8"))
+    created = old_meta.get("created", old_meta.get("updated", now))
+    revision = int(old_meta.get("revision", 0)) + 1
+    fingerprint = fingerprint or old_meta.get("fingerprint") or None
     first_sentence = content.split("。")[0].split("\n")[0].strip()
     desc = first_sentence[:30] if first_sentence else content[:30]
 
@@ -335,7 +513,10 @@ def _remember(name: str, content: str, mem_type: str,
         f"description: {desc}",
         "metadata:",
         f"  type: {mem_type}",
+        "  status: active",
+        f"  created: {created}",
         f"  updated: {now}",
+        f"  revision: {revision}",
     ]
     if fingerprint:
         meta_lines.extend([
@@ -343,12 +524,36 @@ def _remember(name: str, content: str, mem_type: str,
             "  times_encountered: 1",
             f"  last_encountered: {now}",
         ])
+    if contradicts:
+        meta_lines.append(f"  contradicts: {contradicts}")
+    for assertion in distilled:
+        meta_lines.append(f"  distilled: {assertion}")
 
     text = "---\n" + "\n".join(meta_lines) + f"\n---\n\n{content}\n"
-    _mem_path(name).write_text(text, encoding="utf-8")
+    target.write_text(text, encoding="utf-8")
+
+    # ── 矛盾双向标注：对方写 contradicted_by ──
+    if contradicts:
+        opp = _mem_path(contradicts)
+        if opp.exists():
+            raw = opp.read_text(encoding="utf-8")
+            raw = _set_metadata_fields(
+                raw,
+                {
+                    "contradicted_by": name,
+                    "superseded_by": name,
+                    "status": "superseded",
+                    "updated": now,
+                },
+            )
+            opp.write_text(raw, encoding="utf-8")
+
     _rebuild_index()
     mark_dirty()
-    return f"已记住: {name}"
+    parts = [f"已记住: {name}"]
+    if contradicts:
+        parts.append(f"（标记为替代 {contradicts}）")
+    return "".join(parts)
 
 
 def _tokenize(text: str) -> set[str]:
@@ -366,17 +571,77 @@ def _tokenize(text: str) -> set[str]:
     return tokens
 
 
+def _jaccard(a: set[str], b: set[str]) -> float:
+    """Jaccard 相似度: |A∩B| / |A∪B|。两集合均为空返回 0.0。"""
+    if not a and not b:
+        return 0.0
+    return len(a & b) / len(a | b)
+
+
+def _tokenize_for_similarity(text: str) -> set[str]:
+    """字符级分词用于相似度检测——比 bigram 更粗粒度，适合检测近重复。
+
+    中文按单字切，ASCII 仍按 alnum 词——避免 bigram 把中文切太碎导致 Jaccard 过低。
+    """
+    text = text.lower()
+    tokens: set[str] = set(_TOKEN_ASCII.findall(text))
+    tokens.update(ch for ch in text if "\u4e00" <= ch <= "\u9fff")
+    return tokens
+
+
+_DISTILL_PROMPT = """Extract 3-5 atomic assertions from the agent memory text below.
+Each assertion must be one short sentence. Focus on: user preferences, project
+constraints, proven strategies, known failure modes, key decisions. If the text
+is purely administrative (e.g., "task completed"), return an empty JSON list.
+
+Output ONLY a JSON array of strings. No preamble, no markdown.
+
+Memory text:
+{content}"""
+
+
+def _distill(content: str) -> list[str]:
+    """Flash 提取 3-5 条结构化断言。延迟导入避免循环依赖。"""
+    import json as _json
+
+    from ..llm import AVAILABLE_MODELS as _MODELS
+
+    backend = _MODELS["flash"]
+    prompt = _DISTILL_PROMPT.format(content=content[:2000])
+    text, _ = backend.chat_non_stream(
+        [{"role": "user", "content": prompt}],
+        on_token=lambda _t: None,
+        max_tokens=300,
+    )
+    if not text:
+        return []
+    start, end = text.find("["), text.rfind("]")
+    if start < 0 or end <= start:
+        return []
+    try:
+        result = _json.loads(text[start:end + 1])
+        return [str(r).strip() for r in result if str(r).strip()]
+    except (_json.JSONDecodeError, TypeError):
+        return []
+
+
 def _score_memory(q_tokens: set[str], q_lower: str,
                   name: str, desc: str, body: str,
-                  updated: str = "") -> float:
+                  updated: str = "",
+                  distilled: list[str] | None = None) -> float:
     """给一条记忆打分:每个 token 取命中的最高权重字段累加 + 精确子串加成 + 时间衰减。
 
-    只对语义字段(name/description/body)打分,绝不碰 frontmatter 结构词
+    只对语义字段(name/description/body/distilled)打分,绝不碰 frontmatter 结构词
     (metadata/type/updated…),否则 'ad' 会误命中 'met·ad·ata'、'type' 命中所有记忆。
+
+    distilled 断言权重高于 body——它们是浓缩的事实，命中信号更强。
     """
-    fields = ((name.lower(), _PARAMS.weight_name),
+    fields = [(name.lower(), _PARAMS.weight_name),
               (desc.lower(), _PARAMS.weight_desc),
-              (body.lower(), _PARAMS.weight_body))
+              (body.lower(), _PARAMS.weight_body)]
+    if distilled:
+        for d in distilled:
+            fields.append((d.lower(), _PARAMS.weight_desc))  # distilled 权重=desc
     score = 0.0
     for tok in q_tokens:
         best = 0.0
@@ -403,9 +668,10 @@ def _score_memory(q_tokens: set[str], q_lower: str,
 
 def _scan_into(directory: Path, q_tokens: set[str], q_lower: str,
                default_type: str, skip_index: bool,
-               scored: list[tuple[float, str, str, str, str]]) -> None:
-    """给一个目录下的 *.md 打分,命中的累加进 scored。archive 文件无 frontmatter
-    → name=文件名、type 取 default_type,照样可召回(治"只写不读的坟场")。
+               scored: list[tuple[float, str, str, str, str, str]]) -> None:
+    """给一个目录下的 *.md 打分,命中的累加进 scored（含 body 用于后续相似度检测）。
+
+    archive 文件无 frontmatter → name=文件名、type 取 default_type,照样可召回。
     """
     for f in sorted(directory.glob("*.md")):
         if skip_index and f.name == "MEMORY.md":
@@ -415,14 +681,19 @@ def _scan_into(directory: Path, q_tokens: set[str], q_lower: str,
         except Exception:
             continue
         meta, body = _split_frontmatter(full)
+        # 跳过已 superseded 的记忆
+        if meta.get("superseded_by"):
+            continue
+        distilled = _extract_distilled(full) or None
         s = _score_memory(q_tokens, q_lower, meta.get("name", f.stem),
                           meta.get("description", ""), body,
-                          meta.get("updated", ""))
+                          meta.get("updated", ""),
+                          distilled=distilled)
         if s <= _PARAMS.recall_min_score:
             continue
         snippet = body[:_SNIPPET_CHARS].replace("\n", " ")
         scored.append((s, meta.get("updated", ""), f.stem,
-                       meta.get("type", "") or default_type, snippet))
+                       meta.get("type", "") or default_type, snippet, body))
 
 
 def _recall(query: str) -> str:
@@ -449,24 +720,173 @@ def _recall(query: str) -> str:
 
     scored.sort(key=lambda r: (r[0], r[1]), reverse=True)  # 分数高优先,平手按时间近因
     top = scored[:_PARAMS.recall_top_k]
+
+    # ── 相似度检测 + 合并：高重叠条目不再各自 raw dump ──
+    _sim_threshold = 0.35
+    # merged_into[name] = primary  — 此条目被合并到 primary
+    merged_into: dict[str, str] = {}
+    token_map: dict[str, set[str]] = {}
+    for _s, _u, name, _mt, _sn, body in top:
+        token_map[name] = _tokenize_for_similarity(body)
+
+    for i in range(len(top)):
+        name_i = top[i][2]
+        if name_i in merged_into:
+            continue
+        for j in range(i + 1, len(top)):
+            name_j = top[j][2]
+            if name_j in merged_into:
+                continue
+            sim = _jaccard(token_map[name_i], token_map[name_j])
+            if sim >= _sim_threshold:
+                # i 排位更高 → j 合并到 i
+                merged_into[name_j] = name_i
+
+    # ── 构建输出 ──
     lines = [f"找到 {len(scored)} 条相关记忆（按相关度，显示前 {len(top)}）：\n"]
-    for _s, _u, name, mtype, snippet in top:
+    for _s, _u, name, mtype, snippet, _body in top:
+        if name in merged_into:
+            continue  # 被合并到别的条目，跳过
         tag = f"[{mtype}]" if mtype else ""
-        lines.append(f"  {name} {tag}")
+        # 收集合并到此条目的其他名称
+        siblings = [n for n, p in merged_into.items() if p == name]
+        if siblings:
+            merged_note = "（含: " + ", ".join(siblings) + " — 内容重叠已合并）"
+            lines.append(f"  {name} {merged_note} {tag}")
+        else:
+            lines.append(f"  {name} {tag}")
         lines.append(f"    {snippet}")
         lines.append("")
+
+    with contextlib.suppress(Exception):
+        from ..asset_usage import record_retrieval
+
+        record_retrieval("memory", [row[2] for row in top], query)
+    lines.append("若其中某条实质影响后续判断或动作，请调用 adopt_asset 明确记录采用及用途。")
     return "\n".join(lines).strip()
 
 
-def _forget(name: str) -> str:
-    """删除一条记忆。"""
+def _forget(
+    name: str,
+    superseded_by: str | None = None,
+    reason: str | None = None,
+) -> str:
+    """Retire one memory without irreversible deletion.
+
+    superseded_by: 不真正删除文件，改为标记 superseded 状态（软删除），
+    后续 recall 自动跳过。不传则移入 memory/_retired/ 可恢复归档。
+    """
     fp = _mem_path(name)
     if not fp.exists():
         return f"记忆不存在: {name}"
-    fp.unlink()
+
+    if superseded_by:
+        raw = fp.read_text(encoding="utf-8")
+        now = datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
+        fields = {
+            "superseded_by": superseded_by,
+            "status": "superseded",
+            "updated": now,
+        }
+        if reason:
+            fields["retired_reason"] = reason
+        raw = _set_metadata_fields(raw, fields)
+        fp.write_text(raw, encoding="utf-8")
+        _rebuild_index()
+        mark_dirty()
+        return f"已软删除: {name}（被 {superseded_by} 取代）"
+
+    now = datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
+    raw = _set_metadata_fields(
+        fp.read_text(encoding="utf-8"),
+        {
+            "status": "retired",
+            "retired_at": now,
+            "retired_reason": reason or "未提供",
+            "updated": now,
+        },
+    )
+    retired_dir = _dir() / _RETIRED_DIR_NAME
+    retired_dir.mkdir(exist_ok=True)
+    destination = retired_dir / fp.name
+    if destination.exists():
+        stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
+        destination = retired_dir / f"{fp.stem}-{stamp}{fp.suffix}"
+    fp.write_text(raw, encoding="utf-8")
+    fp.replace(destination)
     _rebuild_index()
     mark_dirty()
-    return f"已忘记: {name}"
+    return f"已忘记: {name}（已移入可恢复归档 {_RETIRED_DIR_NAME}/）"
+
+
+def _memory_audit(stale_days: int = 180) -> str:
+    """Report lifecycle candidates; never mutates or deletes memories."""
+    stale_days = max(1, min(int(stale_days), 3650))
+    now = datetime.now(UTC)
+    active: list[str] = []
+    superseded: list[str] = []
+    conflicts: list[str] = []
+    stale: list[str] = []
+    fingerprints: dict[str, list[str]] = {}
+    for path in sorted(_dir().glob("*.md")):
+        if path.name == "MEMORY.md":
+            continue
+        try:
+            meta, _ = _split_frontmatter(path.read_text(encoding="utf-8"))
+        except OSError:
+            continue
+        name = meta.get("name", path.stem)
+        if not _is_active(meta):
+            superseded.append(name)
+            continue
+        active.append(name)
+        if meta.get("contradicted_by"):
+            conflicts.append(f"{name} → {meta['contradicted_by']}")
+        fingerprint = meta.get("fingerprint")
+        if fingerprint:
+            fingerprints.setdefault(fingerprint, []).append(name)
+        updated = meta.get("updated")
+        if not updated:
+            stale.append(f"{name}（无更新时间）")
+            continue
+        try:
+            changed = datetime.fromisoformat(updated.replace("Z", "+00:00"))
+        except ValueError:
+            stale.append(f"{name}（时间不可解析）")
+            continue
+        if (now - changed).days >= stale_days:
+            stale.append(f"{name}（{(now - changed).days} 天）")
+
+    duplicates = [
+        f"{fingerprint}: {', '.join(names)}"
+        for fingerprint, names in fingerprints.items()
+        if len(names) > 1
+    ]
+    retired_dir = _dir() / _RETIRED_DIR_NAME
+    retired_count = len(list(retired_dir.glob("*.md"))) if retired_dir.is_dir() else 0
+    lines = [
+        "记忆生命周期审计",
+        f"- 活跃: {len(active)}",
+        f"- 已取代/停用: {len(superseded)}",
+        f"- 可恢复归档: {retired_count}",
+        f"- 待复核陈旧项（≥{stale_days}天）: {len(stale)}",
+        f"- 未解决冲突: {len(conflicts)}",
+        f"- 重复 fingerprint: {len(duplicates)}",
+    ]
+    for label, items in (
+        ("陈旧候选", stale),
+        ("冲突候选", conflicts),
+        ("重复候选", duplicates),
+    ):
+        if items:
+            lines.append(f"\n{label}:")
+            lines.extend(f"- {item}" for item in items[:20])
+    lines.append("\n审计只报告候选；更新用 remember，同类替代用 contradicts，退役用 forget。")
+    with contextlib.suppress(Exception):
+        from ..asset_usage import format_usage_summary
+
+        lines.append(format_usage_summary("memory"))
+    return "\n".join(lines)
 
 
 def _search_sessions(query: str, top_n: int = 3) -> str:
@@ -495,11 +915,27 @@ def _search_sessions(query: str, top_n: int = 3) -> str:
 def execute(name: str, args: dict) -> str | None:
     if name == "remember":
         return _remember(args["name"], args["content"], args["type"],
-                         args.get("fingerprint"))
+                         args.get("fingerprint"), args.get("contradicts"))
     if name == "recall":
         return _recall(args["query"])
     if name == "forget":
-        return _forget(args["name"])
+        return _forget(args["name"], args.get("superseded_by"), args.get("reason"))
+    if name == "memory_audit":
+        return _memory_audit(int(args.get("stale_days", 180)))
+    if name == "adopt_asset":
+        from ..asset_usage import adopt_asset
+
+        return adopt_asset(args["asset_kind"], args["asset_id"], args["purpose"])
+    if name == "feedback_asset":
+        from ..asset_usage import feedback_asset
+
+        return feedback_asset(
+            args["asset_kind"],
+            args["asset_id"],
+            args["verdict"],
+            args["reason"],
+            args.get("adoption_id", ""),
+        )
     if name == "search_sessions":
         return _search_sessions(args["query"], int(args.get("top_n", 3)))
     return None

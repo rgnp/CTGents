@@ -23,10 +23,11 @@ from datetime import datetime
 from pathlib import Path
 
 from .params import SUMMARY
+from .paths import KNOWLEDGE_DIR
 
 logger = logging.getLogger(__name__)
 
-_KNOWLEDGE_SESSIONS_DIR = Path(__file__).resolve().parent.parent / "knowledge" / "sessions"
+_KNOWLEDGE_SESSIONS_DIR = KNOWLEDGE_DIR / "sessions"
 
 _EN_TECH_PATTERN = re.compile(
     r'\b[A-Z][a-z]+(?:[A-Z][a-z]+)+\b'  # CamelCase

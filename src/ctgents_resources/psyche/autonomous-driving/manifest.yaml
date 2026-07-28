@@ -1,0 +1,14 @@
+id: autonomous-driving
+version: "0.4"
+kind: domain
+core: 核心/autonomous-driving-core.md
+requires: [general]
+scope_default: session
+summary: 自动驾驶领域拓扑、判断准则与现实约束
+judgment_delta:
+  - 将问题定位到自动驾驶技术线程和上下游依赖
+  - 加入算力、闭环、实时性和数据假设筛选
+skills: [ad-method-audit]
+exit_checks:
+  - 判断是否落到具体技术线程与现实约束？
+  - 是否区分开环指标和真实闭环价值？

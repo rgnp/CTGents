@@ -8,24 +8,28 @@
 from __future__ import annotations
 
 import contextlib
+import hashlib
 import json
-import subprocess
 from collections.abc import Callable
 from dataclasses import asdict, dataclass, field
+from datetime import UTC, datetime
 from pathlib import Path
 
-PROJECT_ROOT = Path(__file__).resolve().parent.parent
-_GAP_CACHE_FILE = PROJECT_ROOT / ".gap_cache.json"
+from .paths import CORE_ROOT, TASKS_DIR, WORKSPACE_ROOT
+
+PROJECT_ROOT = CORE_ROOT
+_GAP_CACHE_FILE = WORKSPACE_ROOT / ".gap_cache.json"
+_GAP_LEDGER_FILE = TASKS_DIR / "gap-ledger.json"
+_GAP_STATUSES = frozenset({"discovered", "accepted", "rejected", "deferred", "fixed", "verified"})
+_BENEFIT_WINDOW_SESSIONS = 3
 
 
 def _git_tree_hash() -> str:
-    """返回当前 HEAD 的 tree hash；失败返回空串（禁用缓存）。"""
+    """返回完整工作区指纹；保留旧函数名以兼容现有调用和测试。"""
     try:
-        r = subprocess.run(
-            ["git", "rev-parse", "HEAD^{tree}"],
-            capture_output=True, text=True, timeout=3, cwd=PROJECT_ROOT,
-        )
-        return r.stdout.strip() if r.returncode == 0 else ""
+        from .verification_receipts import workspace_fingerprint
+
+        return workspace_fingerprint(PROJECT_ROOT)
     except Exception:
         return ""
 
@@ -68,6 +72,39 @@ class Gap:
     suggestion: str = ""
     confidence: float = 0.0
     actionable: bool = True
+    signal_key: str = ""
+
+    @property
+    def id(self) -> str:
+        """稳定身份：同一来源/类型/文件的 gap 跨扫描保持同 ID。"""
+        files = "|".join(sorted(path.replace("\\", "/") for path in self.affected_files))
+        fallback = " ".join(self.detail.lower().split()) if not files else ""
+        raw = f"{self.source}|{self.gap_type}|{files}|{self.signal_key}|{fallback}"
+        return hashlib.sha256(raw.encode("utf-8")).hexdigest()[:12]
+
+
+@dataclass
+class GapEvent:
+    status: str
+    timestamp: str
+    note: str = ""
+    workspace_fingerprint: str = ""
+    evidence: dict = field(default_factory=dict)
+
+
+@dataclass
+class GapRecord:
+    gap_id: str
+    status: str
+    source: str
+    gap_type: str
+    detail: str
+    affected_files: list[str] = field(default_factory=list)
+    suggestion: str = ""
+    first_seen: str = ""
+    last_seen: str = ""
+    history: list[GapEvent] = field(default_factory=list)
+    signal_key: str = ""
 
 
 @dataclass
@@ -80,6 +117,297 @@ class GapReport:
 
 # 报告缓存：detect_all_gaps 自动存储，供 /fix 指令和 get_last_report 取用
 _LAST_REPORT: GapReport | None = None
+
+
+def _now() -> str:
+    return datetime.now(UTC).isoformat()
+
+
+def _load_gap_ledger() -> dict[str, GapRecord]:
+    if not _GAP_LEDGER_FILE.exists():
+        return {}
+    try:
+        raw = json.loads(_GAP_LEDGER_FILE.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+    records: dict[str, GapRecord] = {}
+    for item in raw.get("records", []):
+        try:
+            record_data = dict(item)
+            history = [GapEvent(**event) for event in record_data.pop("history", [])]
+            record = GapRecord(**record_data, history=history)
+        except (TypeError, AttributeError):
+            continue
+        if record.status in _GAP_STATUSES:
+            records[record.gap_id] = record
+    return records
+
+
+def _save_gap_ledger(records: dict[str, GapRecord]) -> None:
+    payload = {
+        "version": 1,
+        "records": [asdict(records[key]) for key in sorted(records)],
+    }
+    _GAP_LEDGER_FILE.parent.mkdir(parents=True, exist_ok=True)
+    temp = _GAP_LEDGER_FILE.with_suffix(".tmp")
+    temp.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    temp.replace(_GAP_LEDGER_FILE)
+
+
+def _event(
+    status: str,
+    note: str = "",
+    fingerprint: str = "",
+    evidence: dict | None = None,
+) -> GapEvent:
+    return GapEvent(
+        status=status,
+        timestamp=_now(),
+        note=note,
+        workspace_fingerprint=fingerprint,
+        evidence=evidence or {},
+    )
+
+
+def sync_gap_ledger(report: GapReport) -> dict[str, GapRecord]:
+    """把扫描结果并入台账；保留人工决策状态，只刷新事实描述和 last_seen。"""
+    records = _load_gap_ledger()
+    changed = False
+    now = _now()
+    for gap in report.gaps:
+        record = records.get(gap.id)
+        if record is None:
+            records[gap.id] = GapRecord(
+                gap_id=gap.id,
+                status="discovered",
+                source=gap.source,
+                gap_type=gap.gap_type,
+                detail=gap.detail,
+                affected_files=list(gap.affected_files),
+                suggestion=gap.suggestion,
+                first_seen=now,
+                last_seen=now,
+                history=[_event("discovered", "首次检测")],
+                signal_key=gap.signal_key,
+            )
+            changed = True
+            continue
+        fields_changed = (
+            record.detail != gap.detail
+            or record.affected_files != gap.affected_files
+            or record.suggestion != gap.suggestion
+            or record.signal_key != gap.signal_key
+            or record.last_seen != now
+        )
+        record.detail = gap.detail
+        record.affected_files = list(gap.affected_files)
+        record.suggestion = gap.suggestion
+        record.signal_key = gap.signal_key
+        record.last_seen = now
+        if record.status == "verified" and record.source != "performance":
+            record.status = "accepted"
+            record.history.append(
+                _event("accepted", "回归：已验证 gap 再次被同一信号检出", _git_tree_hash())
+            )
+            fields_changed = True
+        changed = changed or fields_changed
+    for record in records.values():
+        if record.status != "verified" or record.source != "performance" or not record.signal_key:
+            continue
+        verified_event = next(
+            (event for event in reversed(record.history) if event.status == "verified"),
+            None,
+        )
+        if verified_event is None:
+            continue
+        evidence = _performance_signal_window(record.signal_key, since=verified_event.timestamp)
+        if not evidence.get("occurrences", 0):
+            continue
+        record.status = "accepted"
+        record.history.append(
+            _event(
+                "accepted",
+                "回归：verified 之后的会话再次出现同类异常",
+                _git_tree_hash(),
+                evidence,
+            )
+        )
+        changed = True
+    if changed:
+        _save_gap_ledger(records)
+    return records
+
+
+def get_gap_record(reference: str | int) -> GapRecord | None:
+    """按最近报告编号、完整 ID 或唯一 ID 前缀解析台账记录。"""
+    records = _load_gap_ledger()
+    if isinstance(reference, int) or str(reference).isdigit():
+        gap = get_gap_by_index(int(reference))
+        return records.get(gap.id) if gap is not None else None
+    ref = str(reference).strip().lower()
+    if ref in records:
+        return records[ref]
+    matches = [record for gap_id, record in records.items() if gap_id.startswith(ref)]
+    return matches[0] if len(matches) == 1 else None
+
+
+_TRANSITIONS: dict[str, frozenset[str]] = {
+    "discovered": frozenset({"accepted", "rejected", "deferred"}),
+    "accepted": frozenset({"rejected", "deferred", "fixed"}),
+    "rejected": frozenset({"accepted", "deferred"}),
+    "deferred": frozenset({"accepted", "rejected"}),
+    "fixed": frozenset({"accepted"}),
+    "verified": frozenset({"accepted"}),
+}
+
+
+def set_gap_status(reference: str | int, status: str, note: str = "") -> str:
+    """执行人工生命周期决策；verified 只能由 verify_gap 机械产生。"""
+    target = status.strip().lower()
+    if target not in _GAP_STATUSES or target in {"discovered", "verified"}:
+        return f"❌ 不允许直接设置状态：{status}"
+    record = get_gap_record(reference)
+    if record is None:
+        return f"❌ 找不到 gap：{reference}"
+    if target == record.status:
+        return f"gap {record.gap_id} 已是 {target}。"
+    if target not in _TRANSITIONS.get(record.status, frozenset()):
+        return f"❌ 非法状态迁移：{record.status} → {target}"
+    records = _load_gap_ledger()
+    current = records[record.gap_id]
+    current.status = target
+    fingerprint = _git_tree_hash() if target == "fixed" else ""
+    evidence: dict = {}
+    if target == "fixed" and current.source == "performance" and current.signal_key:
+        evidence = _performance_signal_window(current.signal_key)
+    current.history.append(_event(target, note, fingerprint, evidence))
+    _save_gap_ledger(records)
+    return f"✅ gap {record.gap_id}: {record.status} → {target}" + (f"（{note}）" if note else "")
+
+
+def verify_gap(reference: str | int) -> str:
+    """重新扫描原信号：fixed gap 消失才进入 verified，仍存在则保持 fixed。"""
+    record = get_gap_record(reference)
+    if record is None:
+        return f"❌ 找不到 gap：{reference}"
+    if record.status != "fixed":
+        return f"❌ gap {record.gap_id} 当前是 {record.status}，只有 fixed 可复核。"
+    if record.source == "performance" and record.signal_key:
+        return _verify_performance_gap(record)
+    report = detect_all_gaps(top_n=100, force=True)
+    failed_sources = {failure.split(":", 1)[0].strip() for failure in report.failures}
+    if report.sources_scanned == 0 or record.source in failed_sources:
+        records = _load_gap_ledger()
+        current = records[record.gap_id]
+        current.history.append(
+            _event("fixed", f"复核中止：检测源 {record.source} 不可用", _git_tree_hash())
+        )
+        _save_gap_ledger(records)
+        return f"❌ gap {record.gap_id} 无法复核：检测源 {record.source} 本次扫描失败。"
+    still_present = next((gap for gap in report.gaps if gap.id == record.gap_id), None)
+    records = _load_gap_ledger()
+    current = records[record.gap_id]
+    fingerprint = _git_tree_hash()
+    if still_present is not None:
+        current.history.append(_event("fixed", "复核失败：同一 gap 仍可检测到", fingerprint))
+        _save_gap_ledger(records)
+        return f"❌ gap {record.gap_id} 复核失败：修复后仍可检测到，状态保持 fixed。"
+    current.status = "verified"
+    current.history.append(_event("verified", "复核通过：原信号已消失", fingerprint))
+    _save_gap_ledger(records)
+    return f"✅ gap {record.gap_id} 已复核通过：fixed → verified"
+
+
+def _performance_signal_window(signal_key: str, *, since: str | None = None) -> dict:
+    from .tracker import get_anomaly_signal_window
+
+    tool, separator, anomaly_type = signal_key.partition("|")
+    if not separator or not tool or not anomaly_type:
+        return {}
+    return get_anomaly_signal_window(
+        tool,
+        anomaly_type,
+        since=since,
+        limit=_BENEFIT_WINDOW_SESSIONS,
+    )
+
+
+def _verify_performance_gap(record: GapRecord) -> str:
+    fixed_event = next(
+        (event for event in reversed(record.history) if event.status == "fixed"),
+        None,
+    )
+    if fixed_event is None:
+        return f"❌ gap {record.gap_id} 缺少 fixed 基线，无法复核。"
+    evidence = _performance_signal_window(record.signal_key, since=fixed_event.timestamp)
+    observed = evidence.get("sessions_observed", 0)
+    if observed < _BENEFIT_WINDOW_SESSIONS:
+        return (
+            f"⏳ gap {record.gap_id} 仍在观察："
+            f"{observed}/{_BENEFIT_WINDOW_SESSIONS} 个有效后续会话。"
+        )
+
+    records = _load_gap_ledger()
+    current = records[record.gap_id]
+    fingerprint = _git_tree_hash()
+    if evidence.get("occurrences", 0):
+        current.status = "accepted"
+        current.history.append(
+            _event(
+                "accepted",
+                "收益复核失败：观察窗口内同类异常复发",
+                fingerprint,
+                evidence,
+            )
+        )
+        _save_gap_ledger(records)
+        return (
+            f"❌ gap {record.gap_id} 收益复核失败："
+            f"{evidence['occurrences']}/{observed} 个有效会话复发，已重开为 accepted。"
+        )
+
+    current.status = "verified"
+    current.history.append(
+        _event(
+            "verified",
+            "收益复核通过：连续有效会话未出现同类异常",
+            fingerprint,
+            evidence,
+        )
+    )
+    _save_gap_ledger(records)
+    return (
+        f"✅ gap {record.gap_id} 收益复核通过："
+        f"连续 {observed} 个有效会话无同类异常，fixed → verified"
+    )
+
+
+def format_gap_ledger() -> str:
+    records = _load_gap_ledger()
+    if not records:
+        return "gap 台账为空，先运行 /pulse。"
+    order = {"accepted": 0, "fixed": 1, "discovered": 2, "deferred": 3, "rejected": 4, "verified": 5}
+    items = sorted(records.values(), key=lambda record: (order.get(record.status, 9), record.gap_id))
+    lines = ["可靠性 gap 台账", ""]
+    for record in items:
+        files = ", ".join(record.affected_files) or "-"
+        lines.append(f"- {record.gap_id} [{record.status}] {record.detail}")
+        lines.append(f"  文件: {files} | 最近发现: {record.last_seen}")
+        if record.status == "fixed" and record.source == "performance" and record.signal_key:
+            fixed_event = next(
+                (event for event in reversed(record.history) if event.status == "fixed"),
+                None,
+            )
+            if fixed_event is not None:
+                evidence = _performance_signal_window(
+                    record.signal_key,
+                    since=fixed_event.timestamp,
+                )
+                lines.append(
+                    f"  收益观察: {evidence.get('sessions_observed', 0)}/"
+                    f"{_BENEFIT_WINDOW_SESSIONS} 个有效后续会话"
+                )
+    return "\n".join(lines)
 
 
 def get_last_report() -> GapReport | None:
@@ -102,16 +430,13 @@ def _make_fix_prompt(gap: Gap, index: int) -> str:
     """
     files = ", ".join(gap.affected_files) if gap.affected_files else "（需自行定位）"
     return (
-        f"【主动进化 · 方向 #{index}】{gap.detail}\n\n"
+        f"【主动进化 · 方向 #{index} · gap {gap.id}】{gap.detail}\n\n"
         f"来源: {gap.source} | 严重度: {gap.severity} | 置信度: {gap.confidence:.0%}\n"
         f"涉及文件: {files}\n"
         f"建议: {gap.suggestion}\n\n"
         f"请推进这个改进方向。先搜方案、读代码、定做法，然后改、测、提交。"
         f"判断权在你——不是所有建议都该照做，读代码后会知道什么合理。"
     )
-
-
-_PER_SOURCE_MAX = 3
 
 
 def _detect_performance_gaps() -> list[Gap]:
@@ -140,9 +465,10 @@ def _detect_performance_gaps() -> list[Gap]:
                 suggestion=d.suggested_action,
                 confidence=d.confidence,
                 actionable=d.actionable,
+                signal_key=f"{a['tool']}|{a['type']}",
             ))
     gaps.sort(key=lambda g: g.confidence * (1.5 if g.actionable else 0.5), reverse=True)
-    return _deduplicate(gaps)[:_PER_SOURCE_MAX]
+    return _deduplicate(gaps)
 
 
 def _detect_static_gaps() -> list[Gap]:
@@ -176,7 +502,7 @@ def _detect_static_gaps() -> list[Gap]:
         ))
     priority = {"dead_code": 4, "anti_pattern": 3, "complexity": 2, "style": 1}
     gaps.sort(key=lambda g: priority.get(g.gap_type, 0), reverse=True)
-    return _deduplicate(gaps)[:_PER_SOURCE_MAX]
+    return _deduplicate(gaps)
 
 
 # 覆盖率 gap 信号已移除（2026-06-13）：项目已论证否决"覆盖率=指标"（连门禁一起拆）。
@@ -212,12 +538,13 @@ def _prioritize(gaps: list[Gap], top_n: int = 5) -> list[Gap]:
     return _deduplicate(sorted(gaps, key=_gap_score, reverse=True))[:top_n]
 
 
-def detect_all_gaps(top_n: int = 5) -> GapReport:
+def detect_all_gaps(top_n: int = 5, *, force: bool = False) -> GapReport:
     global _LAST_REPORT
     tree = _git_tree_hash()
-    cached = _load_gap_cache(tree)
+    cached = None if force else _load_gap_cache(tree)
     if cached is not None:
         _LAST_REPORT = cached
+        sync_gap_ledger(cached)
         return cached
     report = GapReport()
     detectors: list[tuple[str, Callable[[], list[Gap]]]] = [
@@ -234,6 +561,7 @@ def detect_all_gaps(top_n: int = 5) -> GapReport:
     report.gaps = _prioritize(report.gaps, top_n=top_n)
     _LAST_REPORT = report
     _save_gap_cache(tree, report)
+    sync_gap_ledger(report)
     return report
 
 
@@ -263,7 +591,10 @@ def format_gap_report(report: GapReport) -> str:
         icon = _SEV_ICONS.get(g.severity, "? ")
         src = _SOURCE_LABELS.get(g.source, g.source)
         files = ", ".join(g.affected_files) if g.affected_files else "-"
-        lines.append(f"  #{i} {icon} [{src}] {g.detail}")
+        record = get_gap_record(g.id)
+        status = record.status if record is not None else "discovered"
+        lines.append(f"  #{i} {icon} [{src}] [{status}] {g.detail}")
+        lines.append(f"     ID: {g.id}")
         lines.append(f"     文件: {files}")
         if g.suggestion:
             lines.append(f"     建议: {g.suggestion}")
@@ -275,5 +606,5 @@ def format_gap_report(report: GapReport) -> str:
         for f in report.failures:
             lines.append(f"     - {f}")
     lines.append("")
-    lines.append("说 '处理 #N' 着手某个方向，或 '全做' 逐个推进。")
+    lines.append("用 /fix N 接受并处理；用 /gap 查看或更新生命周期状态。")
     return "\n".join(lines)

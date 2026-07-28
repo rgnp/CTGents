@@ -21,7 +21,13 @@ from .params import RUNTIME
 from .params import TASK as TASK_PARAMS
 from .tasks import _BLOCKED_MARKERS as BLOCKED_MARKERS
 from .tasks import _UNFINISHED_MARKERS as UNFINISHED_MARKERS
-from .tasks import archive_current, get_task_short_status, read_current
+from .tasks import (
+    archive_current_if_accepted,
+    deadline_reached,
+    get_task_short_status,
+    read_current,
+    resolve_stop_policy,
+)
 
 
 def _has(text: str, markers: tuple[str, ...]) -> bool:
@@ -128,24 +134,62 @@ def run_task_continuation(
     drive_turn(ctx, prompt) 跑一整轮真实 process_turn 管线（Esc 可中断，由调用方接）。
     控制信号经 ctx.control_signal/payload 传回（run_conversation 每轮复位+按需置位）。
     """
-    budget = budget if budget is not None else RUNTIME.task_continue_budget
-    stall_limit = stall_limit if stall_limit is not None else RUNTIME.task_stall_limit
+    explicit_budget = budget
+    explicit_stall_limit = stall_limit
     planning_interval = planning_interval if planning_interval is not None else TASK_PARAMS.planning_interval
     plan_review_budget = plan_review_budget if plan_review_budget is not None else TASK_PARAMS.plan_review_budget
 
     no_progress = 0
+    step_num = 0
 
-    for step_num in range(1, budget + 1):
+    while True:
         text = read_current()
         if not text.strip():
             return  # 任务被清空/归档
+        stop_policy = resolve_stop_policy(text)
+        if stop_policy.errors:
+            on_status("⏸ 停止条件合同无效，已交还用户：\n- " + "\n- ".join(stop_policy.errors))
+            return
         if _has(text, BLOCKED_MARKERS):
             on_status("⏸ 任务里有需要你拍板的步骤（[!]/[r]），已停下——见上方任务清单。")
             return
         if not _has(text, UNFINISHED_MARKERS):
-            on_status(archive_current())
+            archive_status = archive_current_if_accepted()
+            on_status(archive_status)
+            if archive_status.startswith("❌"):
+                return
+            from .psyche_bridge import deactivate_scope
+
+            for note in deactivate_scope(ctx, "task"):
+                on_status(note)
             on_status("✅ 长任务全部完成，已归档。")
             return
+        if deadline_reached(stop_policy):
+            deadline = stop_policy.deadline.isoformat() if stop_policy.deadline else ""
+            on_status(f"⏸ 已到任务截止时间（{deadline}），未继续自主执行，已交还用户。")
+            return
+
+        effective_budget = (
+            explicit_budget
+            if explicit_budget is not None
+            else stop_policy.budget or RUNTIME.task_continue_budget
+        )
+        effective_stall_limit = (
+            explicit_stall_limit
+            if explicit_stall_limit is not None
+            else stop_policy.stall_limit or RUNTIME.task_stall_limit
+        )
+        if step_num >= effective_budget:
+            from .tasks import get_task_progress_line
+
+            progress = get_task_progress_line()
+            tail = f"（当前进度：{progress}）" if progress else ""
+            on_status(
+                f"⏸ 已自主推进 {step_num} 步（自主上限 {effective_budget}），"
+                f"先停下来跟你对一次{tail}。要接着干就说一声。"
+            )
+            return
+        step_num += 1
 
         # ── 计划审查：每 planning_interval 步，先 review 再继续 ──
         if planning_interval > 0 and step_num % planning_interval == 0:
@@ -167,22 +211,20 @@ def run_task_continuation(
             return
         if sig == "task_done":
             if not _has(read_current(), UNFINISHED_MARKERS + BLOCKED_MARKERS):
-                on_status(archive_current())
+                archive_status = archive_current_if_accepted()
+                on_status(archive_status)
+                if archive_status.startswith("❌"):
+                    return
             s = getattr(ctx, "control_payload", None) or ""
             on_status(f"✅ agent 声明任务完成。{s}".rstrip())
             return
 
         if read_current() == before:
             no_progress += 1
-            if no_progress >= stall_limit:
+            if no_progress >= effective_stall_limit:
                 on_status(
                     f"⏸ 连续 {no_progress} 步没推进任务清单，可能卡住或需要你——已停下交还你。"
                 )
                 return
         else:
             no_progress = 0
-
-    from .tasks import get_task_progress_line
-    progress = get_task_progress_line()
-    tail = f"（当前进度：{progress}）" if progress else ""
-    on_status(f"⏸ 已自主推进 {budget} 步（自主上限），先停下来跟你对一次{tail}。要接着干就说一声。")

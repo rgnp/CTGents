@@ -1,0 +1,25 @@
+name: build-psyche
+version: "1.0"
+description: 新建、蒸馏、重构或评估 Psyche 的执行流程
+
+axes:
+  - id: operation
+    name: 操作类型
+    default: create
+    values:
+      - id: create
+        label: 新建 Psyche
+      - id: refine
+        label: 蒸馏或重构
+      - id: evaluate
+        label: 只评估不修改
+
+always_load: []
+
+on_demand:
+  - id: evidence-protocol
+    file: references/evidence-protocol.md
+    load_when: 需要搜集外部材料、建立知识卡片或评定证据等级时
+  - id: behavior-evaluation
+    file: references/behavior-evaluation.md
+    load_when: 需要设计正例、反例、边界例和加载前后对照测试时

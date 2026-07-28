@@ -6,12 +6,14 @@
 - 合并输出 → agent 拿到的是"既有骨架又有血肉"的完整自画像
 """
 
+from __future__ import annotations
+
 import os
 from pathlib import Path
 
 TOOLS_SELF = [
     {
-        "_meta": {"label": "自我认知"},
+        "_meta": {"group": "core", "label": "自我认知"},
         "type": "function",
         "function": {
             "name": "self",
@@ -47,8 +49,8 @@ SYSTEM_MAP = {
     "llm": {
         "name": "LLM 对话系统",
         "files": "src/llm.py",
-        "what": "模型调用、流式输出、工具批处理、前缀缓存命中追踪。始终使用 Pro 模型",
-        "why": "DeepSeek 前缀缓存按字节匹配，工具定义序列化一致保障缓存命中；固定单一 Pro 模型，无切换以稳住前缀",
+        "what": "多模型后端、自动路由、流式输出、工具批处理、前缀缓存命中追踪",
+        "why": "按任务选择 Pro/Flash；同一会话内保持 prefix 与工具定义序列化稳定以提高缓存命中",
         "tools": [],
         "connections": {
             "config": "读取 API key、模型 ID、超时参数",
@@ -60,8 +62,8 @@ SYSTEM_MAP = {
     "tools": {
         "name": "工具系统",
         "files": "src/tools/__init__.py + src/tools/*.py",
-        "what": "工具的注册、调度、执行、热加载。Storm 去重，模块化注册（_BUILTIN_MODULES 清单）",
-        "why": "热加载无需重启，_BUILTIN_MODULES 是唯一真相源——所有工具由此注册，任何别处硬编码的工具名都可能漂移",
+        "what": "工具的自动发现、注册、调度、执行与热加载；同轮调用由 Storm 去重",
+        "why": "_tool_meta 通过 AST 扫描含 TOOLS_* 与 execute() 的模块，新增工具无需维护中央清单",
         "tools": ["self"],
         "connections": {
             "storm": "同轮重复调用被去重，返回缓存结果",
@@ -215,7 +217,7 @@ def _architecture_section() -> str:
         "",
         "### 设计哲学",
         "1. 缓存优先 — DeepSeek 前缀缓存按字节匹配，前缀不变则全命中。",
-        "   因此前缀保持稳定，固定单一 Pro 模型（无 flash/无切换），工具定义序列化一致。",
+        "   因此前缀保持稳定、工具定义序列化一致；模型可按任务自动路由。",
         "2. 渐进披露 — 不是所有信息都塞上下文。自省用 self 工具，搜索用 RAG。",
         "3. 自我修改分级 — agent 能改所有文件，按炸毁半径分难度：不可变安全核(改不了) / "
         "核心业务(改后 import 冒烟，挂了回滚) / 其余(自由)。真正的兜底是 pre-commit 测试门。",
@@ -240,8 +242,8 @@ def _architecture_section() -> str:
         "",
         "### 启动流程",
         "1. 加载环境配置 → 构建 CacheContext prefix",
-        "2. prefix 包含 AGENTS.md（行为约束）+ 项目上下文",
-        "3. 追加 volatile 系统消息（记忆/RAG/反思）到 log",
+        "2. prefix 包含 AGENTS.md + 记忆、会话和知识库的存在性索引",
+        "3. general psyche 与可刷新 system context 以 append-only 消息进入 log",
         "4. 进入 read–eval–print 循环",
         "",
         "### 当前 src/ 目录树",

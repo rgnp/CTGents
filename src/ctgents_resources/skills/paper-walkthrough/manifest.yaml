@@ -1,0 +1,25 @@
+name: paper-walkthrough
+version: "1.0"
+description: 渐进式论文带读、暂停与跨会话恢复流程
+
+axes:
+  - id: depth
+    name: 带读深度
+    default: standard
+    values:
+      - id: quick
+        label: 快速带读
+      - id: standard
+        label: 标准带读
+      - id: close
+        label: 逐段精带
+
+always_load: []
+
+on_demand:
+  - id: state-protocol
+    file: references/state-protocol.md
+    load_when: 带读需要跨会话保存、暂停、恢复或生成专属总结时
+  - id: paper-discovery
+    file: references/paper-discovery.md
+    load_when: 用户没有给出精确论文路径、标题或 arXiv ID 时

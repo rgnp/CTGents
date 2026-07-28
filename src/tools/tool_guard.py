@@ -21,6 +21,8 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
+from ..paths import resolve_runtime_path
+
 _READ_TOOLS = {"read_file", "read_file_lines"}
 _BANNED_ROOT_EXTS = {".py", ".json", ".txt", ".log"}
 # 本进程已『读过』的文件绝对路径，C10 依据（write_file 不加入此集——写过≠知道行号）
@@ -41,8 +43,7 @@ def _project_root() -> Path:
 
 
 def _resolve(path: str) -> Path:
-    p = Path(path)
-    return p.resolve() if p.is_absolute() else (_project_root() / p).resolve()
+    return resolve_runtime_path(path, _project_root())
 
 
 def reset_known() -> None:

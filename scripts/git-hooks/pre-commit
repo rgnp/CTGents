@@ -9,10 +9,6 @@ record_gate_pass() {
 }
 
 staged_py=$(git diff --cached --name-only --diff-filter=ACMR | grep '\.py$' || true)
-if [ -z "$staged_py" ]; then
-    record_gate_pass
-    exit 0
-fi
 
 # 找 python
 PY=""
@@ -27,14 +23,16 @@ if [ -z "$PY" ]; then
     exit 1
 fi
 
-# 密钥扫描
-if echo "$staged_py" | xargs grep -nE 'sk-[A-Za-z0-9]{20,}|AKIA[0-9A-Z]{16}|gh[pousr]_[A-Za-z0-9]{30,}' 2>/dev/null; then
+# 密钥扫描：检查整个暂存树，而不是工作区文件，也不局限于 Python。
+if git grep --cached -nE \
+    'sk-[A-Za-z0-9]{20,}|AKIA[0-9A-Z]{16}|gh[pousr]_[A-Za-z0-9_]{30,}|BEGIN (RSA |OPENSSH |EC )?PRIVATE KEY' \
+    -- . ':!scripts/git-hooks/pre-commit' 2>/dev/null; then
     echo "[pre-commit] suspected secret key detected"
     exit 1
 fi
 
 # ruff（快速，~2s）
-if ! $PY -m ruff check src/ tests/; then
+if [ -n "$staged_py" ] && ! $PY -m ruff check src/ tests/; then
     echo "[pre-commit] ruff failed"
     exit 1
 fi

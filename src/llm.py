@@ -41,6 +41,7 @@ from .config import (
     TOOL_LOOP_THRESHOLD,
 )
 from .params import CONTEXT, RUNTIME
+from .paths import STATS_DIR as _STATS_DIR
 from .tools import execute_tool, get_tools
 
 # 工具显示标签（安全确认 + 终端回显共用）
@@ -455,8 +456,7 @@ def auto_select_model(user_input: str) -> LLMBackend:
 
 
 
-# 统计持久化目录：agent/stats/{session_id}.json
-_STATS_DIR = Path(__file__).resolve().parent.parent / "stats"
+# 统计持久化目录：个人 workspace/stats/{session_id}.json
 
 # 取证开关：CTG_DUMP_PAYLOADS=1 时把每次真实发给 API 的 canonical_request（完整请求字段：
 # model/messages/tools/max_tokens/stream/stream_options/extra_body）+ usage + system_fingerprint
@@ -1732,16 +1732,30 @@ def _inject_loop_guard(approved: list[tuple], storm_count: int) -> None:
     logger.warning("stormBreaker: %s 连续失败 %d 次，已注入 loop guard", target[1], storm_count)
 
 
-def _detect_control_signal(tool_calls: list[dict]) -> tuple[str, str] | None:
+def _detect_control_signal(
+    tool_calls: list[dict],
+    ctx: CacheContext | None = None,
+) -> tuple[str, str] | None:
     """本批工具是否含显式停止信号（task_done/need_user）。返回 (信号名, 附带文本) 或 None。
 
     走原生 function-calling、不另搞 JSON 协议——只是把"结束"从隐式（模型不调工具）变成
     agent 显式调控制工具。附带文本=summary 或 question，供 UI 把问题/总结交还用户。
+    传入 ctx 时，task_done 必须已被工具结果明确接受；验收失败不能伪装成停止信号。
     """
     from .tools.control import CONTROL_TOOLS
     for tc in tool_calls:
         name = tc.get("function", {}).get("name", "")
         if name in CONTROL_TOOLS:
+            if name == "task_done" and ctx is not None:
+                call_id = tc.get("id")
+                accepted = any(
+                    msg.get("role") == "tool"
+                    and msg.get("tool_call_id") == call_id
+                    and str(msg.get("content", "")).startswith("[任务完成信号]")
+                    for msg in reversed(ctx.log)
+                )
+                if not accepted:
+                    continue
             try:
                 args = json.loads(tc["function"]["arguments"])
             except (json.JSONDecodeError, KeyError, TypeError):
@@ -1837,6 +1851,20 @@ def _handle_tool_results(
     for i, eager_result in eager_results.items():
         if i < len(approved) and approved[i][4] is None:
             approved[i] = (approved[i][0], approved[i][1], approved[i][2], approved[i][3], eager_result)
+
+    # 一批多个 delegate 只放行第一个：delegate 串行阻塞主线（parallel_safe=False，
+    # 嵌套 run_conversation 单线程重入），批量连发 = 主线停摆几十分钟且拿不到中间
+    # 结果调整后续 brief（2026-07-20 实测一条消息 3 连发）。后续的直接拒绝并教正道；
+    # 拒绝结果照常写 log，API 的 tool_calls↔tool 配对契约不破坏。
+    _delegate_pending = [i for i, it in enumerate(approved)
+                         if it[1] == "delegate" and it[4] is None]
+    for i in _delegate_pending[1:]:
+        tc_data, name, args, tc, _ = approved[i]
+        approved[i] = (tc_data, name, args, tc, (
+            "⛔ 本批已有一个 delegate 在执行，此调用未运行。\n"
+            "delegate 是串行阻塞的：一次只派一个，拿到上一个的结果（可能改变你对"
+            "后续调研的判断/brief）再派下一个。正道：下一轮携带首个结果重新委派本任务。"
+        ))
 
     # 执行未跑的工具
     exec_indices = [i for i, item in enumerate(approved) if item[4] is None]
@@ -2133,7 +2161,7 @@ def run_conversation(
             )
             # 显式停止信号：agent 这批调了 task_done/need_user → 置 ctx.control_signal、
             # 结束本轮（不再靠"模型不调工具"猜结束）。续跑/主干据此决定停或继续。
-            ctrl = _detect_control_signal(tool_calls)
+            ctrl = _detect_control_signal(tool_calls, ctx)
             if ctrl:
                 ctx.control_signal, ctx.control_payload = ctrl
                 if ctx.control_signal == "task_done":

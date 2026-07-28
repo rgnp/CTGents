@@ -6,9 +6,18 @@ documents 范围内，且 num_docs == len(documents)，否则 search() 会 Index
 """
 from pathlib import Path
 
+import numpy as np
 import pytest
 
+from src import asset_usage
 from src.tools import rag
+
+
+@pytest.fixture(autouse=True)
+def _isolate_asset_usage(tmp_path, monkeypatch):
+    monkeypatch.setattr(asset_usage, "USAGE_FILE", tmp_path / "asset-usage.jsonl")
+    monkeypatch.setattr(asset_usage, "_current_session_id", lambda: "test-session")
+    monkeypatch.setattr(asset_usage, "current_task_key", lambda text=None: "test-task")
 
 
 def _make_project(tmp_path: Path) -> Path:
@@ -284,7 +293,11 @@ def test_doc_index_roundtrip():
     assert c2.source == "arxiv:1234"
     assert c2.title == "Test Paper"
 
-def test_index_doc_chunks(tmp_path):
+def test_index_doc_chunks(tmp_path, monkeypatch):
+    """_index_doc_chunks/_load_doc_index 按 cwd 相对路径落盘（无 project_root 参数），
+    不隔离 cwd 会把测试数据写进真实项目的 .rag-index/ 目录（曾实际发生过）。
+    """
+    monkeypatch.chdir(tmp_path)
     chunks = [
         rag.DocChunk("src:1", "Doc A", "content about machine learning", "paper"),
         rag.DocChunk("src:2", "Doc B", "deep neural networks", "note"),
@@ -296,6 +309,49 @@ def test_index_doc_chunks(tmp_path):
     results = rag._search_doc_index(idx, "machine learning")
     assert len(results) >= 1
     assert results[0]["source"] == "src:1"
+
+def test_search_doc_index_hybrid_semantic_recall(tmp_path, monkeypatch):
+    """词面完全不重合的笔记，向量层可用时也要能被搜到——纯 TF-IDF 之前这条会是 0 分漏召。"""
+    monkeypatch.chdir(tmp_path)
+
+    class _FakeModel:
+        def encode(self, texts, normalize_embeddings=True, show_progress_bar=False):
+            vecs = [([1.0, 0.0] if "occupancy" in t.lower() or "占据栅格" in t else [0.0, 1.0])
+                    for t in texts]
+            return np.array(vecs, dtype=np.float32)
+
+    monkeypatch.setattr(rag.embeddings, "_model", _FakeModel())
+    monkeypatch.setattr(rag.embeddings, "_model_load_failed", False)
+
+    chunks = [
+        rag.DocChunk("note:1", "占据栅格笔记", "占据栅格预测作为世界模型的一种表征方式，没有英文关键词", "note"),
+        rag.DocChunk("note:2", "无关笔记", "完全是另一个话题，和查询词没有任何语义关联", "note"),
+    ]
+    rag._index_doc_chunks(chunks, "_test_hybrid")
+    idx = rag._load_doc_index("_test_hybrid")
+
+    # 查询词 "occupancy" 和两篇笔记正文（纯中文）没有任何词面重合，纯 TF-IDF 分数都是 0
+    results = rag._search_doc_index(idx, "occupancy", index_name="_test_hybrid")
+    assert results
+    assert results[0]["source"] == "note:1"
+
+
+def test_search_doc_index_degrades_without_embeddings(tmp_path, monkeypatch):
+    """Embedding 层不可用（未装/加载失败）时行为和加这层之前完全一致：纯词面检索。"""
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(rag.embeddings, "_model", None)
+    monkeypatch.setattr(rag.embeddings, "_model_load_failed", True)
+
+    chunks = [
+        rag.DocChunk("src:1", "Doc A", "content about machine learning", "paper"),
+        rag.DocChunk("src:2", "Doc B", "deep neural networks", "note"),
+    ]
+    rag._index_doc_chunks(chunks, "_test_no_embed")
+    idx = rag._load_doc_index("_test_no_embed")
+    results = rag._search_doc_index(idx, "machine learning", index_name="_test_no_embed")
+    assert len(results) >= 1
+    assert results[0]["source"] == "src:1"
+
 
 def test_load_doc_index_missing():
     assert rag._load_doc_index("_nonexistent_xyz") is None
@@ -367,6 +423,11 @@ def test_query_research_lazy_autoindex(tmp_path, monkeypatch):
 
     out = rag.query_research("OccWorld occupancy")
     assert "occworld-notes" in out  # 没建过索引也直接可搜
+    assert "调用 adopt_asset" in out
+    retrieved = [
+        event for event in asset_usage._read_events() if event.stage == "retrieved"
+    ]
+    assert any(event.asset_id.endswith("occworld-notes.md") for event in retrieved)
 
     new_file = kd / "autonomous-driving" / "gaia-notes.md"
     new_file.write_text(
